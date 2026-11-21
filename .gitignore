@@ -1,0 +1,5 @@
+/target/
+.DS_Store
+# Built by scripts/build-core-android.sh; binaries are never committed (SPEC.md 5.3).
+/android/core/src/main/jniLibs/
+.fake-machine/

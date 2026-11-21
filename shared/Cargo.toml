@@ -1,0 +1,25 @@
+[package]
+name = "sealctl-app"
+description = "The sealctl phone apps' shared rules: state, merge, levels of asking, places, summaries"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+# One library for both apps: sealctl-core and sealctl-app (SPEC.md 4, 5.1).
+name = "sealctl_app"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[dependencies]
+sealctl-core = { workspace = true, features = ["uniffi"] }
+uniffi = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[dev-dependencies]
+proptest = "1"

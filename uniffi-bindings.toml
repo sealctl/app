@@ -1,0 +1,8 @@
+# Global UniFFI config for `uniffi-bindgen generate --library --config` (scripts/build-core-*.sh).
+[crates.sealctl_core.bindings.kotlin]
+package_name = "com.sealctl.core"
+cdylib_name = "sealctl_app"
+
+[crates.sealctl_app.bindings.kotlin]
+package_name = "com.sealctl.core.app"
+cdylib_name = "sealctl_app"

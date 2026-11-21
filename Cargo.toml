@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = ["shared", "tools/fake-relay", "tools/fake-machine", "tools/uniffi-bindgen"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+license = "AGPL-3.0-only"
+repository = "https://github.com/sealctl/app"
+
+[workspace.dependencies]
+# Pre-release exception to SPEC.md 5.2: sealctl has no release tag with sealctl-core yet,
+# so the core is taken from the `phone` branch and pinned by commit in Cargo.lock.
+# Switch to `tag = "v0.7.0"` once that release exists.
+sealctl-core = { git = "https://github.com/sealctl/sealctl", branch = "phone" }
+uniffi = { version = "=0.32.2", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

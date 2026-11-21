@@ -1,0 +1,34 @@
+[package]
+name = "fake-machine"
+description = "Pairs with the sealctl phone app and sends sealed requests like a machine (SPEC.md 16.3)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "fake_machine"
+path = "src/lib.rs"
+
+[[bin]]
+name = "fake-machine"
+path = "src/main.rs"
+
+[dependencies]
+sealctl-core = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+base64 = "0.22"
+clap = { version = "4", features = ["derive", "env"] }
+getrandom = "0.4"
+qrcode = { version = "0.14", default-features = false }
+futures-util = { version = "0.3", features = ["sink"] }
+reqwest = { version = "0.13", features = ["json"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
+
+[dev-dependencies]
+fake-relay = { path = "../fake-relay" }
+tokio = { workspace = true, features = ["process", "io-util"] }

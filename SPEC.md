@@ -48,6 +48,7 @@ The app does these jobs:
 | Create or restore the 24 words; write and check the card; keep backups of the root | 7, 11.3, 11.4 |
 | Pair machines by QR code; tell duplicate names apart | 11.5, 11.6 |
 | Answer requests: automatically, with one tap, or in the app | 9, 10, 11.7 |
+| Confirm sensitive and leaving actions: biometrics, number match, plan, delay, card check, report | 9.6, 11.23 |
 | Show each machine as Locked, Open or Waiting; lock on demand | 11.8, 11.17 |
 | Learn places; lock machines when the phone leaves one | 11.9 |
 | Remember answers; keep the usage log, the inventory and a monthly summary | 11.10 to 11.13 |
@@ -67,7 +68,7 @@ Every change to the app is checked against this list. Reviewers reject a change 
 5. **Locations stay on the phone.** No maps, no reverse geocoding, no location in any request to any server. Places reach the relay only inside the encrypted state blob.
 6. **No account, no analytics, no ads, no trackers, no crash-reporting SDK.** Platform crash reports (App Store Connect, Play Console) are the only diagnostics.
 7. **No logs of secrets or context.** Key names, paths, commands, repository names and machine names are logged only with private redaction (`OSLog` `.private`; no `Log` calls in Android release builds).
-8. **None of the asking rules is a setting.** Levels of asking, allowances and lifetimes are fixed. The user can turn off backups, places and notifications, nothing else that changes when the phone asks.
+8. **None of the asking rules is a setting.** Levels of asking, confirmation levels, allowances, lifetimes and the one-hour delay are fixed. The user can turn off backups, places and notifications, nothing else that changes when the phone asks.
 9. **Same words everywhere:** Locked, Open, Waiting, One tap, Places, Answers, Inventory, words, card.
 
 ## 3. Platforms
@@ -190,7 +191,7 @@ Secrets cross the boundary as UniFFI objects that zero their memory when release
 | Export | Purpose |
 | --- | --- |
 | `Store` object: `open(path)`, `snapshot()`, `apply(event)` | The local database (SQLite, bundled) and every change to it |
-| `decide(request, context) -> Decision` | Level of asking for one request (section 9) |
+| `decide(request, context) -> Decision` | Level of asking and confirmation level for one request, and what the confirmation needs: biometrics, number match, plan, delay (section 9) |
 | `merge_state(local, remote) -> State` | Merge when the relay answers `409 conflict` |
 | `encode_state(state) -> bytes` / `decode_state(bytes)` | The plaintext inside the relay state blob, versioned |
 | `place_sample(lat, lon, accuracy, time) -> Option<PlaceCandidate>` | Clustering; returns a candidate when it reaches 3 days |
@@ -243,6 +244,10 @@ Defined once in `sealctl-app`. "Relay" means the record is part of the encrypted
 | Settings | relay backup on, keychain backup on | Relay |
 | Device | this install's push device id, push token, platform, sandbox flag | Local |
 | Pending | requests seen in the last 10 minutes (id, machine, expires, outcome) | Local; used to refuse replays |
+| Plan approval | machine, request id, plan hash, plan items, not-before, state | Local; 30 minutes after not-before, then kept as history with the report |
+| Hold | machine, until (one hour after a wrong number) | Local |
+| Delayed action | relay delayed id, what (`unseal_all`, `leave`, `words`, `delete`), machine, release time, state | Local; until finished, cancelled or expired; the relay holds its own record (19.2) |
+| Hand-back report | machine, plan hash, items with where each went and state, run folder, time | Relay; kept |
 
 The local database is one SQLite file:
 
@@ -287,6 +292,7 @@ All items are `kSecClassGenericPassword` in the shared access group, so the NSE 
 | `com.sealctl.phone` | Phone keys | `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` | none | No |
 | `com.sealctl.words.sync` | Words entropy and its fingerprint and date | `kSecAttrAccessibleWhenUnlocked` | none (synced items cannot carry access control) | Yes, `kSecAttrSynchronizable` |
 | `com.sealctl.root.old`, `com.sealctl.words.old` | The retiring words during a change | Same as the current items | Same | No |
+| `com.sealctl.gate` | 32 random bytes; holds nothing secret, its read is the proof of a fresh biometric match for levels 2 and 3 (9.6) | `kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly` | `SecAccessControl` with `.biometryCurrentSet` | No |
 
 - `WhenPasscodeSetThisDeviceOnly` makes the root readable only while the phone is unlocked, and iOS deletes it when the passcode is removed.
 - The phone keys are readable after the first unlock since boot, so the NSE can open a request and show its contents on the lock screen, and the app can sign a lock message when the phone leaves a place while locked. These keys cannot make any derived key.
@@ -304,6 +310,7 @@ Secrets are encrypted with AES-256-GCM using Android Keystore keys and stored as
 | `words.bin` | Words entropy | `sealctl.words` | `setUserAuthenticationRequired(true)`, `setUserAuthenticationParameters(0, AUTH_BIOMETRIC_STRONG or AUTH_DEVICE_CREDENTIAL)` on API 30+, `setInvalidatedByBiometricEnrollment(false)`; used through `BiometricPrompt` with a `CryptoObject` |
 | `phone.bin` | Phone keys | `sealctl.device` | none (usable after the first unlock) |
 | `root.old.bin`, `words.old.bin` | The retiring words during a change | Same keys | |
+| `gate.bin` | 32 random bytes, read only to prove a fresh biometric match (9.6) | `sealctl.gate` | `setUserAuthenticationRequired(true)`, `setUserAuthenticationParameters(0, AUTH_BIOMETRIC_STRONG)` (API 30+; `setUserAuthenticationValidityDurationSeconds(-1)` before), `setInvalidatedByBiometricEnrollment(true)`; used through `BiometricPrompt` with a `CryptoObject` and `BIOMETRIC_STRONG` only |
 
 - On API 28 and 29, `setUserAuthenticationParameters` does not exist; the words key uses `setUserAuthenticationValidityDurationSeconds(-1)` (per-use authentication, strong biometric only) and the words screen falls back to `KeyguardManager.createConfirmDeviceCredentialIntent` when the user has no biometric.
 - Auto Backup is off: `android:allowBackup="false"`, and `dataExtractionRules` exclude every domain. Encrypted files without their Keystore keys would be useless on another phone anyway.
@@ -350,7 +357,8 @@ Errors the app handles everywhere:
 | Unpair, replace a duplicate | `DELETE /v1/phones/{phone}/machines/{machine}` |
 | App in the foreground | `GET /v1/phones/{phone}/socket` (WebSocket) |
 | After a push, on foreground, after the socket reconnects | `GET /v1/phones/{phone}/requests` |
-| Every answer | `POST /v1/phones/{phone}/requests/{id}/reply` |
+| Every answer | `POST /v1/phones/{phone}/requests/{id}/reply`; with `"delay": 3600` for a level 3 approval away from a trusted place (9.6) |
+| Delayed actions (11.23) | `POST /v1/phones/{phone}/delayed` for an action on the phone; `GET /v1/phones/{phone}/delayed` on foreground and after a `delayed` or `cancelled` push or socket note; `POST .../delayed/{id}/cancel`; `POST .../delayed/{id}/finish` |
 | Sync | `GET` and `PUT /v1/phones/{phone}/state` |
 | Change of words (11.14) | `POST /v1/phones/{old}/licence/move` with `{"to", "proof"}`, signed by the old key; `proof` is the new key's Ed25519 signature over `sealctl-licence-move-v1\n<old>\n<new>`. Unpaid phones move too. The app shows nothing about it, whatever it answers (`movedTo`, `licence`, `daysUsed`) |
 | Launch, token change, restore | `PUT /v1/phones/{phone}/push/{device}` with `{"platform": "apns", "token": <hex>, "sandbox": true}` for development builds (`sandbox` left out in TestFlight and App Store builds), or `{"platform": "fcm", "token"}`. Answers `200 {"devices": n}` |
@@ -367,7 +375,7 @@ The app never calls `licence`, `checkout` or `claim`.
 
 ### 8.3 Foreground: WebSocket
 
-- When the app becomes active, it opens `/socket`, then lists pending requests to catch up. Each `{"type": "request", ...}` message goes through the approval path (9).
+- When the app becomes active, it opens `/socket`, then lists pending requests to catch up. Each `{"type": "request", ...}` message goes through the approval path (9). `{"type": "delayed", ...}` and `{"type": "cancelled", ...}` notes refresh the delayed actions (11.23).
 - The app sends the text `ping` every 30 seconds; the relay answers `pong`. No `pong` within 10 seconds means the socket is dead: close and reconnect.
 - The relay also pushes while the socket is open. The app ignores a push for a request it already handled through the socket and shows no notification for it in the foreground.
 - Reconnect after a drop: 1, 2, 4, 8, 16, then every 30 seconds, each with ±20% jitter. At most 60 upgrades an hour, since upgrades count towards the abuse limit.
@@ -424,10 +432,11 @@ The kinds and their fields are defined by "Request and reply encryption"; 19.1 l
 | `open` | A Locked machine needs the session keys, triggered by a command, an agent, a volume mount or a backup | The key, volume or backup that triggered it, or the machine |
 | `agent` | An agent uses a key in a repository for the first time inside an Open session | The key, agent and repository |
 | `own` | A command uses an `--own-approval` secret | The key |
-| `keys` | An Open machine needs a key it does not hold: a new object, a volume opened later, `sealctl seal`. With subject `{"k": "machine", "n": "unseal"}` it is `sealctl unseal` handing objects back | The volume, backup or key; for `unseal`, the machine and its object count |
+| `keys` | An Open machine needs a key it does not hold: a new object, a volume opened later, `sealctl seal`. With subject `{"k": "machine", "n": "seal"}` it is `sealctl seal` taking over an object the user already has (level 2) | The volume, backup or key |
+| `unseal` | `sealctl unseal` hands objects back under the user's own passwords: one or several (level 2), or `--all` (level 3). Carries the plan | The machine and the plan, after the number match |
 | `rewrap` | A machine moves its objects to new words | The machine and its object count |
 | `old_words` | A machine holds an object sealed with retired words | The object and the retired fingerprint |
-| `report` | A machine reports uses, inventory and its state without asking anything (until the relay's machine channel ships, and for `sealctl migrate` estimates) | Nothing; recorded silently |
+| `report` | A machine reports uses, inventory and its state without asking anything (until the relay's machine channel ships, and for `sealctl migrate` estimates), or what a finished `unseal` handed back (`handback`) | Nothing; recorded silently. A `handback` opens the report (11.23) |
 
 An unknown kind is shown in the app as "dev@mbp.example.com sent a request this app doesn't understand. Update the app." with only "Deny".
 
@@ -438,10 +447,13 @@ An unknown kind is shown in the app as "dev@mbp.example.com sent a request this 
 | `open` | All of: the machine has a day record today; that day began at a trusted place; the phone is inside that place now; the relay says the phone and the machine are `near`; the phone is unlocked; no agent in the request lacks an answer | One tap |
 | `agent` | An answer exists for this agent, key and repository | One tap |
 | `own` | Never | One tap |
-| `keys` | The phone is unlocked and this machine's session is Open by its last status. Never for `unseal` | One tap |
-| `rewrap` | A change of words is running and the phone is unlocked | One tap |
+| `keys` | The phone is unlocked and this machine's session is Open by its last status. Never for `seal` (level 2) | One tap; In the app for `seal` |
+| `rewrap` | Never (level 2) | In the app |
+| `unseal` | Never | In the app |
 | `old_words` | Never | In the app |
 | `report` | Always: the reply (`seal_report_reply`) carries `ack`, the status `seq` stored, and the machine messages waiting for it | |
+
+In the app means: a notification with no actions that opens the screen, because levels 2 and 3 need biometrics without the passcode, which a notification action cannot ask for (9.6).
 
 - An `open` request triggered by an agent with no answer for that key and repository is shown as one card. "Allow for this session" also records the answer. That is the only extra tap the design allows, and it is merged into the first one.
 - The first approval of the day is the first `open` allowed for that machine since its day ended (02:00 local or 14 h after the previous first approval).
@@ -461,7 +473,53 @@ Besides the keys, the reply tells the machine the place kind, which sets its all
 
 - Request ids are kept for 10 minutes; a second request with the same id is ignored.
 - A request whose sealed contents name a different machine than the relay's `machine` field is ignored.
-- The relay can only lie about `near`. A lie skips a tap only for a request already signed by a paired machine, while the phone is unlocked, on Wi-Fi and inside the place where that machine's day began.
+- The relay can only lie about `near`. A lie skips a tap only for a request already signed by a paired machine, while the phone is unlocked, on Wi-Fi and inside the place where that machine's day began. At level 2 a lie can stand in for proximity; it never skips the biometric match or the list of objects.
+
+### 9.6 Confirmation levels
+
+Every approval also has a confirmation level (protocol, "Confirmation levels"). `decide` computes it from the kind, the subject and the plan, and applies the higher of that and the machine's `lvl`. A machine can raise its level, never lower it. Actions on the phone have fixed levels.
+
+| Level | Requests | Actions on the phone | What the phone asks |
+| --- | --- | --- | --- |
+| 1 Routine | `open`, `keys`, `agent`, `own` | | As 9.3: Automatic or One tap; the allowance by place (9.4) |
+| 2 Sensitive | `rewrap`; `keys` for `sealctl seal`; `unseal` of one or several objects | Pairing a machine (11.5) | Biometrics every time, no passcode; no allowance, nothing remembered; the exact objects listed; proximity |
+| 3 Leaving | `unseal --all`, or any plan with a `pairing` item | Leave sealctl (11.22), Show words (11.18), Delete my relay data (11.19) | Level 2, plus: the number match (requests); the plan, signed; the one-hour delay away from a trusted place; the card check (Leave sealctl); a report |
+
+Not level 3: showing the words during onboarding (no machine is paired yet) and the new words during a change of words (11.14), which keep Face ID or the passcode.
+
+**Biometrics, every time.** One prompt per confirmation; nothing is reused.
+
+- iOS: an `LAContext` with `localizedFallbackTitle = ""` (no passcode button) and `touchIDAuthenticationAllowableReuseDuration = 0` evaluates `LAPolicy.deviceOwnerAuthenticationWithBiometrics`, then reads `com.sealctl.gate` with that context (`kSecUseAuthenticationContext`). The item's `.biometryCurrentSet` access control makes the read itself need the match, so a patched check in Swift does not skip it.
+- Android: `BiometricPrompt` with `setAllowedAuthenticators(BIOMETRIC_STRONG)` (no `DEVICE_CREDENTIAL`), `setConfirmationRequired(true)`, negative button "Cancel", and a `CryptoObject` on `sealctl.gate`.
+- The reason text names the action: "Confirm handing back dev@mbp.example.com." / "Confirm pairing dev@mbp.example.com." / "Confirm leaving sealctl." / "Confirm showing your words."
+
+**When biometrics don't work.**
+
+| Case | Level 2 | Level 3 |
+| --- | --- | --- |
+| No biometric hardware, none enrolled, or (Android) only weak (class 2) biometrics | Two words from the card, by position, with the keypad of 11.16; never the passcode | Refused: `no_biometrics` to a machine; on the phone, "This needs Face ID (Android: a fingerprint or face unlock of the strong class), and this phone has none set up." On a computer, `sealctl unseal --all --words` works with the card |
+| Locked out after failed tries | Same as above | Refused until biometrics work again: "Face ID is locked after too many tries. Lock and unlock your iPhone with its passcode, then try again." |
+| A face or fingerprint was added or removed (the gate item or key is invalidated) | First two words from the card, then the app makes a new gate and continues | The same, then the level 3 flow |
+
+The card is the fallback because the passcode is what a thief watching over a shoulder gets; the card is somewhere else. A thief who knows the passcode and enrols their own face meets the card check.
+
+**Proximity** (level 2 and 3) means the person approving can see the machine:
+
+1. the relay's `near` on the request, trusted only on Wi-Fi or Ethernet (9.3); or
+2. the number match, when the request has `match` (`has_match`); or
+3. for pairing, the app's own camera scanning the code.
+
+Near: no number is asked at level 2. Not near with `match`: the number screen comes first. Neither: the phone answers `not_near`, and the notification says "dev@box.example.com isn't near this phone. Run the command at its terminal; this phone then asks for the number on its screen." Level 3 requests always need the number (protocol).
+
+**Number match.** The core picks the three numbers and checks the pick; the right one never reaches Swift or Kotlin (19.1). The number screen shows nothing the machine wrote (11.23). A wrong pick answers `no_match` and records a Hold: for one hour every level 2 or 3 request from that machine is answered `held` with no notification. The machine's detail shows "Sensitive requests from this machine are held until 11:42 after a wrong number." [Release now] (biometrics).
+
+**Plan.** An `unseal` request carries the plan; parts are collected by `PlanAssembler` and answered at once (protocol). The phone shows every item, signs the plan hash (`Plan` decision) and hands out keys only for items in it. Later `unseal` requests for the same plan are answered without showing anything, up to 30 minutes after the not-before time, and only for keys the plan names.
+
+**Delay.** A level 3 approval when the phone is not inside a trusted place (place kind `other` or `none`) takes effect one hour later; inside a trusted place, at once. For a request, the reply's not-before time is one hour on and the reply is posted with `"delay": 3600`. For an action on the phone, the app registers a delayed action (`POST .../delayed`) and finishes it after the hour, with biometrics again and only after the relay answers `finish` with `200`. The relay announces it on every paired machine and every install; the app also sends each paired machine a sealed `notice` (`seal_machine_message`). Either side can cancel until it finishes.
+
+**Report.** After a level 3 action the phone shows what happened and tells every other paired machine (`notice` with `state: "done"`): for `unseal`, from the machine's `report` with `handback`; for actions on the phone, the app's own record.
+
+**Never at the lock screen.** Level 2 and 3 requests use the `REQUEST_APP` notification category (10.1): no buttons, a tap opens the app, the app asks for biometrics. A notification action can only ask for the device unlock, which accepts the passcode.
 
 ## 10. Notifications and background work
 
@@ -485,6 +543,10 @@ The app's string catalog defines the two keys, so iOS shows them in the phone's 
 | --- | --- |
 | `REQUEST_TITLE` | "Waiting for your phone" |
 | `REQUEST_BODY` | "A machine is asking for a key. Open to see the request." |
+| `DELAYED_TITLE` | "Approved on your phone" |
+| `DELAYED_BODY` | "Something sensitive was approved on your phone and starts in an hour. Open sealctl to see it or cancel it." |
+| `CANCELLED_TITLE` | "Cancelled" |
+| `CANCELLED_BODY` | "A pending sensitive action was cancelled." |
 
 Nothing about the machine, the agent, the key or the sealed request goes through Apple.
 
@@ -507,7 +569,7 @@ Nothing about the machine, the agent, the key or the sealed request goes through
 | `REQUEST_OPEN` | `ALLOW_SESSION` "Allow for this session"; `ALLOW_ONCE` "Allow once"; `DENY` "Deny" | Allow actions: `.authenticationRequired`. Deny: `.destructive` |
 | `REQUEST_AGENT` | `ALLOW_REMEMBER` "Allow"; `ALLOW_ONCE` "Allow once"; `DENY` "Deny" | Same |
 | `REQUEST_OWN` | `ALLOW_ONCE` "Allow once"; `DENY` "Deny" | Same |
-| `REQUEST_APP` | none; tapping opens the app | |
+| `REQUEST_APP` | none; tapping opens the app | Every level 2 and 3 request (9.6), `old_words`, and `delayed` and `cancelled` pushes |
 
 - `.authenticationRequired` makes a locked iPhone ask for Face ID, Touch ID or the passcode before the action runs. The action runs in the background (no `.foreground`). After the unlock the root can be read. The app handles it in `userNotificationCenter(_:didReceive:)` inside `beginBackgroundTask`.
 - Deny needs no unlock: it reveals nothing and gives nothing.
@@ -535,6 +597,8 @@ Nothing about the machine, the agent, the key or the sealed request goes through
 | Words 2 years old | "Your words are 2 years old. Changing them takes about 10 minutes and a new blank card." | `.active`, repeated monthly until done |
 | Machine unseen 90 days | "dev@mbp.example.com hasn't been seen for 90 days. Unpair it?" | `.passive` |
 | Old words requested | "dev@mbp.example.com has an object sealed with words 7Hq3. Open sealctl to move it." | `.active` |
+| Delay over, action on the phone | "Ready: open sealctl to finish leaving." (or "…to show your words.", "…to delete your relay data.") | `.timeSensitive`, at `releaseAt` |
+| Hand-back report | "dev@mbp.example.com handed back 9 objects. 0 failed." | `.active` |
 
 **Entitlements and capabilities:** Push Notifications; Time Sensitive Notifications; App Groups; Keychain Sharing; `com.apple.developer.usernotifications.filtering` (requested from Apple; the app works without it). Background Modes: none needed. Region monitoring wakes the app without the location background mode.
 
@@ -555,6 +619,7 @@ Nothing about the machine, the agent, the key or the sealed request goes through
 | `places` | Places | `IMPORTANCE_LOW` | Leaving a place, "Trust this place?" |
 | `card` | Card and words | `IMPORTANCE_DEFAULT` | Yearly check, 2-year change, old words |
 | `machines` | Machines | `IMPORTANCE_LOW` | Unseen for 90 days |
+| `sensitive` | Sensitive and leaving | `IMPORTANCE_HIGH` | Level 2 and 3 requests (no action buttons), delayed actions, cancels, hand-back reports |
 
 The `answered` notification exists because Android may lower the priority of an app whose high-priority messages show nothing. The user can turn that channel off.
 
@@ -805,7 +870,9 @@ The camera fills the screen with a square guide. Camera permission text (iOS `NS
 > [Pair]
 > [Cancel]
 
-[Pair] reads the phone keys (the root is not needed), computes the proof, and posts the machine. If the name matches a paired machine, the duplicate card (11.6) comes first.
+[Pair] asks for biometrics (level 2, 9.6: "Confirm pairing dev@mbp.example.com."), reads the phone keys (the root is not needed), computes the proof, and posts the machine. If the name matches a paired machine, the duplicate card (11.6) comes first.
+
+The app's own camera is the proof of proximity for pairing. A pairing link opened any other way (tapped in a message, opened by the system camera) leads to the scanner with: "Scan the code with sealctl. On a computer without a terminal, open the link in its browser to see the code." The website's `/p` page draws the code from the link's fragment (19.3).
 
 - Success: "Paired. dev@mbp.example.com can now ask this phone for keys." The machine appears Locked.
 - Errors are in 11.20.
@@ -860,9 +927,7 @@ At Desk, this answers by itself.       (muted, only when the phone is inside a t
 | A backup | "Back up to r2:acme-backups?" |
 | An SSH key | "Use SSH key github?" |
 | No single subject (session open with `sealctl open`) | "Open dev@mbp.example.com?" |
-| Rewrap | "Move dev@mbp.example.com to words 4kPz?" |
 | `keys` for a new object | "Allow volume clients?" (or the backup or key name) |
-| `unseal` | "Hand back dev@mbp.example.com?" |
 
 **Facts:** "For" is the command, cut in the middle with an ellipsis after 80 characters (the full command on long press). "In" is the working directory with `~` for home. "From" is the machine's display name (nickname, or `user@host` and the tag when shown) and the agent: `claude`, `codex`, `gemini`, `qwen`, `copilot`, `cursor`, or nothing when a person typed the command. Facts the request lacks are left out.
 
@@ -873,9 +938,7 @@ At Desk, this answers by itself.       (muted, only when the phone is inside a t
 | `open` | [Allow for this session] [Allow once] Deny | When the request comes from an agent's first use: "First use of this key by claude in shop. Allow is remembered." |
 | `agent` | [Allow] [Allow once] Deny | "First use of this key by claude in shop. Allow is remembered; remove it in Answers." |
 | `own` | [Allow once] Deny | "This key asks every time. It stays in memory only until the command exits." |
-| `rewrap` | [Move now] Not now | "12 objects. Each takes seconds." |
-| `keys` | [Allow] Deny | "sealctl seal on this machine." when the command is `sealctl seal` |
-| `keys` for `unseal` | [Allow] Deny | "sealctl unseal is handing 14 objects back to passwords of your own. Allow only if you ran it." |
+| `keys` | [Allow] Deny | "sealctl seal of a new object on this machine." when the command is `sealctl seal` (taking over an existing object is level 2, 11.23) |
 
 **After an answer**, the sheet closes with a short confirmation for 1.5 seconds: "Allowed for this session", "Allowed once", "Remembered for claude in shop", "Denied". Success haptic on Allow.
 
@@ -890,12 +953,14 @@ At Desk, this answers by itself.       (muted, only when the phone is inside a t
 | `open` | "Allow OPENAI_API_KEY?" | "npm test in ~/dev/shop · dev@mbp.example.com · claude" |
 | `agent` | "Let claude use OPENAI_API_KEY?" | "First use in shop · npm test · dev@mbp.example.com" |
 | `own` | "Allow DEPLOY_TOKEN once?" | "./deploy.sh in ~/dev/shop · dev@mbp.example.com" |
-| `rewrap` | "Move dev@mbp.example.com to new words?" | "12 objects, seconds each." |
 | `keys` | "Allow volume clients?" | "dev@mbp.example.com" |
-| `keys` for `unseal` | "Hand back dev@mbp.example.com?" | "sealctl unseal --all · 14 objects" |
+| `rewrap` (level 2) | "Move dev@mbp.example.com to new words?" | "Open sealctl to confirm with Face ID." |
+| `keys` for `seal` (level 2) | "sealctl seal on dev@mbp.example.com" | "Open sealctl to see what it takes over." |
+| `unseal`, level 2 | "Hand back from dev@mbp.example.com?" | "Open sealctl to see what." |
+| `unseal`, level 3 | "Leave sealctl on dev@mbp.example.com?" | "Open sealctl to confirm. You'll need the number on its screen." |
 | generic (the extension could not open it) | "Waiting for your phone" (`REQUEST_TITLE`) | "A machine is asking for a key. Open to see the request." (`REQUEST_BODY`) |
 
-Notification actions are listed in 10.1.
+Notification actions are listed in 10.1. Level 2 and 3 texts use only the machine's name from the phone's own records, never text the machine sent, and the requests open the screens of 11.23 instead of this card.
 
 ### 11.8 Machine states
 
@@ -1038,7 +1103,7 @@ The old words stay on this phone (the `old` items) until Finish, for rewrap and 
 > Backup `r2:acme-backups` · dev@old-laptop · last used 2026-03-01
 > [Finish]
 
-- Rewrap happens by itself when each machine next talks to the phone (`rewrap` requests, Automatic while the phone is unlocked).
+- Each machine sends a `rewrap` request when it next talks to the phone. Rewrap is level 2 (9.6): the screen of 11.23 lists its objects and asks for biometrics, one machine at a time. A machine that is not near this phone gets `not_near` and tries again at its next start; the plan row says "Not near this phone. On it, run `sealctl migrate --depth rewrap`, or bring the phone to it."
 - "Words may have been seen" adds, under each volume and backup: "Re-encryption recommended: run `sealctl migrate` on this machine." The estimate comes from the machine's report.
 - The phone cannot start re-encryption. Commands shown can be copied; the words never can.
 - A banner on the Machines tab while the change runs: "Moving to new words · 2 of 3 machines done" [Show]
@@ -1085,7 +1150,7 @@ Due 365 days after "written on" or the last check.
 Same keypad and completion as restore. Positions are random, one from each half.
 
 - Right: "Your card is good. Next check: 2027-11-21."
-- Wrong: "That's not word 19 on these words." [Show the words again] [Try again]. "Show the words again" asks for Face ID or the passcode and shows the words as in onboarding, with "Correct your card, then check again."
+- Wrong: "That's not word 19 on these words." [Show the words again] [Try again]. "Show the words again" is Show words, level 3 (11.23), and shows the words as in onboarding, with "Correct your card, then check again."
 - [I lost my card] at the bottom: "Write a new card" (show the words, 3-of-4 check) and then "If someone may have found it, change your words." [Change words] [Not now]
 
 The 2-year reminder (10.1) opens 11.14.
@@ -1165,21 +1230,21 @@ The app sends a lock, then `DELETE .../machines/{machine}`.
 > Version 1.0.0 (412) · core 0.7.0 · protocol 1
 > Source code · Licences · Privacy policy · Terms · Report a security issue
 
-- [Show words] needs Face ID or the passcode. It shows the 24 words in the protected view (11.21).
+- [Show words] is level 3 (11.23): biometrics, and away from a trusted place a one-hour delay announced on every machine. It then shows the 24 words in the protected view (11.21) and tells every machine it did.
 - Turning iCloud Keychain off: "Turn off the iCloud Keychain copy? A new iPhone will need your card to restore." It deletes the synced item, which iCloud also deletes from your other devices.
 - Turning the relay backup off: "Turn off the relay backup? A new phone will restore your words but not your machines' names, places, answers or inventory." Machines stay paired.
 - "Source code" opens `https://github.com/sealctl/app`. "Licences" lists AGPL-3.0 for the app, MIT for `sealctl-core`, and every third-party licence (generated at build time). "Report a security issue" opens mail to `security@sealctl.com`.
 
 ### 11.19 Delete relay data and erase this phone
 
-**Delete my relay data.** Face ID or the passcode first.
+**Delete my relay data.** Level 3 (11.23): biometrics at [Delete], then, away from a trusted place, the one-hour delay before the call is made.
 
 > **Delete your data on the relay?**
 > This unpairs your 3 machines and deletes what the relay keeps for these words: your encrypted phone backup, your machines' records and every phone's notification address. It can't be undone. The privacy policy lists what stays.
 > Your words, what this phone keeps, and your sealed files are not touched. To use a machine again, run `sealctl pair` on it.
 > [Delete] [Cancel]
 
-The app sends a lock to every Open machine, then calls `DELETE /v1/phones/{phone}`. On `{"deleted": true, "machines": n}`: machines are removed from the phone, the relay backup turns off, and the screen says "Deleted. The relay has nothing for these words." Answers, places, the inventory and the log stay on the phone. Pairing a machine again works as before; the relay backup stays off until the user turns it on.
+When it runs, the app sends every machine a `notice` and a lock to every Open machine, then calls `DELETE /v1/phones/{phone}`. On `{"deleted": true, "machines": n}`: machines are removed from the phone, the relay backup turns off, and the screen says "Deleted. The relay has nothing for these words." Answers, places, the inventory and the log stay on the phone. Pairing a machine again works as before; the relay backup stays off until the user turns it on.
 
 The relay keeps a licence record, if there is one, so a restore from the words is still paid (Relay API, Deleting a phone). Rule 3 forbids the app from saying so; "The privacy policy lists what stays" is the whole of what it says.
 
@@ -1214,6 +1279,10 @@ Erase removes this install's push device (`DELETE /v1/phones/{phone}/push/{devic
 | Card | Request gone | "dev@mbp.example.com stopped waiting." | [Close] |
 | Card | Unknown kind | "dev@mbp.example.com sent a request this app doesn't understand. Update the app." | Deny |
 | Card | Root unreadable at answer | "Unlock your phone to answer." | |
+| Level 2 or 3 | No biometrics, or locked out | The texts of 9.6 | [Use my card] for level 2 |
+| Level 2 | Not near, no number | "dev@box.example.com isn't near this phone. Run the command at its terminal; this phone then asks for the number on its screen." | [Close] |
+| Level 2 or 3 | Held | "Sensitive requests from dev@mbp.example.com are held until 11:42 after a wrong number." | [Release now] |
+| Level 3 | Delay: relay unreachable at Finish | "The relay isn't answering, and sealctl can't finish until it confirms nothing was cancelled." | [Try again] |
 | Activity | Empty | "Nothing yet. Every use of your keys shows here." | |
 | Inventory | Empty | "No keys handed out yet." | |
 | Answers | Empty | "No answers yet. When you tap Allow on an agent's first use of a key, it's remembered here." | |
@@ -1235,7 +1304,7 @@ Applies to onboarding step 5, Show words, and every typed-words screen.
 
 ### 11.22 Leave sealctl
 
-For someone who stops using sealctl. The phone walks through `sealctl unseal --all` on each computer, then deletes the relay data and the words backup. Entry: Settings, This phone, [Leave sealctl]. Face ID or the passcode first.
+For someone who stops using sealctl. The phone walks through `sealctl unseal --all` on each computer, then deletes the relay data and the words backup. Entry: Settings, This phone, [Leave sealctl]. Leaving is level 3 (9.6, 11.23): biometrics at [Start] and again at step 3, the delay away from a trusted place before anything is deleted, the card check before the last copy of the words goes, and a report.
 
 **1. What happens.**
 
@@ -1258,28 +1327,30 @@ Android says "in your Google backup".
 > [Skip a computer]
 > [Continue]
 
-- `sealctl unseal` asks with a `keys` request whose subject is `{"k": "machine", "n": "unseal"}`. The card for it (11.7) is always One tap, never automatic, even at a trusted place.
+- `sealctl unseal --all` asks with an `unseal` request at level 3 (11.23): the number on its screen, its plan, biometrics, and away from a trusted place a one-hour delay. The row follows it: "Waiting for `sealctl unseal --all`", "Starts at 11:00", "Handing back", "Handed back · 9 objects" [Report].
 - A machine shows "Handed back" once it has unpaired itself, which `unseal --all` does as its last relay step, so it disappears from `GET /v1/phones/{phone}/machines`. The phone does not unpair a machine in this flow.
 - [Skip a computer] lists the machines still waiting: "Skip dev@mbp.example.com? Use it when the computer is lost or already wiped. Anything it holds then opens only with your card." [Skip] [Cancel]. A skipped machine is unpaired by the phone at step 3.
 - [Continue] is enabled when every machine is handed back or skipped. With none paired, this step is skipped.
 
-**3. Relay data.**
+**3. Confirm.**
 
-> **Delete your data on the relay**
-> This deletes your encrypted phone backup, your machines' records and every phone's notification address. The privacy policy lists what stays.
-> [Delete]
+> **Delete your data and the last copy of your words?**
+> Next, this phone deletes your data on the relay and removes your words from iCloud Keychain.
+> At Desk: this happens as soon as you confirm. (Away from your trusted places: "This starts one hour after you confirm. Your phone and your computers can cancel it until then.")
+> [Confirm with Face ID]
+> [Cancel]
 
-The app calls `DELETE /v1/phones/{phone}` (as 11.19, without the lock messages: no machine is left Open). On `{"deleted": true}` it continues. On a network error it shows "The relay isn't answering. Try again." [Try again]; nothing further happens until it succeeds.
+Away from a trusted place the app registers the delayed action `leave` and shows the countdown of 11.23. Every machine still paired (the skipped ones) and every install hears of it. Steps 4 to 6 run only after the relay answers `finish`, with biometrics again.
 
-**4. Words backup.**
+**4. Card check.** The card check of 11.23, three words, before the words backup goes.
 
-> **Remove your words from iCloud Keychain**
-> Your other Apple devices lose this copy too. Your paper card is then the only copy.
-> [Remove]
+**5. Relay data and words backup.**
 
-Removes `com.sealctl.words.sync` (iOS) or `com.sealctl.words.v1` (Block Store). Android says "from your Google backup" and "Your other Android phones lose this copy too."
+The app unpairs the skipped machines, sends every machine a `notice`, calls `DELETE /v1/phones/{phone}` (as 11.19, without the lock messages: no machine is left Open), then removes `com.sealctl.words.sync` (iOS) or `com.sealctl.words.v1` (Block Store). On a network error it shows "The relay isn't answering. Try again." [Try again]; nothing further happens until it succeeds. Android says "from your Google backup" and "Your other Android phones lose this copy too."
 
-**5. The card.**
+**6. What happened.** The report of 11.23 for leaving: each computer, handed back (with its report) or skipped; relay data deleted; words backup removed.
+
+**7. The card.**
 
 > **Keep your card for now**
 > Keep your paper card until no old copies of your backups or volumes remain: older disk images, old backup snapshots in another place, or copies of the store. Those still open only with these words. Then destroy it.
@@ -1288,8 +1359,106 @@ Removes `com.sealctl.words.sync` (iOS) or `com.sealctl.words.v1` (Block Store). 
 [Done] runs Erase (11.19) without its question: this install's push device, every keychain item or Keystore key and file, the database and the snapshot. The app returns to Welcome with one line above it: "sealctl is gone from this phone. You can delete the app."
 
 - Each step is saved, so a closed app resumes at the step it left.
-- Another install with the same words finds its phone key gone after step 3 and shows "Your words were removed on another phone." [Erase this phone] [Restore].
+- Without biometrics, step 3 is refused (9.6): leave from the card on each computer with `sealctl unseal --all --words`, then [Erase sealctl from this phone] (11.19). The relay data then expires after 730 days (6.5).
+- Another install with the same words finds its phone key gone after step 5 and shows "Your words were removed on another phone." [Erase this phone] [Restore].
 - Without a phone (lost), leaving works from the card alone: `sealctl unseal --all --words` on each computer. The website's "Leaving sealctl" page says so.
+
+### 11.23 Sensitive and leaving confirmations
+
+The screens for levels 2 and 3 (9.6). They are full-screen, never a sheet, and never reachable from a notification button. Each step is one screen; Deny or Cancel is on every one.
+
+**Order.**
+
+| Step | Level 2 request | Level 3 request (`unseal --all`) | Level 3 on the phone |
+| --- | --- | --- | --- |
+| Number match | Only when not near and the request has `match` | Always | |
+| Plan or object list | Yes | Yes | What will happen |
+| Biometrics | Yes | Yes | Yes |
+| Delay | | Away from a trusted place | Away from a trusted place |
+| Card check | | | Leave sealctl only |
+| Report | | Yes | Yes |
+
+**Number match.**
+
+> **Which number does dev@mbp.example.com show?**
+> Look at the terminal where you ran the command.
+> [ 23 ]   [ 59 ]   [ 81 ]
+> I don't see a number
+
+- Three equal buttons in large monospace, in the order the core gives. The title uses the machine's name from this phone's records (nickname, or `user@host` and tag). Nothing else on this screen comes from the machine.
+- "I don't see a number" denies the request.
+- Wrong pick:
+
+  > **That's not the number on dev@mbp.example.com**
+  > The request was refused. For the next hour this phone ignores sensitive requests from that computer.
+  > Didn't run anything there? Someone else may be using it. [What to do]
+  > [Close]
+
+  [What to do] opens "This machine was lost or stolen" (11.17).
+
+**Plan.** Shown after a right pick (or at once when no number is needed):
+
+> **Hand back everything on dev@mbp.example.com?**
+> `sealctl unseal --all` moves these to passwords of your own. Your files stay encrypted. Then the computer is unpaired.
+> 1  secrets · store (7 secrets)
+> 2  volume · safe
+> 3  ssh · ed25519
+> 4  git · signing
+> 5  AI tools · Claude Code
+> 6  services · daemon
+> 7  local files · ~/.config/sealctl
+> 8  pairing · dev@mbp.example.com
+> At Desk: this starts as soon as you confirm.
+> [Confirm with Face ID]
+> Deny
+
+- Away from a trusted place the line reads: "Away from your trusted places: this starts one hour after you confirm. Your phone and your computers can cancel it until then." Without location permission it says the same without "trusted places": "This starts one hour after you confirm…"
+- Level 2 titles: "Hand back volume safe from dev@mbp.example.com?", "Let sealctl seal take over volume safe on dev@mbp.example.com?", "Move dev@mbp.example.com to words 4kPz?" (rewrap: "12 objects. Each takes seconds."). Level 2 has no delay line.
+- Item names come from the machine and are shown in monospace, one per line, never joined into a sentence.
+- [Confirm with Face ID] reads "Confirm with Touch ID" or, on Android, "Confirm with fingerprint or face". It runs the prompt of 9.6.
+
+**Delay.**
+
+> **Leaving sealctl on dev@mbp.example.com**
+> Starts at 11:00 · 59 min left
+> You approved this away from your trusted places, so it waits an hour. Every paired computer has been told. If this wasn't you, cancel it.
+> [Cancel]
+
+- The same screen serves the actions on the phone: "Showing your words", "Deleting your relay data", "Leaving sealctl".
+- A banner on the Machines tab while any delay runs: "dev@mbp.example.com hands everything back at 11:00." [Show] [Cancel]. Cancel needs no biometrics: stopping is always allowed.
+- Cancelled here: "Cancelled. Nothing was handed back." Cancelled from a computer: "Cancelled from dev@box.example.com." The app then sends every machine a `notice` with `state: "cancelled"`.
+- For an action on the phone, at `releaseAt` a local notification says "Ready: open sealctl to finish …" (10.1). Opening it asks for biometrics, then calls `finish`; only on `200` does the action run. `409 cancelled`: "Cancelled from dev@box.example.com. Nothing happened." The finish is offered until the relay record expires, 15 minutes after `releaseAt`; after that: "This waited too long. Start again."
+- For `unseal --all`, nothing is needed from the phone when the hour ends: the computer fetches the approval from the relay.
+- Other installs with the same words show the delay too (from the relay's note) and can cancel it.
+
+**Card check** (Leave sealctl, before the words backup is removed):
+
+> **Check your card first**
+> After this, your paper card is the only copy of your words. Type three words from it.
+> Word 4: [____]
+> Word 13: [____]
+> Word 22: [____]
+> [Check]
+
+- Positions at random, one from each third of the card. The keypad and completion of 11.4. The words are checked inside the core; nothing typed is kept.
+- Wrong: "That's not word 13 on these words. Find your card before the last other copy goes." [Try again]. No limit on tries; nothing is removed until all three are right.
+- [I can't find my card] stops leaving at this step: "Keep the copy in iCloud Keychain until you find it, or write a new card first (Show words)."
+
+**Report.** After a level 3 action:
+
+> **dev@mbp.example.com handed everything back**
+> 8 of 8 done · 10:14
+> secrets · store → macOS Keychain, service sealctl-unsealed
+> volume · safe → macOS Keychain
+> ssh · ed25519 → ~/.ssh/ed25519
+> …
+> Run folder on that computer: `~/.sealctl-unseal/2026-11-21T10-12-03`
+> Your other computers were told.
+> [Done]
+
+- Failed items in amber with "Run `sealctl unseal --resume` on that computer." Skipped items muted.
+- The report stays in Activity under that day, also after the machine is unpaired.
+- For actions on the phone the report is one line on the same screen, and the `notice` to every machine says the same: "Your phone showed its 24 words at 11:02.", "Your phone deleted its relay data. This computer is unpaired.", and for leaving, the summary of 11.22 step 6.
 
 ## 12. Accessibility
 
@@ -1488,7 +1657,7 @@ New personal developer accounts must run a closed test with at least 12 testers 
 
 ### 16.1 Rust
 
-- `sealctl-app`: unit tests for `decide` covering every row of 9.3, day boundaries (02:00 local, 14 h, time zones, daylight saving), place clustering, pruning, merge with tombstones, summaries.
+- `sealctl-app`: unit tests for `decide` covering every row of 9.3 and 9.6 (a machine's `lvl` raises and never lowers; unknown kinds are level 3; proximity by `near` on Wi-Fi only, by number, by camera; holds; delay by place kind), day boundaries (02:00 local, 14 h, time zones, daylight saving), place clustering, pruning, merge with tombstones, summaries.
 - Property tests for `merge_state`: the result does not depend on the merge order; deleted records stay deleted.
 - The protocol's test vectors, run through the generated Swift and Kotlin bindings on simulator and emulator, so the bindings and both platforms give the same bytes.
 
@@ -1520,6 +1689,7 @@ XCUITest and Compose UI tests, each against a fresh fake relay:
 8. Yearly check right and wrong.
 9. Delete relay data; erase this phone; Leave sealctl with two fake machines, one handed back by unpairing itself and one skipped, resumed after the app is killed at each step.
 10. Offline, clock skew, rate limit banners.
+11. Levels 2 and 3 against the fake machine and fake relay: `unseal` of one object near and not near (number asked, right and wrong, hold and release); `unseal --all` at a trusted place and away (delay, countdown, cancel here, cancel from a second fake machine, release fetched by the machine); a plan in parts; keys outside the plan refused; Show words and Delete my relay data with the delay and `finish`; the card check right and wrong; the report screen. Biometrics simulated: matched, failed, not enrolled (level 2 asks the card, level 3 refuses), locked out, enrolment changed (card first, then a new gate).
 
 ### 16.5 Real-device matrix
 
@@ -1541,6 +1711,7 @@ Manual checks on each device before each release:
 - Leaving a place on foot and by car, and how long the lock takes.
 - Restore from iCloud Keychain and Block Store on a reset device.
 - Push delivery after 12 hours idle and in Low Power or battery saver.
+- Levels 2 and 3 with real biometrics: the prompt offers no passcode; after five failed matches level 3 is refused and works again after a passcode unlock; adding a fingerprint or a second Face ID appearance invalidates the gate and the card is asked once; Android devices with only class 2 face unlock fall back to the card for level 2.
 
 ## 17. CI and release
 
@@ -1576,11 +1747,11 @@ Each milestone ends with its acceptance criteria passing in CI and on the real-d
 | M0 | Skeleton and bindings | Both apps build from a clean checkout in CI. `core_version()` shows in About. The protocol test vectors pass through Swift and Kotlin bindings on simulator, emulator and one real device each |
 | M1 | Words and key storage | Onboarding steps 1 to 7 work with the exact wording. On a real device: the root item cannot be read while locked, the words item asks for Face ID or the credential each time, the phone keys can be read while locked after the first unlock. Restore from words gives the same fingerprint and phone key as the vectors. Restore from iCloud Keychain and Block Store works on a reset device. Screenshots and recordings never show the words |
 | M2 | Relay client and pairing | Pairing by QR against the fake relay and the staging relay; duplicate card both cases; tags; nicknames; unpair; state upload and download with a forced conflict; clock skew and rate-limit handling |
-| M3 | Approvals in the foreground | Every request kind through the WebSocket; the card; replies decrypt on the fake machine to the right derived keys; answers remembered and removed; usage log; inventory from requests; monthly summary |
+| M3 | Approvals in the foreground | Every request kind through the WebSocket; the card; the level 2 and 3 screens of 11.23 with the core's number match and plan signature checked on the fake machine; replies decrypt on the fake machine to the right derived keys; answers remembered and removed; usage log; inventory from requests; monthly summary |
 | M4 | Push and background | Push devices registered, listed and removed; the test push works. Alert push with NSE and FCM data messages show the full card text within 3 seconds on the bench, with both `PUSH_TRANSPORT` values on iOS. Actions answer from the lock screen after the unlock on iOS and Android 12+. Automatic answers send no visible alert. Expired notifications disappear. A request answered from a locked phone in under 5 seconds end to end |
 | M5 | Places | Learning after 3 days (with a clock-advancing test), Trust this place, region exit locks the machines opened there within 3 minutes on foot on the bench phones, `near` respected, the place kind reaches the machine, no-permission path caps at 1 hour |
 | M6 | Changing words | The full change with two machines, in the relay's step order, resumed correctly after the app is killed at each step; licence move called with a valid proof; old phone key's relay data deleted; not-seen list; retired card recorded; old words request moves one object; yearly check right and wrong |
-| M7 | Settings, privacy, accessibility | Delete relay data and erase this phone; Leave sealctl end to end on the bench with the real CLI running `sealctl unseal --all`; monthly summary; VoiceOver and TalkBack pass on every screen; the largest text size works; privacy manifest validated by Xcode's privacy report; Data safety form filled; the English text frozen |
+| M7 | Settings, privacy, accessibility | Delete relay data and erase this phone; Leave sealctl end to end on the bench with the real CLI running `sealctl unseal --all`, once at a trusted place and once away with a shortened test delay and a cancel from a second computer; monthly summary; VoiceOver and TalkBack pass on every screen; the largest text size works; privacy manifest validated by Xcode's privacy report; Data safety form filled; the English text frozen |
 | M8 | Store readiness | Listings, screenshots and review notes in `store/`; the review machine works; Play closed test with 12 testers for 14 days; TestFlight external beta; both stores approve version 1.0.0 |
 
 ## 19. Needs from the protocol, core and relay
@@ -1602,9 +1773,12 @@ A crate `sealctl-core` in the `sealctl` repository with a `uniffi` feature using
 | `PairingOffer::parse(text)` | machine key, machine box key, code, name, OS, model, hint, relay origin, protocol version, expiry | Accepts the link and the part after `#` |
 | `pairing_proof(keys, offer)` | proof string (up to 128 base64url characters) | |
 | `machine_tag(machine_key)` | 4 characters | The duplicate-name tag |
-| `open_request(keys, relay_machine_key, id, sealed)` | `Request` | Verifies the machine's signature, time, version and the replay window |
-| `Request` | `kind` (`open`, `keys`, `agent`, `own`, `rewrap`, `old_words`, `report`), `ctx` (agent, repository id and name, command, cwd, user, subject, names), `items` (purpose, id, path or URL, size, words fingerprint, key check), `uses`, `old` (retired fingerprint, for `old_words`), `status` (for `report`), `rq`, `version` | Fields the card and inventory need |
-| `seal_reply(root_or_none, keys, request, decision)` | sealed string | `decision`: `Deny`, `Once { place }`, `Session { place }`, `Remember { place }`; `place` is `Trusted`, `Other` or `NoLocation`. Needs the root only when the request asks for keys |
+| `open_request(keys, relay_machine_key, id, sealed)` | `Request` | Verifies the machine's signature, time, version and the replay window; derives the number match from the HPKE context when the body has `match` |
+| `Request` | `kind` (`open`, `keys`, `agent`, `own`, `rewrap`, `old_words`, `unseal`, `report`), `ctx` (agent, repository id and name, command, cwd, user, subject, names), `items` (purpose, id, path or URL, size, words fingerprint, key check), `uses`, `old` (retired fingerprint, for `old_words`), `status` and `handback` (for `report`), `plan` (items, `all`, hash, part), `level()`, `has_match`, `rq`, `version` | Fields the card, the level 2 and 3 screens and inventory need |
+| `Request.match_choices()`, `Request.check_match(pick)` | three numbers; bool | The right number stays inside Rust |
+| `PlanAssembler::new()`, `.add(request)` | the whole plan or nothing yet | Collects a plan sent in parts and checks its hash |
+| `seal_reply(root_or_none, keys, request, decision)` | sealed string | `decision`: `Deny`, `Refuse { err }` (`no_match`, `not_near`, `no_biometrics`, `held`, `outside_plan`, `plan_expired`), `Once { place }`, `Session { place }`, `Remember { place }`, `Plan { place, not_before }`; `place` is `Trusted`, `Other` or `NoLocation`. Needs the root only when the request asks for keys |
+| `seal_plan_keys_reply(root, keys, request, approval)` | sealed string | Later keys of an approved plan, inside its 30 minutes |
 | `seal_rewrap_reply(old_root, new_root, keys, request)` | sealed string | |
 | `seal_old_words_reply(old_root, root, keys, request)` | sealed string | Derives only that object's keys |
 | `seal_report_reply(keys, request, ack, messages)` | sealed string | Answers a `report`: the status `seq` stored and the machine messages waiting |
@@ -1618,7 +1792,7 @@ A crate `sealctl-core` in the `sealctl` repository with a `uniffi` feature using
 Protocol content the app depends on:
 
 1. **Pairing QR code:** a `https://sealctl.com/p#<payload>` link (the fragment is never sent to the website), so the system camera opens the app through universal links and App Links. It should carry the relay URL, the protocol version and an expiry. `sealctl pair` should also print the payload as text for typing.
-2. **Request kinds** `open`, `keys`, `agent`, `own`, `rewrap`, `old_words`, `report`, with the fields above. A `repository` id that is stable (for example the normalised git remote, or the path when there is none) for answers.
+2. **Request kinds** `open`, `keys`, `agent`, `own`, `rewrap`, `old_words`, `unseal`, `report`, with the fields above, and the confirmation levels, number match, plan signature and delayed approvals of the protocol (done in the protocol; 9.6 follows it). A `repository` id that is stable (for example the normalised git remote, or the path when there is none) for answers.
 3. **Reply** carrying `place` (`trusted`, `other`, `none`) and `cap`, `base`, `rate`, so the machine sets its allowance, and `grant` (`once` or `session`).
 4. **Key change proof** and how a machine moves to the new phone key.
 5. **Machine status and lock messages**: sealed formats, and how uses inside an Open session reach the phone.
@@ -1635,6 +1809,7 @@ Still needed:
 | --- | --- |
 | APNs transport | Confirm direct APNs from the Worker, or FCM for iOS too (10.1). The app needs to know before M4 ends |
 | Machine channel shipped | Specified and agreed; until the relay deploys it the app uses `report` (8.2), which shows Open with time left only as often as reports arrive |
+| Delayed approvals | Specified in the relay spec (3.15) and the protocol: reply with `delay`, the `delayed` routes, `delayed` and `cancelled` notes and pushes. The pushes use `title-loc-key` `DELAYED_TITLE` / `CANCELLED_TITLE` and `loc-key` `DELAYED_BODY` / `CANCELLED_BODY` (10.1) |
 
 ### 19.3 Between this repository and the website and operations
 
@@ -1658,6 +1833,7 @@ This repository needs:
 - The homepage's approval scene using the app's button order: "Allow for this session", "Allow once", "Deny".
 - Apple's filtering entitlement requested on the developer account (10.1).
 - Play's background location declaration and video (15.3).
+- The website's `/p` page, opened on a computer, draws the pairing QR code from the link's fragment in the browser, so a machine without a terminal can still be paired with the app's camera (11.5).
 
 ## 20. Open questions
 
@@ -1669,9 +1845,11 @@ This repository needs:
 6. **Phones without Google Play services.** No FCM, Block Store or geofencing. Options: a foreground-only mode with the WebSocket, or UnifiedPush. Not in version 1.
 7. **Answers per machine?** The design keys answers by agent, key and repository, not machine. A repository cloned on two machines shares the answer. Confirm.
 8. **Lock latency.** iOS and Android exit events can arrive minutes after leaving. Is a lock within about 3 minutes acceptable, or should the machine also lock when the phone stops being `near`?
-9. **Rewrap without a tap.** Rewrap is automatic while a change runs and the phone is unlocked. Confirm this is right for "words may have been seen", where a compromised machine could ask for both old and new keys.
+9. **Rewrap without a tap.** Settled by the confirmation levels: rewrap is level 2, with biometrics for each machine (9.6).
 10. **Several installs with the same words.** The relay allows 4 push devices per phone key and pushes to all, so version 1 lets any of them answer (8.7). Confirm that two phones answering the same machines is wanted, rather than one active phone.
 11. **Delete relay data and the licence.** Settled: the relay keeps the licence record under the phone key and nothing else (Relay API, Deleting a phone); the app says only that the privacy policy lists what stays.
 12. **iOS pushes through FCM.** If the relay cannot reach APNs, the iOS app links Firebase Messaging (10.1). That adds a Google SDK and an identifier to the iOS privacy answers. Decide before M4 ends.
 13. **Machine gate.** If it is ever switched on, the design brings back one in-app purchase. The current pairing error text (11.20) avoids any mention of payment; revisit then.
 14. **Translations.** Which languages after English, and whether to accept community translations.
+15. **Level 2 without biometrics.** Proposed and specified: two words from the card instead of biometrics, never the passcode (9.6). Level 3 is refused until biometrics work, except through the card on the CLI. Confirm, and confirm that a phone without strong biometrics may still pair machines this way.
+16. **Releasing a hold.** After a wrong number, [Release now] with biometrics lifts the one-hour hold. Keep it, or make the hour fixed?

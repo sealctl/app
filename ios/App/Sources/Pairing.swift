@@ -235,7 +235,7 @@ private struct CameraView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(onCode: onCode) }
 
-    final class Coordinator: NSObject, AVCaptureMetadataOutputObjectsDelegate {
+    final class Coordinator: NSObject, AVCaptureMetadataOutputObjectsDelegate, @unchecked Sendable {
         let onCode: (String) -> Void
         var session: AVCaptureSession?
         var last: String?

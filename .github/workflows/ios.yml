@@ -181,17 +181,21 @@ jobs:
       - name: Attachments of failed UI tests
         if: failure()
         run: |
-          # The failed UI tests' attachments (the screenshot and UI tree XCTest takes at a
-          # failure) as plain files in ios-results, so a failure can be read without Xcode.
-          # Publishing them is fine: these runs use the fake relay and test phones only
-          # (words made on this throwaway simulator, or the public vector words), and the
-          # artifact is kept 7 days. Failed tests only, and never the staging run's results.
+          # The failed UI tests' attachments (the screenshot XCTest takes at a failure) as plain
+          # files in ios-results, so a failure can be read without Xcode. These runs use the fake
+          # relay and test phones only, and the artifact is kept 7 days, but screens that show
+          # or take recovery words are not all in the secure layer: failure-attachments.py keeps
+          # a test's files only when its failure shows a UI tree with no word screen, and deletes
+          # the rest (fails closed). Failed tests only; never the staging run's results.
           [ -d "$RUNNER_TEMP/ui.xcresult" ] || exit 0
-          mkdir -p "$RUNNER_TEMP/ui-failures"
-          xcrun xcresulttool export attachments --path "$RUNNER_TEMP/ui.xcresult" \
-            --output-path "$RUNNER_TEMP/ui-failures" --only-failures \
-            || echo "::warning::xcresulttool could not export the attachments"
-          ls "$RUNNER_TEMP/ui-failures" | head -40
+          out="$RUNNER_TEMP/ui-failures"
+          mkdir -p "$out"
+          if xcrun xcresulttool export attachments --path "$RUNNER_TEMP/ui.xcresult" --output-path "$out" --only-failures; then
+            python3 -I ios/scripts/failure-attachments.py "$RUNNER_TEMP/ui.xcresult" "$out" || rm -rf "$out"
+          else
+            echo "::warning::xcresulttool could not export the attachments"
+            rm -rf "$out"
+          fi
 
       - name: Logs and results
         if: always()

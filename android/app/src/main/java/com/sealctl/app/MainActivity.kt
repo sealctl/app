@@ -51,6 +51,7 @@ sealed class Route {
 /** UI state shared by the screens: the route stack, protected screens. */
 object Ui {
     val stack = mutableStateListOf<Route>()
+    val tab = androidx.compose.runtime.mutableIntStateOf(0)
     /** A screen showing the words is up: FLAG_SECURE (SPEC.md 11.21). */
     val secure = MutableStateFlow(0)
     /** The request the card should show first (from a notification tap). */

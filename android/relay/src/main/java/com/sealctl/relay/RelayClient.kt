@@ -225,6 +225,13 @@ class RelayClient(
             RelayDelayed(o.str("id"), o.strOrNull("machine"), o.long("created"), o.long("releaseAt"), o.long("expires"), o.str("state"))
         }
 
+    /** One record; `cancelled.by` says who cancelled. Null when the relay has no such record. */
+    suspend fun cancelledBy(id: String): String? = try {
+        (call("GET", "${phone()}/delayed/$id")["cancelled"] as? JsonObject)?.strOrNull("by")
+    } catch (e: RelayException) {
+        null
+    }
+
     suspend fun cancelDelayed(id: String) {
         call("POST", "${phone()}/delayed/$id/cancel", userTapped = true)
     }

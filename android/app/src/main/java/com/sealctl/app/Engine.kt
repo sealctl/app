@@ -681,7 +681,8 @@ class Engine(
                 applyLocal(LocalEvent.PutDelayed(DelayedAction(d.id, if (d.machine != null) "unseal_all" else "unknown", d.machine,
                     d.releaseAt.toULong(), d.expires.toULong(), d.state, null)))
             } else if (mine.state != d.state && mine.state != "cancelled") {
-                applyLocal(LocalEvent.PutDelayed(mine.copy(state = d.state)))
+                val by = if (d.state == "cancelled") runCatching { relay.cancelledBy(d.id) }.getOrNull() else null
+                applyLocal(LocalEvent.PutDelayed(mine.copy(state = d.state, cancelledBy = by)))
             }
         }
         // Records the relay no longer has: fetched by the machine, finished or expired.

@@ -103,7 +103,8 @@ fun MainScreen(activity: MainActivity) {
 
 @Composable
 private fun Tabs() {
-    var tab by rememberSaveable { mutableIntStateOf(0) }
+    // The tab survives pushed screens: going back returns to it.
+    var tab by Ui.tab
     Column(Modifier.fillMaxSize().safeDrawingPadding()) {
         Box(Modifier.weight(1f)) {
             when (tab) {

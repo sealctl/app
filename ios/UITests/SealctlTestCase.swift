@@ -75,6 +75,24 @@ class SealctlTestCase: XCTestCase {
         while !e.isHittable && Date() < end { Thread.sleep(forTimeInterval: 0.2) }
     }
 
+    /// Taps a text field and types once it has keyboard focus. A tap made while the screen still
+    /// moves can land before the field takes focus, and `typeText` then fails with "Neither element
+    /// nor any descendant has keyboard focus": the field is tapped once more if focus has not come.
+    func enter(_ text: String, into field: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
+        let focused = NSPredicate(format: "hasKeyboardFocus == true")
+        for attempt in 0..<2 {
+            waitHittable(field)
+            field.tap()
+            let got = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: focused, object: field)], timeout: 5)
+            if got == .completed { break }
+            if attempt == 1 {
+                XCTFail("no keyboard focus: \(field.identifier)", file: file, line: line)
+                return
+            }
+        }
+        field.typeText(text)
+    }
+
     /// Answers the Face ID prompt the last tap raised: matches until `next` shows.
     func faceID(then next: String, _ timeout: TimeInterval = 20, file: StaticString = #filePath, line: UInt = #line) {
         let end = Date().addingTimeInterval(timeout)
@@ -240,8 +258,7 @@ class SealctlTestCase: XCTestCase {
         tap("Can't scan? Type the pairing code")
         let field = element("Pairing code")
         XCTAssertTrue(field.waitForExistence(timeout: 10))
-        field.tap()
-        field.typeText(link)
+        enter(link, into: field)
         tap("Continue")
     }
 

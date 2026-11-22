@@ -105,6 +105,9 @@ pub struct TrustedPlace {
     pub updated: u64,
     /// Tombstone.
     pub deleted: bool,
+    /// Added by hand ("Trust where I am now") rather than learned over three mornings: it counts
+    /// for the level 3 delay only 24 hours after `created` (SPEC.md 9.6).
+    pub manual: bool,
 }
 
 /// One derived key the phone handed out, on one machine.

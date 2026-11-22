@@ -123,7 +123,7 @@ struct LeaveView: View {
                     BodyText("Next, this phone deletes your data on the relay and removes your words from iCloud Keychain.")
                     if pending != nil {
                         BodyText("The hour is over. Confirm again to finish.")
-                    } else if e.placeKind() == .trusted {
+                    } else if e.delayLifted() {
                         BodyText("At \(e.currentPlaceName ?? "your trusted place"): this happens as soon as you confirm.")
                     } else {
                         BodyText("This starts one hour after you confirm. Your phone and your computers can cancel it until then.")

@@ -127,10 +127,13 @@ fun SettingsTab() {
         NavRow("Phones getting requests", "") { Ui.push(Route.Devices) }
         SectionLabel("Relay")
         com.sealctl.designsystem.Line(com.sealctl.designsystem.code(engine.relay.host, size = 14, color = Sealctl.colors.ink), com.sealctl.designsystem.plain(if (engine.banners.collectAsState().value.relayDown) " · Not answering" else " · Connected"), style = androidx.compose.material3.MaterialTheme.typography.bodyMedium, color = Sealctl.colors.muted)
-        SecondaryButton("Delete my relay data", { Ui.push(Route.DeleteRelay) })
+        SecondaryButton("Delete relay data and unpair", { Ui.push(Route.DeleteRelay) })
+        Muted("Your machines are unpaired and the relay forgets them. Your words stay on this phone.")
         SectionLabel("This phone")
-        SecondaryButton("Erase sealctl from this phone", { Ui.push(Route.Erase) })
-        SecondaryButton("Leave sealctl", { Ui.push(Route.Leave) })
+        SecondaryButton("Remove from this phone", { Ui.push(Route.Erase) })
+        Muted("Your words, machines and history leave this phone. Your computers stay sealed; your card restores everything.")
+        SecondaryButton("Unseal all machines and leave", { Ui.push(Route.Leave) })
+        Muted("Every computer gets its passwords back, then sealctl forgets you.")
         SectionLabel("About")
         NavRow("Version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) · core ${coreVersion()} · protocol ${protocolVersion()}", "") { Ui.push(Route.About) }
     }
@@ -187,7 +190,7 @@ fun AnswersScreen() {
 }
 
 @Composable
-fun PlacesScreen() {
+fun PlacesScreen(activity: MainActivity) {
     val engine = Graph.engine
     val state by engine.state.collectAsState()
     val current by engine.currentPlace.collectAsState()
@@ -204,12 +207,13 @@ fun PlacesScreen() {
             Body("At a trusted place, reopening needs no tap while your phone is unlocked and near the machine, sessions can stay open up to 4 hours, and leaving locks the machines you opened here. The location stays on this phone.")
             OutlinedTextField(name, { name = it.take(40) }, label = { Text("Name") }, modifier = Modifier.fillMaxWidth())
             PrimaryButton("Trust", {
-                engine.apply(Event.AddPlace(com.sealctl.core.app.TrustedPlace(o.id, name, o.lat, o.lon, 150.0, 0u, 0u, false)), upload = true)
+                engine.apply(Event.AddPlace(com.sealctl.core.app.TrustedPlace(o.id, name, o.lat, o.lon, 150.0, 0u, 0u, false, false)), upload = true)
                 engine.placeOffer.value = null
                 scope.launch { engine.monitorPlaces() }
             })
             PlainButton("Not this place", { engine.applyLocal(com.sealctl.core.app.LocalEvent.SuppressCandidate(o.id)); engine.placeOffer.value = null })
         }
+        if (engine.places.hasForeground() && current == null && o == null) TrustHere(activity)
         if (!engine.places.hasForeground()) {
             Body("Places need location access. Without it, a session stays open up to 1 hour and reopening always takes a tap.")
             PrimaryButton("Allow location", { openAppSettings(context) })
@@ -219,14 +223,71 @@ fun PlacesScreen() {
         for (p in state.places.filter { !it.deleted }) SurfaceCard {
             Text(p.name, fontWeight = FontWeight.SemiBold, color = Sealctl.colors.ink)
             Muted("trusted since ${Texts.isoDate(p.created.toLong())}" + if (current == p.id) " · You're here" else "")
+            if (p.manual && p.created.toLong() + 86_400_000 > System.currentTimeMillis())
+                Muted("Skips the one-hour wait from ${Texts.time(p.created.toLong() + 86_400_000)} tomorrow")
             if (removing == p.id) {
                 Body("Remove ${p.name}? Machines opened here stay Open until their allowance ends.")
                 Row { TextButton({ engine.apply(Event.RemovePlace(p.id), upload = true); removing = null; scope.launch { engine.monitorPlaces() } }) { Text("Remove") }; TextButton({ removing = null }) { Text("Cancel") } }
             } else TextButton({ removing = p.id }) { Text("Remove") }
         }
-        Muted("Places are learned: after three mornings of approving at the same spot, sealctl asks whether to trust it.")
+        Muted("Places are learned: after three mornings of approving at the same spot, sealctl asks whether to trust it. You can also trust where you are now.")
     }
 }
+
+/** "Trust where I am now": a place added by hand (SPEC.md 11.9). Its comforts start at once; it lifts the level 3 delay after 24 hours. */
+@Composable
+private fun TrustHere(activity: MainActivity) {
+    val engine = Graph.engine
+    val scope = rememberCoroutineScope()
+    var fix by remember { mutableStateOf<com.sealctl.places.Fix?>(null) }
+    var locating by remember { mutableStateOf(false) }
+    var name by remember { mutableStateOf("Home") }
+    var error by remember { mutableStateOf<String?>(null) }
+    val f = fix
+    if (f == null) {
+        SecondaryButton(if (locating) "Finding where you are…" else "Trust where I am now", {
+            if (!locating) {
+                locating = true
+                error = null
+                scope.launch {
+                    val got = engine.places.sample()
+                    locating = false
+                    when {
+                        got == null -> error = "Couldn't get your location. Try again in a moment."
+                        got.accuracy > 100 -> error = "Your location is only accurate to ${got.accuracy.toInt()} m. Try again in a moment, near a window."
+                        else -> fix = got
+                    }
+                }
+            }
+        }, enabled = !locating)
+    } else SurfaceCard {
+        Title("Trust this place?")
+        Body("From now on here: reopening your machines needs no tap while your phone is unlocked and near them, sessions can stay open up to 4 hours, and leaving locks the machines you opened here.")
+        Body("Showing your words and leaving sealctl skip the one-hour wait here from ${Texts.time(System.currentTimeMillis() + 86_400_000)} tomorrow, so someone holding your unlocked phone can't trust a place to skip it.")
+        Muted("Accurate to ${f.accuracy.toInt()} m. The location stays on this phone.")
+        OutlinedTextField(name, { name = it.take(40) }, label = { Text("Name") }, modifier = Modifier.fillMaxWidth())
+        PrimaryButton("Trust", {
+            scope.launch {
+                when (biometricGate(activity, "Trust this place")) {
+                    GateResult.Passed -> {
+                        val place = com.sealctl.core.app.TrustedPlace(randomPlaceId(), name.ifBlank { "Place" }, f.lat, f.lon, 150.0,
+                            System.currentTimeMillis().toULong(), 0u, false, true)
+                        engine.apply(Event.AddPlace(place), upload = true)
+                        engine.monitorPlaces()
+                        fix = null
+                        Ui.toast("Trusted ${place.name}.")
+                    }
+                    GateResult.Cancelled -> {}
+                    else -> error = "Couldn't confirm it's you."
+                }
+            }
+        })
+        PlainButton("Cancel", { fix = null })
+    }
+    ErrorText(error)
+}
+
+private fun randomPlaceId(): String = java.util.UUID.randomUUID().toString()
 
 @Composable
 fun DevicesScreen() {
@@ -374,7 +435,7 @@ private fun PhoneAction(activity: MainActivity, what: String, reason: String, in
     }) {
         Gap(16)
         intro()
-        if (pending == null) Body(if (engine.placeKind() == PlaceKind.TRUSTED) "At your trusted place: this happens as soon as you confirm." else "This starts one hour after you confirm. Your phone and your computers can cancel it until then.")
+        if (pending == null) Body(if (engine.delayLifted()) "At your trusted place: this happens as soon as you confirm." else "This starts one hour after you confirm. Your phone and your computers can cancel it until then.")
         else Body("The hour is over. Confirm again to finish.")
     }
 }
@@ -448,10 +509,10 @@ fun EraseScreen(activity: MainActivity) {
     val scope = rememberCoroutineScope()
     var alsoBackup by remember { mutableStateOf(false) }
     Page(null, bottom = {
-        SecondaryButton("Delete my relay data first", { Ui.pop(); Ui.push(Route.DeleteRelay) })
-        PrimaryButton("Erase", {
+        SecondaryButton("Delete relay data and unpair first", { Ui.pop(); Ui.push(Route.DeleteRelay) })
+        PrimaryButton("Remove", {
             scope.launch {
-                when (com.sealctl.vault.Biometric.words(activity, "Erase sealctl from this phone", "Use your fingerprint, face or screen lock", "Cancel",
+                when (com.sealctl.vault.Biometric.words(activity, "Remove sealctl from this phone", "Use your fingerprint, face or screen lock", "Cancel",
                     runCatching { Graph.engine.vault.wordsDecryptCipher() }.getOrElse { Graph.engine.vault.wordsEncryptCipher() })) {
                     is com.sealctl.vault.AuthResult.Success -> erase(alsoBackup)
                     else -> {}
@@ -461,7 +522,7 @@ fun EraseScreen(activity: MainActivity) {
         PlainButton("Cancel", { Ui.pop() })
     }) {
         Gap(24)
-        Title("Erase sealctl from this phone?")
+        Title("Remove sealctl from this phone?")
         Body("This removes your words, machines, places and history from this phone. Your machines stay paired; your card restores everything on any phone.")
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(alsoBackup, { alsoBackup = it })

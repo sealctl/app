@@ -64,7 +64,7 @@ fun LeaveScreen(activity: MainActivity) {
             PlainButton("Cancel", { cancel() })
         }) {
             Gap(24)
-            Title("Leave sealctl")
+            Title("Unseal all machines and leave")
             Body("sealctl hands everything back to you before you go. On each computer, `sealctl unseal --all` moves your volumes, backups, SSH keys and secrets to passwords of your own. Your files stay encrypted.")
             Body("Then this phone deletes your data on the relay and the copy of your words in your Google backup.")
             ErrorText(error)
@@ -108,7 +108,7 @@ fun LeaveScreen(activity: MainActivity) {
                 Body("Next, this phone deletes your data on the relay and removes your words from your Google backup.")
                 Body(
                     if (pending != null) "The hour is over. Confirm again to finish."
-                    else if (engine.placeKind() == PlaceKind.TRUSTED) "At your trusted place: this happens as soon as you confirm."
+                    else if (engine.delayLifted()) "At your trusted place: this happens as soon as you confirm."
                     else "This starts one hour after you confirm. Your phone and your computers can cancel it until then.",
                 )
             }

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use sealctl_core::{Decision, Place as PlaceKind, RefuseReason, Request, RequestKind};
 
 use crate::day::day_end;
-use crate::model::{DayRecord, Hold, PlanApprovalRecord, RememberedAnswer};
+use crate::model::{DayRecord, Hold, PlanApprovalRecord, RememberedAnswer, TrustedPlace};
 
 /// One hour, the level 3 delay away from a trusted place.
 pub const DELAY_SECS: u32 = 3600;
@@ -80,6 +80,8 @@ pub struct DecideContext {
     pub places_on: bool,
     /// The trusted place the phone is inside.
     pub current_place: Option<String>,
+    /// That place also lifts the level 3 delay ([`place_settled`]).
+    pub current_place_settled: bool,
     /// This machine's day record.
     pub day: Option<DayRecord>,
     /// Live answers.
@@ -179,6 +181,17 @@ pub fn place_kind(places_on: bool, current_place: Option<String>) -> PlaceKind {
         (true, Some(_)) => PlaceKind::Trusted,
         (true, None) => PlaceKind::Other,
     }
+}
+
+/// A place added by hand lifts the level 3 delay only this long after it was added (SPEC.md 9.6):
+/// someone holding the unlocked phone cannot trust "here" and skip the hour.
+pub const MANUAL_PLACE_SETTLE_MS: u64 = 24 * 3_600_000;
+
+/// Whether a trusted place also lifts the level 3 delay at `now`: a learned place at once, a place
+/// added by hand 24 hours after it was added. Every other comfort of a place starts at once.
+#[uniffi::export]
+pub fn place_settled(place: TrustedPlace, now: u64) -> bool {
+    !place.deleted && (!place.manual || now >= place.created.saturating_add(MANUAL_PLACE_SETTLE_MS))
 }
 
 /// Whether every agent use has a live answer.
@@ -349,7 +362,7 @@ fn sensitive(mut v: Verdict, f: &RequestFacts, ctx: &DecideContext, near: bool) 
             return refuse(v, RefuseReason::NotNear);
         }
         v.needs_number = true;
-        if v.place != PlaceKind::Trusted {
+        if v.place != PlaceKind::Trusted || !ctx.current_place_settled {
             v.delay_secs = DELAY_SECS;
         }
     } else if !near {
@@ -384,6 +397,7 @@ mod tests {
             on_wifi: true,
             places_on: true,
             current_place: Some("desk".into()),
+            current_place_settled: true,
             day: Some(DayRecord {
                 machine: "m".into(),
                 first_approval: NOW - 3_600_000,
@@ -553,6 +567,17 @@ mod tests {
     }
 
     #[test]
+    fn hand_added_places_settle_after_a_day() {
+        let learned = TrustedPlace { id: "p".into(), created: NOW, ..TrustedPlace::default() };
+        assert!(place_settled(learned.clone(), NOW));
+        let manual = TrustedPlace { manual: true, ..learned };
+        assert!(!place_settled(manual.clone(), NOW));
+        assert!(!place_settled(manual.clone(), NOW + MANUAL_PLACE_SETTLE_MS - 1));
+        assert!(place_settled(manual.clone(), NOW + MANUAL_PLACE_SETTLE_MS));
+        assert!(!place_settled(TrustedPlace { deleted: true, ..manual }, NOW + 2 * MANUAL_PLACE_SETTLE_MS));
+    }
+
+    #[test]
     fn rewrap_and_seal_are_level_two() {
         // The core reports these as level 2; a level 1 fact for rewrap is raised.
         let v = decide_facts(&facts(RequestKind::Rewrap, 1), &ctx());
@@ -576,6 +601,12 @@ mod tests {
         c.places_on = false;
         let v = decide_facts(&f, &c);
         assert_eq!((v.delay_secs, v.place), (DELAY_SECS, PlaceKind::NoLocation));
+        // a trusted place that has not settled yet (added by hand under 24 hours ago): the place
+        // stays trusted for comfort, the delay stays
+        let mut c = ctx();
+        c.current_place_settled = false;
+        let v = decide_facts(&f, &c);
+        assert_eq!((v.delay_secs, v.place), (DELAY_SECS, PlaceKind::Trusted));
 
         for b in [Biometrics::Unavailable, Biometrics::LockedOut] {
             let mut c = ctx();

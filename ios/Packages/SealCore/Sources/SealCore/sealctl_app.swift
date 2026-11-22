@@ -1259,6 +1259,10 @@ public struct DecideContext: Equatable, Hashable {
      */
     public var currentPlace: String?
     /**
+     * That place also lifts the level 3 delay ([`place_settled`]).
+     */
+    public var currentPlaceSettled: Bool
+    /**
      * This machine's day record.
      */
     public var day: DayRecord?
@@ -1308,6 +1312,9 @@ public struct DecideContext: Equatable, Hashable {
          * The trusted place the phone is inside.
          */currentPlace: String?, 
         /**
+         * That place also lifts the level 3 delay ([`place_settled`]).
+         */currentPlaceSettled: Bool, 
+        /**
          * This machine's day record.
          */day: DayRecord?, 
         /**
@@ -1332,6 +1339,7 @@ public struct DecideContext: Equatable, Hashable {
         self.onWifi = onWifi
         self.placesOn = placesOn
         self.currentPlace = currentPlace
+        self.currentPlaceSettled = currentPlaceSettled
         self.day = day
         self.answers = answers
         self.sessionOpen = sessionOpen
@@ -1363,6 +1371,7 @@ public struct FfiConverterTypeDecideContext: FfiConverterRustBuffer {
                 onWifi: FfiConverterBool.read(from: &buf), 
                 placesOn: FfiConverterBool.read(from: &buf), 
                 currentPlace: FfiConverterOptionString.read(from: &buf), 
+                currentPlaceSettled: FfiConverterBool.read(from: &buf), 
                 day: FfiConverterOptionTypeDayRecord.read(from: &buf), 
                 answers: FfiConverterSequenceTypeRememberedAnswer.read(from: &buf), 
                 sessionOpen: FfiConverterBool.read(from: &buf), 
@@ -1380,6 +1389,7 @@ public struct FfiConverterTypeDecideContext: FfiConverterRustBuffer {
         FfiConverterBool.write(value.onWifi, into: &buf)
         FfiConverterBool.write(value.placesOn, into: &buf)
         FfiConverterOptionString.write(value.currentPlace, into: &buf)
+        FfiConverterBool.write(value.currentPlaceSettled, into: &buf)
         FfiConverterOptionTypeDayRecord.write(value.day, into: &buf)
         FfiConverterSequenceTypeRememberedAnswer.write(value.answers, into: &buf)
         FfiConverterBool.write(value.sessionOpen, into: &buf)
@@ -4037,6 +4047,11 @@ public struct TrustedPlace: Equatable, Hashable {
      * Tombstone.
      */
     public var deleted: Bool
+    /**
+     * Added by hand ("Trust where I am now") rather than learned over three mornings: it counts
+     * for the level 3 delay only 24 hours after `created` (SPEC.md 9.6).
+     */
+    public var manual: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -4064,7 +4079,11 @@ public struct TrustedPlace: Equatable, Hashable {
          */updated: UInt64, 
         /**
          * Tombstone.
-         */deleted: Bool) {
+         */deleted: Bool, 
+        /**
+         * Added by hand ("Trust where I am now") rather than learned over three mornings: it counts
+         * for the level 3 delay only 24 hours after `created` (SPEC.md 9.6).
+         */manual: Bool) {
         self.id = id
         self.name = name
         self.lat = lat
@@ -4073,6 +4092,7 @@ public struct TrustedPlace: Equatable, Hashable {
         self.created = created
         self.updated = updated
         self.deleted = deleted
+        self.manual = manual
     }
 
     
@@ -4098,7 +4118,8 @@ public struct FfiConverterTypeTrustedPlace: FfiConverterRustBuffer {
                 radius: FfiConverterDouble.read(from: &buf), 
                 created: FfiConverterUInt64.read(from: &buf), 
                 updated: FfiConverterUInt64.read(from: &buf), 
-                deleted: FfiConverterBool.read(from: &buf)
+                deleted: FfiConverterBool.read(from: &buf), 
+                manual: FfiConverterBool.read(from: &buf)
         )
     }
 
@@ -4111,6 +4132,7 @@ public struct FfiConverterTypeTrustedPlace: FfiConverterRustBuffer {
         FfiConverterUInt64.write(value.created, into: &buf)
         FfiConverterUInt64.write(value.updated, into: &buf)
         FfiConverterBool.write(value.deleted, into: &buf)
+        FfiConverterBool.write(value.manual, into: &buf)
     }
 }
 
@@ -6629,6 +6651,19 @@ public func placeKind(placesOn: Bool, currentPlace: String?) -> Place  {
 })
 }
 /**
+ * Whether a trusted place also lifts the level 3 delay at `now`: a learned place at once, a place
+ * added by hand 24 hours after it was added. Every other comfort of a place starts at once.
+ */
+public func placeSettled(place: TrustedPlace, now: UInt64) -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_func_place_settled(
+        FfiConverterTypeTrustedPlace_lower(place),
+        FfiConverterUInt64.lower(now),uniffiCallStatus
+    )
+})
+}
+/**
  * The merge of two states. Commutative and idempotent.
  */
 public func mergeState(local: State, remote: State) -> State  {
@@ -6743,6 +6778,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_func_place_kind() != 46517) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sealctl_app_checksum_func_place_settled() != 36074) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_func_merge_state() != 39551) {

@@ -724,6 +724,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_sealctl_app_checksum_func_place_kind(
     ): Int
+    external fun uniffi_sealctl_app_checksum_func_place_settled(
+    ): Int
     external fun uniffi_sealctl_app_checksum_func_merge_state(
     ): Int
     external fun uniffi_sealctl_app_checksum_func_distance_m(
@@ -853,6 +855,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_place_kind(`placesOn`: Byte,`currentPlace`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBufferPlace.ByValue
+    external fun uniffi_sealctl_app_fn_func_place_settled(`place`: RustBuffer.ByValue,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     external fun uniffi_sealctl_app_fn_func_merge_state(`local`: RustBuffer.ByValue,`remote`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_distance_m(`lat1`: Double,`lon1`: Double,`lat2`: Double,`lon2`: Double,uniffi_out_err: UniffiRustCallStatus, 
@@ -1019,6 +1023,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_func_place_kind() and 0xFFFF) != 46517) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_sealctl_app_checksum_func_place_settled() and 0xFFFF) != 36074) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_func_merge_state() and 0xFFFF) != 39551) {
@@ -2276,6 +2283,11 @@ data class DecideContext (
     var `currentPlace`: kotlin.String?
     , 
     /**
+     * That place also lifts the level 3 delay ([`place_settled`]).
+     */
+    var `currentPlaceSettled`: kotlin.Boolean
+    , 
+    /**
      * This machine's day record.
      */
     var `day`: DayRecord?
@@ -2327,6 +2339,7 @@ public object FfiConverterTypeDecideContext: FfiConverterRustBuffer<DecideContex
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterOptionalTypeDayRecord.read(buf),
             FfiConverterSequenceTypeRememberedAnswer.read(buf),
             FfiConverterBoolean.read(buf),
@@ -2344,6 +2357,7 @@ public object FfiConverterTypeDecideContext: FfiConverterRustBuffer<DecideContex
             FfiConverterBoolean.allocationSize(value.`onWifi`) +
             FfiConverterBoolean.allocationSize(value.`placesOn`) +
             FfiConverterOptionalString.allocationSize(value.`currentPlace`) +
+            FfiConverterBoolean.allocationSize(value.`currentPlaceSettled`) +
             FfiConverterOptionalTypeDayRecord.allocationSize(value.`day`) +
             FfiConverterSequenceTypeRememberedAnswer.allocationSize(value.`answers`) +
             FfiConverterBoolean.allocationSize(value.`sessionOpen`) +
@@ -2360,6 +2374,7 @@ public object FfiConverterTypeDecideContext: FfiConverterRustBuffer<DecideContex
             FfiConverterBoolean.write(value.`onWifi`, buf)
             FfiConverterBoolean.write(value.`placesOn`, buf)
             FfiConverterOptionalString.write(value.`currentPlace`, buf)
+            FfiConverterBoolean.write(value.`currentPlaceSettled`, buf)
             FfiConverterOptionalTypeDayRecord.write(value.`day`, buf)
             FfiConverterSequenceTypeRememberedAnswer.write(value.`answers`, buf)
             FfiConverterBoolean.write(value.`sessionOpen`, buf)
@@ -4294,6 +4309,12 @@ data class TrustedPlace (
      * Tombstone.
      */
     var `deleted`: kotlin.Boolean
+    , 
+    /**
+     * Added by hand ("Trust where I am now") rather than learned over three mornings: it counts
+     * for the level 3 delay only 24 hours after `created` (SPEC.md 9.6).
+     */
+    var `manual`: kotlin.Boolean
     
 ){
     
@@ -4318,6 +4339,7 @@ public object FfiConverterTypeTrustedPlace: FfiConverterRustBuffer<TrustedPlace>
             FfiConverterULong.read(buf),
             FfiConverterULong.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
         )
     }
 
@@ -4329,7 +4351,8 @@ public object FfiConverterTypeTrustedPlace: FfiConverterRustBuffer<TrustedPlace>
             FfiConverterDouble.allocationSize(value.`radius`) +
             FfiConverterULong.allocationSize(value.`created`) +
             FfiConverterULong.allocationSize(value.`updated`) +
-            FfiConverterBoolean.allocationSize(value.`deleted`)
+            FfiConverterBoolean.allocationSize(value.`deleted`) +
+            FfiConverterBoolean.allocationSize(value.`manual`)
     )
 
     override fun write(value: TrustedPlace, buf: ByteBuffer) {
@@ -4341,6 +4364,7 @@ public object FfiConverterTypeTrustedPlace: FfiConverterRustBuffer<TrustedPlace>
             FfiConverterULong.write(value.`created`, buf)
             FfiConverterULong.write(value.`updated`, buf)
             FfiConverterBoolean.write(value.`deleted`, buf)
+            FfiConverterBoolean.write(value.`manual`, buf)
     }
 }
 
@@ -7137,6 +7161,22 @@ public object FfiConverterSequenceTypeReplyOption: FfiConverterRustBuffer<List<R
         
         FfiConverterBoolean.lower(`placesOn`),
         FfiConverterOptionalString.lower(`currentPlace`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Whether a trusted place also lifts the level 3 delay at `now`: a learned place at once, a place
+         * added by hand 24 hours after it was added. Every other comfort of a place starts at once.
+         */ fun `placeSettled`(`place`: TrustedPlace, `now`: kotlin.ULong): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_func_place_settled(
+    
+        
+        FfiConverterTypeTrustedPlace.lower(`place`),
+        FfiConverterULong.lower(`now`),_status)
 }
     )
     }

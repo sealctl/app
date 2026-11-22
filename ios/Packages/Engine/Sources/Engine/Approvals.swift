@@ -79,11 +79,21 @@ extension AppEngine {
         return DecideContext(
             now: UInt64(now), utcOffsetSecs: utcOffset(), phoneUnlocked: await vault.canReadRoot(),
             near: r.near, onWifi: onWifi, placesOn: places?.hasForeground ?? false, currentPlace: currentPlace,
+            currentPlaceSettled: placeSettledNow(),
             day: local.days.first { $0.machine == r.machine },
             answers: state.answers.filter { !$0.deleted }, sessionOpen: open,
             hold: local.holds.first { $0.machine == r.machine },
             biometrics: await vault.biometrics(), plan: plan)
     }
+
+    /// The place the phone is inside also lifts the level 3 delay (a place added by hand: after 24 hours).
+    public func placeSettledNow() -> Bool {
+        guard let id = currentPlace, let p = state.places.first(where: { $0.id == id && !$0.deleted }) else { return false }
+        return SealCore.placeSettled(place: p, now: UInt64(nowMs()))
+    }
+
+    /// A level 3 action happens at once here (SPEC.md 9.6).
+    public func delayLifted() -> Bool { placeKind() == .trusted && placeSettledNow() }
 
     public func placeKind() -> SealCore.Place {
         SealCore.placeKind(placesOn: places?.hasForeground ?? false, currentPlace: currentPlace)
@@ -415,7 +425,7 @@ extension AppEngine {
     /// Starts a level 3 action on the phone: nil (go ahead now) at a trusted place, else the
     /// delayed record the relay keeps for the hour.
     public func startPhoneAction(_ what: String) async throws -> DelayedAction? {
-        if placeKind() == .trusted { return nil }
+        if delayLifted() { return nil }
         let delay = delaySecs(3600)
         let id = randomId()
         let d = try await relay.addDelayed(id: id, delay: delay)

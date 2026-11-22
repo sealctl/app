@@ -158,12 +158,24 @@ class SealctlTestCase: XCTestCase {
     }
 
     /// Restore from paper with the in-app keypad (11.4).
-    func typeWords(_ list: [String]) {
-        for w in list {
-            for c in w.prefix(4) {
-                let key = app.buttons["key \(c)"]
-                if !key.isHittable { waitHittable(key, 3) }
-                key.tap()
+    /// Types words on the keypad, checking each field; `fields` are their numbers (default 1...).
+    func typeWords(_ list: [String], fields: [Int]? = nil) {
+        for (i, w) in list.enumerated() {
+            let number = fields?[i] ?? i + 1
+            let field = element("field-\(number)")
+            for attempt in 0..<3 {
+                if attempt > 0 {
+                    // A missed tap: focus the field, clear it and type again.
+                    field.tap()
+                    for _ in 0..<6 where app.buttons["key delete"].isEnabled { app.buttons["key delete"].tap() }
+                }
+                for c in w.prefix(4) {
+                    let key = app.buttons["key \(c)"]
+                    if !key.isHittable { waitHittable(key, 3) }
+                    key.tap()
+                }
+                let value = (field.value as? String) ?? ""
+                if value.hasPrefix(String(w.prefix(4))) || !field.exists { break }
             }
         }
     }

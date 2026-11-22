@@ -1,0 +1,9 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.kotlin/
+captures/
+# Firebase app configuration: written at build time, never committed (SPEC.md 17.2).
+app/google-services.json

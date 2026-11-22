@@ -77,6 +77,9 @@ class RelayClient(
 
     fun phoneId(): String = phoneKeys().publicId()
 
+    /** Milliseconds left in the rate-limit window (0 when calls may go out). */
+    fun rateLimitedForMs(): Long = (rateLimitedUntil - now()).coerceAtLeast(0)
+
     private fun unixTime(): Long = now() / 1000 + clockOffsetSecs
 
     /** One signed call. Throws [RelayException] on an error answer and [IOException] offline. */

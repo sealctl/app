@@ -130,6 +130,9 @@ public actor RelayClient {
 
     public func phoneId() async throws -> String { try await phoneKeys().publicId() }
 
+    /// Milliseconds left in the rate-limit window (0 when calls may go out).
+    public func rateLimitedForMs() -> Int64 { max(0, rateLimitedUntil - now()) }
+
     private func unixTime() -> Int64 { now() / 1000 + clockOffsetSecs }
 
     private func phone() async throws -> String { "/v1/phones/\(try await phoneId())" }

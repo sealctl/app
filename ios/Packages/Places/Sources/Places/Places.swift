@@ -85,8 +85,9 @@ public final class Places: NSObject, CLLocationManagerDelegate {
         }
     }
 
-    /// Replaces the monitored places. `onTransition(ids, entered)` runs for every crossing.
-    public func monitor(_ fences: [Fence], onTransition: @escaping @Sendable ([String], Bool) async -> Void) async {
+    /// Replaces the monitored places. `onTransition(ids, entered)` runs for every crossing;
+    /// `entered` is nil when the state is unknown or unmonitored, which is not an exit.
+    public func monitor(_ fences: [Fence], onTransition: @escaping @Sendable ([String], Bool?) async -> Void) async {
         guard hasForeground else { return }
         let m: CLMonitor
         if let monitor { m = monitor } else {
@@ -95,8 +96,12 @@ public final class Places: NSObject, CLLocationManagerDelegate {
             events = Task { @MainActor [weak self] in
                 do {
                     for try await e in await m.events {
-                        let entered = e.state == .satisfied
-                        if entered { self?.inside.insert(e.identifier) } else { self?.inside.remove(e.identifier) }
+                        let entered: Bool? = switch e.state {
+                        case .satisfied: true
+                        case .unsatisfied: false
+                        default: nil
+                        }
+                        if entered == true { self?.inside.insert(e.identifier) } else { self?.inside.remove(e.identifier) }
                         await onTransition([e.identifier], entered)
                     }
                 } catch {}

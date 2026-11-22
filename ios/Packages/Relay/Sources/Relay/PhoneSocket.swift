@@ -96,7 +96,8 @@ public actor PhoneSocket {
         ws.cancel(with: .goingAway, reason: nil)
         if task === ws { task = nil }
         isOpen = false
-        await onState(false)
+        // `stop()` (the app went to the background) is not a drop.
+        if !Task.isCancelled { await onState(false) }
         return opened
     }
 

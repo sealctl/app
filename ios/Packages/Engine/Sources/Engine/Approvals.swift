@@ -14,7 +14,7 @@ extension AppEngine {
 
     private func handleOne(_ r: RelayRequest, fromPush: Bool) async {
         if waiting.contains(where: { $0.relay.id == r.id && !$0.expired }) { return }
-        guard (try? await db.run({ try $0.seeRequest(id: r.id, machine: r.machine, expires: UInt64(r.expires)) })) == true else {
+        guard (try? await db.run({ try $0.seeRequest(id: r.id, machine: r.machine, expires: UInt64(clamping: r.expires)) })) == true else {
             return
         }
         guard let machine = machine(r.machine) else {
@@ -41,7 +41,14 @@ extension AppEngine {
                 return
             }
         }
-        let verdict = decide(request: req, ctx: await context(r, machine))
+        var ctx = await context(r, machine)
+        var verdict = decide(request: req, ctx: ctx)
+        if verdict.asking == .planKeys, ctx.plan?.delayId != nil {
+            // A cancel made on a computer reaches this phone only by the socket, a push or a refresh:
+            // ask the relay before a delayed plan hands out keys. Without an answer, ask the person.
+            ctx.plan = await refreshDelayed() ? livePlan(r.machine) : nil
+            verdict = decide(request: req, ctx: ctx)
+        }
         switch verdict.asking {
         case .silent:
             await silent(req, r)
@@ -52,7 +59,8 @@ extension AppEngine {
                 await notifier.post(id: "auto-\(r.id)", content: Notes.passive(Texts.answeredByItself(displayName(machine), place: place)))
             }
         case .planKeys:
-            await planKeys(req, r)
+            guard let plan = ctx.plan else { return }
+            await planKeys(req, r, plan)
         case .refused:
             let err = verdict.refuse ?? .unsupported
             _ = await reply(req, r, .refuse(err: err), outcome: "denied", allowed: false)
@@ -71,7 +79,7 @@ extension AppEngine {
 
     func context(_ r: RelayRequest, _ machine: Machine) async -> DecideContext {
         let now = nowMs()
-        let plan = local.plans.filter { $0.machine == r.machine && $0.state != "cancelled" }.max { $0.notBefore < $1.notBefore }
+        let plan = livePlan(r.machine)
         let open: Bool = machine.lastStatus.map { s in
             guard s.session == "open", let left = s.left else { return false }
             return (now - Int64(s.reportedAt)) / 1000 < Int64(left)
@@ -84,6 +92,15 @@ extension AppEngine {
             answers: state.answers.filter { !$0.deleted }, sessionOpen: open,
             hold: local.holds.first { $0.machine == r.machine },
             biometrics: await vault.biometrics(), plan: plan)
+    }
+
+    /// The newest plan of a machine that can still hand out keys: not cancelled, and not
+    /// waiting on a delayed record that was cancelled.
+    func livePlan(_ machine: String) -> PlanApprovalRecord? {
+        let cancelled = Set(local.delayed.filter { $0.state == "cancelled" }.map(\.id))
+        return local.plans
+            .filter { $0.machine == machine && $0.state != "cancelled" && !($0.delayId.map(cancelled.contains) ?? false) }
+            .max { $0.notBefore < $1.notBefore }
     }
 
     /// The place the phone is inside also lifts the level 3 delay (a place added by hand: after 24 hours).
@@ -133,9 +150,9 @@ extension AppEngine {
         }
     }
 
-    private func planKeys(_ req: Request, _ r: RelayRequest) async {
-        guard let keys = await phoneKeys(),
-              let plan = local.plans.filter({ $0.machine == r.machine }).max(by: { $0.notBefore < $1.notBefore }) else { return }
+    /// Answers a later part of `plan`, the plan `decide` matched the request to.
+    private func planKeys(_ req: Request, _ r: RelayRequest, _ plan: PlanApprovalRecord) async {
+        guard let keys = await phoneKeys() else { return }
         let approval = PlanApproval(machine: plan.machine, hash: plan.planHash, notBefore: plan.notBefore,
                                     keys: plan.keys.map { KeyRef(purpose: $0.purpose, id: $0.id) })
         guard let sealed = await withRoot({ try sealPlanKeysReply(root: $0, keys: keys, request: req, approval: approval) }) else { return }
@@ -199,10 +216,12 @@ extension AppEngine {
         }
     }
 
-    /// Answers a waiting One tap request (card button or notification action).
+    /// Answers a waiting One tap request (card button or notification action) with one of
+    /// the options it offers. Level 2 and 3 requests are answered only in the app (9.6).
     @discardableResult
     public func answer(_ id: String, _ option: ReplyOption) async -> Bool {
-        guard let w = waiting.first(where: { $0.relay.id == id && !$0.expired }) else { return false }
+        guard let w = waiting.first(where: { $0.relay.id == id && !$0.expired }),
+              w.verdict.asking == .oneTap, w.verdict.options.contains(option) else { return false }
         let (decision, outcome) = decisionFor(w, option)
         var remember = false
         if case .remember = decision { remember = true }
@@ -369,22 +388,26 @@ extension AppEngine {
 
     // MARK: delayed approvals (11.23)
 
-    public func refreshDelayed() async {
-        guard await phoneKeys() != nil, let list = try? await relay.listDelayed() else { return }
+    /// Brings the delayed records up to the relay's list. False when the relay could not be asked.
+    @discardableResult
+    public func refreshDelayed() async -> Bool {
+        guard await phoneKeys() != nil, let list = try? await relay.listDelayed() else { return false }
         for d in list {
             if let mine = local.delayed.first(where: { $0.id == d.id }) {
                 if mine.state != d.state && mine.state != "cancelled" {
                     var m = mine
                     m.state = d.state
-                    if d.state == "cancelled" { m.cancelledBy = await relay.cancelledBy(d.id) }
+                    if d.state == "cancelled" { m.cancelledBy = d.by }
                     await applyLocal(.putDelayed(action: m))
                 }
             } else {
                 await applyLocal(.putDelayed(action: DelayedAction(
                     id: d.id, what: d.machine != nil ? "unseal_all" : "unknown", machine: d.machine,
-                    releaseAt: UInt64(d.releaseAt), expires: UInt64(d.expires), state: d.state, cancelledBy: nil)))
+                    releaseAt: UInt64(clamping: d.releaseAt), expires: UInt64(clamping: d.expires), state: d.state,
+                    cancelledBy: d.state == "cancelled" ? d.by : nil)))
             }
         }
+        await cancelPlansOfCancelledDelays()
         // Records the relay no longer has: fetched by the machine, finished or expired.
         let ids = Set(list.map(\.id))
         for d in local.delayed where !ids.contains(d.id) && d.state == "waiting" && nowMs() > Int64(d.releaseAt) {
@@ -395,6 +418,17 @@ extension AppEngine {
             await applyLocal(.putDelayed(action: m))
         }
         delayedTick = nowMs()
+        return true
+    }
+
+    /// A plan waiting on a delayed record that was cancelled is cancelled too, however the
+    /// cancel arrived, so it never hands out keys (9.6, 11.23).
+    func cancelPlansOfCancelledDelays() async {
+        let cancelled = Set(local.delayed.filter { $0.state == "cancelled" }.map(\.id))
+        for var p in local.plans where p.state != "cancelled" && (p.delayId.map(cancelled.contains) ?? false) {
+            p.state = "cancelled"
+            await applyLocal(.putPlan(plan: p))
+        }
     }
 
     /// Cancel needs no biometrics: stopping is always allowed.
@@ -432,7 +466,8 @@ extension AppEngine {
         let delay = delaySecs(7200)
         let id = randomId()
         let d = try await relay.addDelayed(id: id, delay: delay)
-        let action = DelayedAction(id: id, what: what, machine: nil, releaseAt: UInt64(d.releaseAt), expires: UInt64(d.expires),
+        let action = DelayedAction(id: id, what: what, machine: nil, releaseAt: UInt64(clamping: d.releaseAt),
+                                   expires: UInt64(clamping: d.expires),
                                    state: "waiting", cancelledBy: nil)
         await applyLocal(.putDelayed(action: action))
         await notifier.post(id: "ready-\(id)", content: Notes.active(Texts.ready(what), level: .timeSensitive,
@@ -488,7 +523,7 @@ extension AppEngine {
             let seq = await nextSeq(m.key)
             let msg = MachineMessage(version: 1, time: UInt64(nowMs()), seq: seq,
                                      kind: .notice(notice: Notice(what: what, state: st, machine: name, delay: delayId,
-                                                                  at: at.map { UInt64($0) }, report: report)))
+                                                                  at: at.map { UInt64(clamping: $0) }, report: report)))
             if let sealed = try? sealMachineMessage(keys: keys, machineKey: m.key, machineBoxKey: m.boxKey, message: msg) {
                 _ = try? await relay.postMessage(machine: m.key, sealed: sealed)
             }

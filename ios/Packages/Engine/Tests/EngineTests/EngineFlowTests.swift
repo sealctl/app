@@ -1,10 +1,10 @@
 import Foundation
 import Testing
 import EngineKit
-import Relay
 import SealCore
 import Vault
 @testable import Engine
+@testable import Relay
 
 #if os(macOS)
 /// Sets the relay's `near` for the next requests (nil: computed from addresses).
@@ -32,8 +32,8 @@ struct EngineFlowTests {
         throw RelayError.transport("no request arrived: \(run?.output ?? "")")
     }
 
-    func paired() async throws -> (AppEngine, MemoryVault, RecordingNotifier, FakeMachine) {
-        let (engine, vault, notifier) = try await makeEngine()
+    func paired(testDelay: Int = 2) async throws -> (AppEngine, MemoryVault, RecordingNotifier, FakeMachine) {
+        let (engine, vault, notifier) = try await makeEngine(testDelay: testDelay)
         try await onboard(engine)
         #expect(engine.phase == .ready)
         let m = FakeMachine()
@@ -72,6 +72,11 @@ struct EngineFlowTests {
                          "--cmd", "./deploy.sh"])
         w = try await waitForCard(engine, 1, r)
         #expect(Texts.title(Texts.facts(w, machineName: "x")) == "Allow DEPLOY_TOKEN once?")
+        // Only the options the request offers answer it.
+        #expect(w.verdict.options == [.allowOnce, .deny])
+        #expect(!(await engine.answer(w.id, .allowSession)))
+        #expect(!(await engine.answer(w.id, .allow)))
+        #expect(engine.waiting.contains { $0.id == w.id && !$0.expired })
         #expect(await engine.answer(w.id, .deny))
         (code, _) = await m.waitAsync(r)
         #expect(code == 2)
@@ -132,6 +137,10 @@ struct EngineFlowTests {
         #expect(w.verdict.asking == .inApp)
         #expect(w.verdict.level == 2)
         #expect(w.verdict.needsNumber)
+        // A level 2 request is answered only in the app, after biometrics.
+        #expect(!(await engine.answer(w.id, .allowOnce)))
+        #expect(!(await engine.answer(w.id, .confirm)))
+        #expect(engine.waiting.contains { $0.id == w.id && !$0.expired })
         let choices = w.request.matchChoices()
         #expect(choices.count == 3)
         let right = try await r.number()
@@ -199,6 +208,35 @@ struct EngineFlowTests {
         _ = try await nearControl(nil)
     }
 
+    @Test func delayCancelledFromTheMachineClosesThePlan() async throws {
+        let (engine, vault, _, m) = try await paired(testDelay: 60)
+        _ = try await nearControl(false)
+        defer { Task { _ = try? await nearControl(nil) } }
+        let r = try m.start(["request", "--kind", "unseal", "--all", "--match", "--plan", "volume:safe:volume:vol-1"])
+        let w = try await waitForCard(engine, 1, r)
+        #expect(w.verdict.level == 3)
+        let n = try await r.number()
+        #expect(w.request.matchChoices().contains(n))
+        #expect(w.request.checkMatch(pick: n))
+        #expect(await vault.gate(reason: "x") == .passed)
+        #expect(await engine.confirmSensitive(w))
+        #expect(engine.local.plans.first { $0.requestId == w.id }?.state == "delayed")
+        #expect(engine.livePlan(w.machine.key)?.requestId == w.id)
+
+        // The computer cancels; the phone hears of it only from the relay's list.
+        let (cc, cout) = try m.run(["delayed", "cancel", w.id])
+        #expect(cc == 0, "\(cout)")
+        #expect(await engine.refreshDelayed())
+        let d = try #require(engine.local.delayed.first { $0.id == w.id })
+        #expect(d.state == "cancelled")
+        #expect(d.cancelledBy == w.machine.key)
+        #expect(engine.local.plans.first { $0.requestId == w.id }?.state == "cancelled")
+        #expect(engine.livePlan(w.machine.key) == nil)
+        #expect(engine.files.readSnapshot()?.plan(w.machine.key)?.requestId != w.id)
+        let (code, out) = await m.waitAsync(r)
+        #expect(code == 4, "\(out)")
+    }
+
     @Test func phoneActionWaitsForTheRelay() async throws {
         let (engine, _, _, _) = try await paired()
         let d = try #require(try await engine.startPhoneAction("words"))
@@ -222,6 +260,31 @@ struct EngineFlowTests {
         #expect(r.ok)
         #expect(engine.liveMachines.isEmpty)
         #expect(!engine.state.settings.relayBackup)
+    }
+
+    @Test func backupOffLeavesAnEmptyState() async throws {
+        let (engine, _, _, _) = try await paired()
+        #expect(await engine.upload())
+        // Another install wrote since: the clear uses the relay's revision, not this phone's.
+        let stored = try await engine.relay.getState()
+        let bumped = try await engine.relay.putState(rev: stored.rev, blob: stored.blob)
+        #expect(bumped > stored.rev)
+
+        #expect(await engine.setRelayBackup(false))
+        #expect(!engine.state.settings.relayBackup)
+        let after = try await engine.relay.getState()
+        #expect(after.rev == bumped + 1)
+        let blob = try #require(after.blob)
+        let remote = try #require(await engine.withRoot { try decodeState(bytes: stateOpen(root: $0, blob: blob)) })
+        #expect(remote.machines.isEmpty)
+        // Off: nothing is uploaded any more.
+        #expect(!(await engine.upload()))
+
+        #expect(await engine.setRelayBackup(true))
+        #expect(await engine.upload())
+        let on = try await engine.relay.getState()
+        let back = try #require(await engine.withRoot { try decodeState(bytes: stateOpen(root: $0, blob: on.blob!)) })
+        #expect(back.machines.count == 1)
     }
 
     @Test func unpairAndErase() async throws {
@@ -283,6 +346,53 @@ struct EngineUnitTests {
         #expect(engine.words.matches(pos[0], String(words[pos[0] - 1].prefix(4))))
         engine.words.release()
         #expect(!engine.words.hasSession)
+    }
+
+    @Test func cancelledDelayCancelsItsPlan() async throws {
+        let (engine, _, _) = try await makeEngine()
+        try await onboard(engine)
+        let now = UInt64(nowMs())
+        func plan(_ id: String, notBefore: UInt64, delayId: String?) -> PlanApprovalRecord {
+            PlanApprovalRecord(machine: "m1", requestId: id, planHash: "h-\(id)", items: [], keys: [], notBefore: notBefore,
+                               state: delayId == nil ? "approved" : "delayed", delayId: delayId, all: true)
+        }
+        await engine.applyLocal(.putPlan(plan: plan("old", notBefore: now - 60_000, delayId: nil)))
+        await engine.applyLocal(.putPlan(plan: plan("new", notBefore: now + 7_200_000, delayId: "new")))
+        await engine.applyLocal(.putDelayed(action: DelayedAction(
+            id: "new", what: "unseal_all", machine: "m1", releaseAt: now + 7_200_000, expires: now + 8_100_000,
+            state: "waiting", cancelledBy: nil)))
+        #expect(engine.livePlan("m1")?.requestId == "new")
+
+        // Cancelled from a computer: only the delayed record changes, as a refresh records it.
+        var d = try #require(engine.local.delayed.first { $0.id == "new" })
+        d.state = "cancelled"
+        d.cancelledBy = "machine-b"
+        await engine.applyLocal(.putDelayed(action: d))
+        #expect(engine.livePlan("m1")?.requestId == "old")
+        await engine.cancelPlansOfCancelledDelays()
+        #expect(engine.local.plans.first { $0.requestId == "new" }?.state == "cancelled")
+        #expect(engine.livePlan("m1")?.requestId == "old")
+        #expect(engine.files.readSnapshot()?.plan("m1")?.requestId == "old")
+    }
+
+    @Test func negativeLastSeenIsClamped() {
+        let seen = AppEngine.seen(RelayMachine(machine: "m1", name: "n", os: nil, model: nil, pairedAt: 0, lastSeen: -1))
+        #expect(seen.lastSeen == 0)
+    }
+
+    @Test func unknownPlaceStateIsNotAnExit() async throws {
+        let (engine, _, notifier) = try await makeEngine()
+        engine.currentPlace = "p1"
+        await engine.onPlaceTransition(["p1"], entered: nil)
+        #expect(engine.currentPlace == nil)
+        #expect(notifier.posted.isEmpty)
+    }
+
+    @Test func removedPlaceStopsCounting() async throws {
+        let (engine, _, _) = try await makeEngine()
+        engine.currentPlace = "gone"
+        await engine.refreshState()
+        #expect(engine.currentPlace == nil)
     }
 
     @Test func pairingCodeErrors() async throws {

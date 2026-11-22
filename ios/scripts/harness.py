@@ -25,6 +25,7 @@ Run: FAKE_MACHINE_BIN=... [SEALCTL_BIN=...] SEALCTL_RELAY=... SIM_UDID=... harne
 """
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -41,18 +42,37 @@ LOCK = threading.Lock()
 NEXT = [0]
 
 
+# harness.log is a CI artifact anyone can download. A line that could hold recovery words
+# (12 or more lowercase words of 3 to 8 letters, whatever separates or numbers them) or that
+# mentions a passphrase, password or words is never written. Fails closed: long prose goes too.
+WORDS = re.compile(r"(?<![A-Za-z])[a-z]{3,8}(?![A-Za-z])")
+SECRETISH = re.compile(r"pass(?:phrase|word)|mnemonic|recover|\bwords?\b|seed", re.IGNORECASE)
+
+
+def safe(line):
+    if len(WORDS.findall(line)) >= 12 or SECRETISH.search(line):
+        return "[line withheld: may hold words or a passphrase]"
+    return line
+
+
 def log(line):
     """One stderr line stamped with UTC time to the millisecond, to line up with the xcresult."""
+    line = safe(line)
     t = time.time()
     stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)) + ".%03dZ" % (int(t * 1000) % 1000)
     sys.stderr.write(f"{stamp} {line}\n")
     sys.stderr.flush()
 
 
+# Commands whose output is the secret itself: only their exit code is logged.
+QUIET = {"recover", "show", "--to", "export", "get", "words"}
+
+
 class Job:
     def __init__(self, jid, argv, env, stdin, cwd=None, tty=False):
         self.jid = jid
         self.tty = tty
+        self.quiet = any(a in QUIET for a in argv)
         self.out = []
         self.code = None
         self.proc = subprocess.Popen(argv, env=env, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -78,10 +98,10 @@ class Job:
         for line in self.proc.stdout:
             with LOCK:
                 self.out.append(line)
-            # Test machines in temporary homes: their output holds test values only.
-            log(f"job {self.jid}: {line.rstrip()[:200]}")
+            if not self.quiet:
+                log(f"job {self.jid}: {line.rstrip()[:200]}")
         self.code = self.proc.wait()
-        log(f"job {self.jid} exited with {self.code}")
+        log(f"job {self.jid} exited with {self.code}" + (f" ({len(self.out)} lines not logged)" if self.quiet else ""))
 
     def state(self):
         with LOCK:

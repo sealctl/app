@@ -55,10 +55,15 @@ extension View {
     func secureScreen() -> some View { modifier(SecureScreen()) }
 }
 
-/// Hosts SwiftUI content inside a secure text field's canvas.
+/// Hosts SwiftUI content inside a secure text field's canvas. `interactive: false` leaves
+/// touches and accessibility to the SwiftUI view around it (a typed word inside a button).
 struct SecureLayer<Content: View>: UIViewRepresentable {
     let content: Content
-    init(@ViewBuilder _ content: () -> Content) { self.content = content() }
+    var interactive = true
+    init(interactive: Bool = true, @ViewBuilder _ content: () -> Content) {
+        self.interactive = interactive
+        self.content = content()
+    }
 
     func makeUIView(context: Context) -> UIView {
         let host = UIHostingController(rootView: content)
@@ -70,7 +75,8 @@ struct SecureLayer<Content: View>: UIViewRepresentable {
         field.isUserInteractionEnabled = false
         let canvas = field.subviews.first ?? UIView()
         canvas.subviews.forEach { $0.removeFromSuperview() }
-        canvas.isUserInteractionEnabled = true
+        canvas.isUserInteractionEnabled = interactive
+        host.view.accessibilityElementsHidden = !interactive
         canvas.translatesAutoresizingMaskIntoConstraints = false
         canvas.addSubview(host.view)
         NSLayoutConstraint.activate([
@@ -146,7 +152,8 @@ struct WordKeypad: View {
             }
             HStack(spacing: 8) {
                 key("delete", enabled: !prefix.isEmpty) { onChange(String(prefix.dropLast())) }
-                key(entry.exact ? "✓ \(prefix)" : "✓", enabled: entry.exact || entry.completed != nil, id: "key done") {
+                key(entry.exact ? "✓ \(prefix)" : "✓", enabled: entry.exact || entry.completed != nil, id: "key done",
+                    secret: entry.exact ? prefix : nil) {
                     onWord(entry.exact ? prefix : entry.completed ?? prefix)
                 }
             }
@@ -163,18 +170,49 @@ struct WordKeypad: View {
         }
     }
 
-    private func key(_ label: String, enabled: Bool, id: String? = nil, action: @escaping () -> Void) -> some View {
+    /// `secret`: a typed word on the key, drawn in the secure layer after "✓".
+    private func key(_ label: String, enabled: Bool, id: String? = nil, secret: String? = nil,
+                     action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(verbatim: label).font(Fonts.mono(.title3, weight: .medium))
-                .foregroundStyle(enabled ? Palette.ink : Palette.muted.opacity(0.4))
-                .frame(maxWidth: .infinity, minHeight: 44)
-                .background(enabled ? Palette.surface : Palette.surface2, in: RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Palette.border, lineWidth: 1))
+            HStack(spacing: 6) {
+                Text(verbatim: secret == nil ? label : "✓").font(Fonts.mono(.title3, weight: .medium))
+                if let secret { SecureWord(text: secret, font: Fonts.mono(.title3, weight: .medium)) }
+            }
+            .foregroundStyle(enabled ? Palette.ink : Palette.muted.opacity(0.4))
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .background(enabled ? Palette.surface : Palette.surface2, in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Palette.border, lineWidth: 1))
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
         .accessibilityLabel("key \(label)")
         .accessibilityIdentifier(id ?? "key \(label)")
+    }
+}
+
+/// A typed word (11.21): drawn in the secure layer, left out of screenshots and recordings,
+/// and replaced while the screen is recorded or mirrored. Touches and accessibility belong to
+/// the view around it.
+struct SecureWord: View {
+    let text: String
+    let font: Font
+    @SwiftUI.State private var captured = UIScreen.main.isCaptured
+
+    var body: some View {
+        Group {
+            if captured {
+                Text("Hidden").font(.subheadline).foregroundStyle(Palette.muted)
+            } else {
+                SecureLayer(interactive: false) {
+                    Text(verbatim: text).font(font).foregroundStyle(Palette.ink).lineLimit(1).fixedSize()
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIScreen.capturedDidChangeNotification)) { _ in
+            captured = UIScreen.main.isCaptured
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 
@@ -190,7 +228,11 @@ struct WordField: View {
         Button(action: action) {
             HStack {
                 Text(verbatim: "\(number)").font(Fonts.mono(.subheadline)).foregroundStyle(Palette.muted).frame(width: 32, alignment: .leading)
-                Text(verbatim: value.isEmpty ? "____" : value).font(Fonts.mono(.title3, weight: .medium)).foregroundStyle(Palette.ink)
+                if value.isEmpty {
+                    Text(verbatim: "____").font(Fonts.mono(.title3, weight: .medium)).foregroundStyle(Palette.ink)
+                } else {
+                    SecureWord(text: value, font: Fonts.mono(.title3, weight: .medium))
+                }
                 Spacer()
             }
             .padding(.horizontal, 12)

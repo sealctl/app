@@ -159,6 +159,9 @@ public final class AppEngine {
             writeSnapshot()
             return
         }
+        // No keys: a fresh install. Keys found on a later launch without this mark survived a
+        // reinstall (7.4).
+        UserDefaults.standard.set(true, forKey: Self.installedKey)
         if let item = await vault.readSyncBackup(), let decoded = try? backupItemDecode(bytes: item) {
             phase = .backupFound(fingerprint: decoded.fingerprint, created: Int64(decoded.created))
         } else {

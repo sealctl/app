@@ -293,6 +293,8 @@ class Engine(
     /** Lists pending requests and handles each (after a push, on foreground, on reconnect). */
     suspend fun catchUp(fromPush: Boolean = false) {
         if (phoneKeys() == null) return
+        // A request seen after this was asked for may be newer than the list.
+        val asked = System.currentTimeMillis()
         val list = try {
             relay.requests().also { relayOk() }
         } catch (e: Exception) {
@@ -303,7 +305,7 @@ class Engine(
         val ids = list.map { it.id }.toSet()
         val now = System.currentTimeMillis()
         waiting.value = waiting.value.map {
-            if (it.relay.id !in ids && !it.expired && (it.relay.expires < now || it.seenAt < now - 2_000)) {
+            if (it.relay.id !in ids && !it.expired && (it.relay.expires < now || it.seenAt < asked)) {
                 Notify.cancel(context, it.relay.id)
                 it.copy(expired = true)
             } else it

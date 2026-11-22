@@ -44,6 +44,9 @@ final class PairingTests: SealctlTestCase {
         let link = job.find("LINK (\\S+)")!
         // Universal links need a signed build; the app also claims sealctl:// for the same payload.
         Harness.openURL(link.replacingOccurrences(of: "https://sealctl.com/p", with: "sealctl://p"))
+        // iOS may ask before another app's link opens sealctl.
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        if springboard.buttons["Open"].waitForExistence(timeout: 5) { springboard.buttons["Open"].tap() }
         see("Scan the code with sealctl. On a computer without a terminal, open the link in its browser to see the code.", 20)
         typePairingCode(link)
         confirmPairing("ci@build.example.com")

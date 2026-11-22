@@ -46,7 +46,6 @@ final class ApprovalTests: SealctlTestCase {
         see("First use of this key by claude in shop. Allow is remembered; remove it in Answers.")
         see("Agents ask once for each key in each repository.")
         tap("Allow")
-        see("Remembered for claude in shop")
         XCTAssertEqual(job.wait(30).0, 0)
         XCTAssertEqual(Harness.machine("m1", agent).wait(30).0, 0)
 

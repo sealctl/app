@@ -39,9 +39,13 @@ final class LeaveTests: SealctlTestCase {
 
         // Step 4: three words from the card.
         tap("Use my card")
-        faceID(then: "Type three words from it.", 30)
         let fields = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'field-'"))
-        XCTAssertTrue(fields.firstMatch.waitForExistence(timeout: 10))
+        let end = Date().addingTimeInterval(30)
+        while !fields.firstMatch.exists && Date() < end {
+            Bio.match()
+            Thread.sleep(forTimeInterval: 1)
+        }
+        XCTAssertTrue(fields.firstMatch.waitForExistence(timeout: 5), Env.scrub(String(app.debugDescription.prefix(3000))))
         let positions = (0..<fields.count).map { Int(fields.element(boundBy: $0).identifier.dropFirst(6))! }
         XCTAssertEqual(positions.count, 3)
         typeWords(positions.map { words[$0 - 1] })

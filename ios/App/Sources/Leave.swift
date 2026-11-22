@@ -208,6 +208,8 @@ private struct EachComputerView: View {
     let onSkip: (String) -> Void
     let onBack: () -> Void
     @SwiftUI.State private var skipping: String?
+    /// [Skip a computer] lists the machines still waiting (11.22).
+    @SwiftUI.State private var choosing = false
 
     var body: some View {
         let e = model.engine!
@@ -244,6 +246,13 @@ private struct EachComputerView: View {
                 .accessibilityElement(children: .combine)
             }
             if rows.isEmpty { MutedText("No computers are paired.") }
+            if choosing && skipping == nil {
+                BodyText("Which computer?")
+                ForEach(rows.filter { !$0.2 }, id: \.0.key) { m, _, _ in
+                    TextButton(m.name) { skipping = m.key; choosing = false }
+                }
+                TextButton("Cancel") { choosing = false }
+            }
             if let s = skipping {
                 BodyText("Skip \(e.state.machines.first { $0.key == s }?.name ?? "")? Use it when the computer is lost or already wiped. Anything it holds then opens only with your card.")
                 HStack(spacing: 20) {
@@ -253,7 +262,10 @@ private struct EachComputerView: View {
             }
         } bottom: {
             if rows.contains(where: { !$0.2 }) {
-                SecondaryButton("Skip a computer") { skipping = rows.first { !$0.2 }?.0.key }
+                SecondaryButton("Skip a computer") {
+                    let waiting = rows.filter { !$0.2 }
+                    if waiting.count == 1 { skipping = waiting[0].0.key } else { skipping = nil; choosing = true }
+                }
             }
             PrimaryButton("Continue", enabled: rows.allSatisfy(\.2), action: onContinue)
         }

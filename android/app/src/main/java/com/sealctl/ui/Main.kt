@@ -87,6 +87,7 @@ fun MainScreen(activity: MainActivity) {
             Route.Places -> PlacesScreen(activity)
             Route.Devices -> DevicesScreen()
             Route.About -> AboutScreen()
+            Route.Licences -> LicencesScreen()
             Route.ShowWords -> ShowWordsScreen(activity)
             Route.DeleteRelay -> DeleteRelayScreen(activity)
             Route.Erase -> EraseScreen(activity)

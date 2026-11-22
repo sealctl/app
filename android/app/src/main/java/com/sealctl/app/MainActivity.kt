@@ -19,13 +19,13 @@ import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
 import com.sealctl.designsystem.Sealctl
 import com.sealctl.designsystem.SealctlTheme
-import com.sealctl.notify.Notify
 import com.sealctl.ui.MainScreen
 import com.sealctl.ui.NeedsScreenLockScreen
 import com.sealctl.ui.OnboardingFlow
 import com.sealctl.ui.WordsLostScreen
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.launch
 
 /** Screens pushed over the tabs. */
@@ -60,6 +60,10 @@ object Ui {
     /** A line above Welcome after leaving. */
     val goodbye = MutableStateFlow(false)
 
+    /** What a notification tap asks to show; set only by [OpenActivity], which is not exported. */
+    data class Open(val requestId: String?, val screen: String?)
+    val opening = MutableStateFlow<Open?>(null)
+
     fun push(r: Route) { stack.add(r) }
     fun pop() { if (stack.isNotEmpty()) stack.removeAt(stack.lastIndex) }
     fun reset() = stack.clear()
@@ -86,9 +90,14 @@ class MainActivity : FragmentActivity() {
         handle(intent)
     }
 
+    /**
+     * This activity is exported (the launcher, the pairing link), so its extras can come from
+     * any app and are never read (SPEC.md 10.2). A notification tap arrives through
+     * [OpenActivity], which leaves what to show in [Ui.opening]; a link only opens the scanner.
+     */
     private fun handle(intent: Intent?) {
-        intent ?: return
-        intent.getStringExtra(Notify.EXTRA_REQUEST)?.let { id ->
+        val open = Ui.opening.getAndUpdate { null }
+        open?.requestId?.let { id ->
             Ui.focusRequest.value = id
             lifecycleScope.launch {
                 val e = Graph.engine
@@ -97,13 +106,14 @@ class MainActivity : FragmentActivity() {
                 if (w != null && w.verdict.asking == com.sealctl.core.app.Asking.IN_APP) Ui.push(Route.Sensitive(id))
             }
         }
-        intent.getStringExtra(Notify.EXTRA_SCREEN)?.let { s ->
+        open?.screen?.let { s ->
             when {
                 s.startsWith("report:") -> Ui.push(Route.Report(s.removePrefix("report:")))
                 s.startsWith("delayed:") -> Ui.push(Route.Delayed(s.removePrefix("delayed:")))
             }
         }
-        if (intent.action == Intent.ACTION_VIEW && intent.data?.host == "sealctl.com") {
+        val link = intent?.takeIf { it.action == Intent.ACTION_VIEW }?.data
+        if (link != null && link.scheme == "https" && link.host == "sealctl.com" && link.path == "/p") {
             // A link opened outside the app leads to the scanner (SPEC.md 11.5).
             Ui.push(Route.Pair(code = null, fromLink = true))
         }

@@ -195,7 +195,7 @@ private fun MachineRow(v: MachineView) {
             StateLabel(v.state, v.row)
         }
         val sub = listOfNotNull(
-            if (v.machine.nickname != null) v.machine.name else null,
+            if (v.machine.nickname != null) Texts.shown(v.machine.name, Texts.MAX_NAME) else null,
             v.machine.model,
             "seen ${Texts.ago(v.machine.lastSeen?.toLong())}",
         ).joinToString(" · ")
@@ -237,7 +237,8 @@ fun ActivityList(machine: String?) {
             "one_tap" -> "One tap"; "automatic" -> "Answered by itself"; "in_session" -> "In session"
             "once" -> "Allowed once"; "denied" -> "Denied"; "expired" -> "Expired"; "confirmed" -> "Confirmed"; else -> e.outcome
         }
-        val parts = listOfNotNull(Texts.time(e.time.toLong()), e.key.ifEmpty { null }, e.agent, e.repo, e.command, name, outcome)
+        val parts = listOfNotNull(Texts.time(e.time.toLong()), e.key.ifEmpty { null }, e.agent, e.repo, e.command)
+            .map { Texts.shown(it, Texts.MAX_LINE) } + listOf(name, outcome)
         Mono(parts.joinToString(" · "), size = 13, color = Sealctl.colors.ink2)
     }
 }

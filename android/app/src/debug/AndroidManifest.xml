@@ -1,6 +1,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
-        <!-- Debug builds only: lets adb stand in for an FCM push. Release builds have no such entry. -->
-        <receiver android:name="com.sealctl.app.DebugPushReceiver" android:exported="true" />
+        <!--
+          Debug builds only: lets adb stand in for an FCM push. Release builds have no such entry.
+          Only senders holding android.permission.DUMP (signature|privileged|development) can reach
+          it: the adb shell holds it; an installed app never does unless someone grants it over adb
+          (SPEC.md 16.3).
+        -->
+        <receiver
+            android:name="com.sealctl.app.DebugPushReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP" />
     </application>
 </manifest>

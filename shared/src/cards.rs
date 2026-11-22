@@ -129,6 +129,58 @@ pub fn word_entry(prefix: String) -> WordEntry {
     }
 }
 
+/// Whether `c` changes how the text around it is laid out or read without showing itself:
+/// bidi embeddings, overrides, isolates and marks, invisible separators, and Unicode tags.
+fn is_hidden_format(c: char) -> bool {
+    matches!(c,
+        '\u{061C}'                  // Arabic letter mark
+        | '\u{00AD}'                // soft hyphen
+        | '\u{180E}'                // Mongolian vowel separator
+        | '\u{200B}'                // zero width space
+        | '\u{200E}' | '\u{200F}'   // left-to-right and right-to-left marks
+        | '\u{202A}'..='\u{202E}'   // embeddings and overrides
+        | '\u{2060}'..='\u{2064}'   // word joiner, invisible operators
+        | '\u{2066}'..='\u{2069}'   // isolates
+        | '\u{206A}'..='\u{206F}'   // deprecated format characters
+        | '\u{FEFF}'                // zero width no-break space
+        | '\u{FFF9}'..='\u{FFFB}'   // interlinear annotation
+        | '\u{E0000}'..='\u{E007F}' // tags
+    )
+}
+
+/// Makes a string that came from a machine safe to show on the approval card, the plan and in
+/// notifications (SPEC.md 11.7). Line breaks, tabs and other spacing controls become
+/// one space each; every other control character, bidi control and invisible format character
+/// becomes U+FFFD, so an attempt to reorder or hide text shows instead of working. With
+/// `max_chars` above zero, a longer result is cut in the middle with "…" to `max_chars`
+/// characters, keeping the start and the end (a path's file name stays visible). Zero keeps the
+/// whole text (the card shows it in full on tap).
+#[uniffi::export]
+pub fn display_text(text: String, max_chars: u32) -> String {
+    let clean: Vec<char> =
+        text.chars()
+            .map(|c| match c {
+                '\t' | '\n' | '\u{000B}' | '\u{000C}' | '\r' | '\u{0085}' | '\u{2028}'
+                | '\u{2029}' => ' ',
+                c if c.is_control() || is_hidden_format(c) => '\u{FFFD}',
+                c => c,
+            })
+            .collect();
+    let max = max_chars as usize;
+    if max == 0 || clean.len() <= max {
+        return clean.into_iter().collect();
+    }
+    if max == 1 {
+        return "…".to_string();
+    }
+    let head = (max - 1) / 2;
+    let tail = max - 1 - head;
+    let mut out: String = clean[..head].iter().collect();
+    out.push('…');
+    out.extend(&clean[clean.len() - tail..]);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,5 +246,79 @@ mod tests {
             word_entry("acti".into()).completed.as_deref(),
             Some("action")
         );
+    }
+
+    #[test]
+    fn display_text_neutralises_bidi_and_controls() {
+        // A right-to-left override that would show "invoice_exe.pdf" for "invoice_fdp.exe".
+        assert_eq!(
+            display_text("invoice_\u{202E}fdp.exe".into(), 0),
+            "invoice_\u{FFFD}fdp.exe"
+        );
+        for c in [
+            '\u{202A}',
+            '\u{202B}',
+            '\u{202C}',
+            '\u{202D}',
+            '\u{202E}',
+            '\u{2066}',
+            '\u{2067}',
+            '\u{2068}',
+            '\u{2069}',
+            '\u{200E}',
+            '\u{200F}',
+            '\u{061C}',
+            '\u{200B}',
+            '\u{FEFF}',
+            '\u{E0041}',
+            '\u{0000}',
+            '\u{0007}',
+            '\u{001B}',
+            '\u{007F}',
+            '\u{009B}',
+        ] {
+            assert_eq!(
+                display_text(format!("a{c}b"), 0),
+                "a\u{FFFD}b",
+                "{:X}",
+                c as u32
+            );
+        }
+        // Line breaks cannot push the real line out of view.
+        assert_eq!(
+            display_text("~/safe\n\n\r\n\u{2028}x\ty".into(), 0),
+            "~/safe     x y"
+        );
+        // Ordinary text, including other scripts, accents and emoji, is unchanged.
+        for s in [
+            "~/dev/shop",
+            "OPENAI_API_KEY",
+            "dev@mbp.example.com",
+            "שלום/مرحبا",
+            "café ☕ 👩‍💻",
+            "",
+        ] {
+            assert_eq!(display_text(s.into(), 0), s);
+        }
+    }
+
+    #[test]
+    fn display_text_cuts_in_the_middle() {
+        let long = "x".repeat(50) + &"y".repeat(50);
+        let c = display_text(long.clone(), 80);
+        assert_eq!(c.chars().count(), 80);
+        assert_eq!(c, "x".repeat(39) + "…" + &"y".repeat(40));
+        assert_eq!(display_text(long.clone(), 0), long);
+        assert_eq!(display_text("npm test".into(), 80), "npm test");
+        assert_eq!(display_text("abcdef".into(), 6), "abcdef");
+        assert_eq!(display_text("abcdefg".into(), 6), "ab…efg");
+        assert_eq!(display_text("abc".into(), 1), "…");
+        // Counted in characters, never cut inside one.
+        let wide = "😀".repeat(10);
+        assert_eq!(display_text(wide, 5), "😀😀…😀😀");
+        // Sanitised before cutting: the cut cannot reveal a raw control.
+        let c = display_text(format!("{}\u{202E}{}", "a".repeat(10), "b".repeat(10)), 9);
+        assert_eq!(c, "aaaa…bbbb");
+        assert!(!display_text("\u{202E}".repeat(100), 10).contains('\u{202E}'));
     }
 }

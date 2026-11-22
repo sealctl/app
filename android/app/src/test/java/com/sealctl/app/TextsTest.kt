@@ -36,15 +36,6 @@ class TextsTest {
     }
 
     @Test
-    fun commandsAreCutInTheMiddle() {
-        val long = "x".repeat(50) + "y".repeat(50)
-        val c = Texts.cut(long)
-        assertEquals(80, c.length)
-        assertTrue(c.startsWith("xxx") && c.endsWith("yyy") && c.contains("…"))
-        assertEquals("npm test", Texts.cut("npm test"))
-    }
-
-    @Test
     fun durationsAndErrors() {
         assertEquals("2 h 10 min", Texts.duration(7800))
         assertEquals("2 h", Texts.duration(7200))

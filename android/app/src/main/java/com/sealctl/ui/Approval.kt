@@ -1,5 +1,6 @@
 package com.sealctl.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -10,6 +11,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.ModalBottomSheetProperties
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -34,6 +36,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.SecureFlagPolicy
 import com.sealctl.app.Graph
 import com.sealctl.app.Texts
 import com.sealctl.app.Ui
@@ -57,7 +60,14 @@ fun ApprovalSheet(list: List<Waiting>) {
     val focus by Ui.focusRequest.collectAsState()
     val w = list.firstOrNull { it.relay.id == focus } ?: list.minBy { it.seenAt }
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(onDismissRequest = { /* stays until answered or closed */ }, sheetState = sheet, containerColor = Sealctl.colors.surface) {
+    // The card's own window: FLAG_SECURE whatever the activity has (SPEC.md 11.21).
+    SecureScreen()
+    ModalBottomSheet(
+        onDismissRequest = { /* stays until answered or closed */ },
+        sheetState = sheet,
+        containerColor = Sealctl.colors.surface,
+        properties = ModalBottomSheetProperties(securePolicy = SecureFlagPolicy.SecureOn),
+    ) {
         ApprovalCard(w, more = list.size - 1)
     }
 }
@@ -71,7 +81,11 @@ fun ApprovalCard(w: Waiting, more: Int) {
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(w.relay.id) { while (true) { now = System.currentTimeMillis(); delay(1000) } }
     val name = engine.displayName(w.machine)
-    val f = Texts.facts(w, name)
+    // Machine-controlled values are sanitised and cut; a tap on the title or facts shows them whole.
+    var whole by remember(w.relay.id) { mutableStateOf(false) }
+    val short = Texts.facts(w, name)
+    val full = Texts.facts(w, name, short = false)
+    val f = if (whole) full else short
     val local by engine.local.collectAsState()
     Column(
         Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).navigationBarsPadding(),
@@ -94,11 +108,14 @@ fun ApprovalCard(w: Waiting, more: Int) {
                 } else append(title)
             },
             fontSize = 24.sp, fontWeight = FontWeight.SemiBold, color = Sealctl.colors.ink,
-            modifier = Modifier.semantics { contentDescription = title },
+            modifier = Modifier.clickable(enabled = short != full) { whole = !whole }.semantics { contentDescription = title },
         )
-        f.command?.let { Fact("For", Texts.cut(it)) }
-        f.cwd?.let { Fact("In", it) }
-        Fact("From", listOfNotNull(name, f.agent).joinToString(" · "))
+        Column(Modifier.clickable(enabled = short != full) { whole = !whole }, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            f.command?.let { Fact("For", it) }
+            f.cwd?.let { Fact("In", it) }
+            Fact("From", listOfNotNull(name, f.agent).joinToString(" · "))
+            if (short != full) Muted(if (whole) "Tap to shorten." else "Cut to fit. Tap to show in full.")
+        }
         Texts.note(w)?.let { Muted(it) }
         if (w.verdict.agentFirstUse && !local.agentNoteShown) Muted(Texts.AGENT_NOTE)
         if (w.expired) {

@@ -640,6 +640,8 @@ The `answered` notification exists because Android may lower the priority of an 
 - `VISIBILITY_PRIVATE` with a public version "A machine is waiting for your phone.";
 - a `contentIntent` that opens the approval card.
 
+The `contentIntent` targets a small activity that is not exported: it hands the request or screen to the main activity in memory and finishes. The main activity is exported (the launcher and the pairing link), so it reads no extras; another app that starts it only opens the app, and a `VIEW` intent opens the scanner only for `https://sealctl.com/p`.
+
 Actions are the same as on iOS, with the same titles. On Android 12 and later each Allow action uses `setAuthenticationRequired(true)`, so a locked phone asks for its unlock first. On Android 9 to 11 the notification has no action buttons; tapping it opens the card, and the keyguard asks for the unlock before the activity shows (`setShowWhenLocked(false)`).
 
 **Action receiver.** `ApprovalActionReceiver` uses `goAsync()` and finishes within 9 seconds. If the reply is not done by then, it hands the reply to an expedited `WorkManager` job.
@@ -939,7 +941,9 @@ At Desk, this answers by itself.       (muted, only when the phone is inside a t
 | No single subject (session open with `sealctl open`) | "Open dev@mbp.example.com?" |
 | `keys` for a new object | "Allow volume clients?" (or the backup or key name) |
 
-**Facts:** "For" is the command, cut in the middle with an ellipsis after 80 characters (the full command on long press). "In" is the working directory with `~` for home. "From" is the machine's display name (nickname, or `user@host` and the tag when shown) and the agent: `claude`, `codex`, `gemini`, `qwen`, `copilot`, `cursor`, or nothing when a person typed the command. Facts the request lacks are left out.
+**Facts:** "For" is the command, cut in the middle with an ellipsis after 80 characters (the full command on tap). "In" is the working directory with `~` for home. "From" is the machine's display name (nickname, or `user@host` and the tag when shown) and the agent: `claude`, `codex`, `gemini`, `qwen`, `copilot`, `cursor`, or nothing when a person typed the command. Facts the request lacks are left out.
+
+**Text from the machine.** Every string the machine controls (subject, names, agent, command, working directory, repository, object paths, plan items, report lines, the machine's name) passes `display_text` in the shared core before it is shown on the card, the plan, a report or a notification: line breaks and tabs become spaces; other control characters, bidi embeddings, overrides, isolates and marks (U+202A to U+202E, U+2066 to U+2069, U+200E, U+200F, U+061C) and invisible format characters become U+FFFD, so an attempt to reorder or hide text shows instead of working. The subject, names and repository are cut in the middle after 60 characters, the agent after 40, the command, working directory and paths after 80, the machine's name after 64 (its tag always shows). A tap on the title or the facts shows the values in full, still sanitised.
 
 **By kind:**
 
@@ -1309,6 +1313,7 @@ Applies to onboarding step 5, Show words, and every typed-words screen.
 - iOS: when the scene becomes inactive, a full cover with the mark hides the app switcher snapshot.
 - iOS: after `userDidTakeScreenshotNotification`, show "The screenshot doesn't show your words."
 - Android: `FLAG_SECURE` on the activity while any of these screens is shown; `setRecentsScreenshotEnabled(false)` on Android 13+.
+- Android: the same while the approval card (11.7, whose sheet window also sets `SecureFlagPolicy.SecureOn`) or the level 2 and 3 screens (11.23: the number match and the plan) are shown, so the match number and the names and paths being approved stay out of screenshots and recents.
 - No copy, share, look-up or text selection on the words. Accessibility can read them (12).
 - The words view clears from memory when the screen closes; the `Words` object is released.
 
@@ -1682,7 +1687,7 @@ New personal developer accounts must run a closed test with at least 12 testers 
 - It adds test-only routes under `/test/` (unsigned, bound to localhost): set `near`, force an error code on the next call, advance the clock, read what the phone replied.
 - `tools/fake-machine`: Rust, using `sealctl-core`. It prints a pairing QR code, waits for pairing, sends any request kind with given context, checks replies decrypt to the expected derived keys, and reports status and uses.
 - `fake-machine --review` is the review machine (15.2): against the production relay, it serves a fresh pairing code as an image on one page, and once paired sends an `open` request every minute, using made-up key names (`DEMO_API_KEY`) and no real secrets. Operations runs it during reviews.
-- Push in tests: iOS simulator gets the alert payload with `xcrun simctl push`, which runs the NSE. Android tests call the messaging service's handler directly through a debug-only entry point.
+- Push in tests: iOS simulator gets the alert payload with `xcrun simctl push`, which runs the NSE. Android tests call the messaging service's handler directly through a debug-only entry point: a receiver guarded by `android.permission.DUMP`, which the adb shell holds and installed apps do not.
 - The same fake relay serves screenshots for the store listings.
 
 ### 16.4 UI tests

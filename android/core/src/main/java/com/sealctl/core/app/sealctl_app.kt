@@ -706,6 +706,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_sealctl_app_checksum_func_card_word_matches(
     ): Int
+    external fun uniffi_sealctl_app_checksum_func_display_text(
+    ): Int
     external fun uniffi_sealctl_app_checksum_func_random_id(
     ): Int
     external fun uniffi_sealctl_app_checksum_func_word_entry(
@@ -837,6 +839,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_card_word_matches(`words`: Long,`position`: Int,`typed`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_sealctl_app_fn_func_display_text(`text`: RustBuffer.ByValue,`maxChars`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_random_id(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_word_entry(`prefix`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -996,6 +1000,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_func_card_word_matches() and 0xFFFF) != 37446) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_sealctl_app_checksum_func_display_text() and 0xFFFF) != 5202) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_func_random_id() and 0xFFFF) != 2785) {
@@ -7029,6 +7036,27 @@ public object FfiConverterSequenceTypeReplyOption: FfiConverterRustBuffer<List<R
         FfiConverterTypeWords.lower(`words`),
         FfiConverterUInt.lower(`position`),
         FfiConverterString.lower(`typed`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Makes a string that came from a machine safe to show on the approval card, the plan and in
+         * notifications (SPEC.md 11.7). Line breaks, tabs and other spacing controls become
+         * one space each; every other control character, bidi control and invisible format character
+         * becomes U+FFFD, so an attempt to reorder or hide text shows instead of working. With
+         * `max_chars` above zero, a longer result is cut in the middle with "…" to `max_chars`
+         * characters, keeping the start and the end (a path's file name stays visible). Zero keeps the
+         * whole text (the card shows it in full on tap).
+         */ fun `displayText`(`text`: kotlin.String, `maxChars`: kotlin.UInt): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_func_display_text(
+    
+        
+        FfiConverterString.lower(`text`),
+        FfiConverterUInt.lower(`maxChars`),_status)
 }
     )
     }

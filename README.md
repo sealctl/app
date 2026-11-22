@@ -1,8 +1,7 @@
 # sealctl app
 
 The sealctl phone app: it holds the root made from your 24 words and approves your computers'
-requests for keys. API keys, SSH and git signing keys, encrypted volumes and backups, opened only
-when your phone approves. One tap per use; your AI agents never see the key. This repository has the iPhone app (Swift, SwiftUI), the Android app (Kotlin,
+requests for keys. API keys, SSH and git signing keys, encrypted volumes and backups, unlocked from your phone: once per work session or on every use. Your AI agents never see the key. This repository has the iPhone app (Swift, SwiftUI), the Android app (Kotlin,
 Jetpack Compose) and the Rust crate both apps share. [`SPEC.md`](SPEC.md) is the build spec.
 
 To install the app on your phone, see [sealctl.com/docs#install](https://sealctl.com/docs#install).

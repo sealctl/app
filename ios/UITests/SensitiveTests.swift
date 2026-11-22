@@ -113,7 +113,8 @@ final class SensitiveTests: SealctlTestCase {
         tap("Confirm with Face ID")
         faceID(then: "Starts at")
         let id = job.find("DELAYED id=(\\S+)")!
-        XCTAssertEqual(Harness.machine("m1", ["delayed", "cancel", id]).wait(30).0, 0)
+        // `--`: a delayed id may start with "-", which would read as a flag.
+        XCTAssertEqual(Harness.machine("m1", ["delayed", "cancel", "--", id]).wait(30).0, 0)
         see("Cancelled from dev@mbp.example.com.", 40)
         XCTAssertEqual(job.wait(30).0, 4)
     }

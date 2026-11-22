@@ -25,6 +25,37 @@ use sealctl_core::CoreError;
 use serde_json::{json, Map, Value};
 use tokio::sync::mpsc;
 
+/// A log line on stderr, stamped with UTC time to the millisecond, so a CI log lines up with
+/// the UI tests' xcresult timeline. Ids and paths only: never a sealed body.
+fn log(line: &str) {
+    let ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
+    eprintln!("{} {line}", stamp(ms));
+}
+
+/// `2026-01-02T03:04:05.678Z` for milliseconds since the epoch.
+fn stamp(ms: u64) -> String {
+    let (secs, milli) = (ms / 1000, ms % 1000);
+    let (days, rem) = ((secs / 86_400) as i64, secs % 86_400);
+    // Days to a civil date (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{milli:03}Z",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
+}
+
 const MAX_SEALED: usize = 4096;
 const MAX_TTL: u64 = 300;
 const MAX_PENDING: usize = 32;
@@ -294,12 +325,30 @@ pub async fn spawn(addr: &str) -> std::io::Result<SocketAddr> {
 /// Serves on `addr` until the process ends.
 pub async fn serve(addr: &str) -> std::io::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    eprintln!("fake-relay listening on http://{}", listener.local_addr()?);
+    log(&format!(
+        "fake-relay listening on http://{}",
+        listener.local_addr()?
+    ));
     axum::serve(
         listener,
-        app().into_make_service_with_connect_info::<SocketAddr>(),
+        app()
+            .layer(axum::middleware::from_fn(log_request))
+            .into_make_service_with_connect_info::<SocketAddr>(),
     )
     .await
+}
+
+/// One line per HTTP request (method, path without the query, status, time taken).
+async fn log_request(req: Request<Body>, next: axum::middleware::Next) -> Response {
+    let (method, path) = (req.method().clone(), req.uri().path().to_owned());
+    let start = std::time::Instant::now();
+    let res = next.run(req).await;
+    log(&format!(
+        "{method} {path} {} {}ms",
+        res.status().as_u16(),
+        start.elapsed().as_millis()
+    ));
+    res
 }
 
 enum Route {
@@ -861,6 +910,7 @@ fn dispatch(
                 .find(|(_, w)| w.pending.as_ref().is_some_and(|pd| pd.id == id))
                 .map(|(c, _)| *c)
             else {
+                log(&format!("reply {id}: no machine waiting (gone)"));
                 return fail(404, "gone");
             };
             if delay.is_some() {
@@ -889,6 +939,7 @@ fn dispatch(
                         Some(&json!({"type": "reply", "id": id, "sealed": sealed})),
                         1000,
                     );
+                    log(&format!("reply {id} delivered to the waiting machine"));
                     ok(json!({"delivered": true}))
                 }
                 Some(d) => {
@@ -900,6 +951,9 @@ fn dispatch(
                         1000,
                     );
                     r.push_all(phone, "delayed", &id, release_at);
+                    log(&format!(
+                        "reply {id} delivered as delayed until {release_at}"
+                    ));
                     ok(json!({"delivered": true, "releaseAt": release_at}))
                 }
             }
@@ -1432,6 +1486,10 @@ fn on_wait_message(shared: &Shared, phone: &str, conn: u64, tx: &Tx, text: &str)
         expires,
     });
     send(tx, &json!({"type": "queued", "id": id, "expires": expires}));
+    log(&format!(
+        "request {id} queued, sent to {} phone socket(s)",
+        p.sockets.len()
+    ));
     for s in p.sockets.values() {
         let near = near_override.unwrap_or(s.ip == wait_ip);
         send(
@@ -1515,5 +1573,15 @@ async fn test_route(shared: Shared, req: Request<Body>) -> Response {
             ok(json!({"ok": true}))
         }
         _ => fail(404, "not_found"),
+    }
+}
+
+#[cfg(test)]
+mod stamp_tests {
+    #[test]
+    fn stamps_utc_to_the_millisecond() {
+        assert_eq!(super::stamp(0), "1970-01-01T00:00:00.000Z");
+        assert_eq!(super::stamp(951_782_400_001), "2000-02-29T00:00:00.001Z");
+        assert_eq!(super::stamp(1_795_376_811_496), "2026-11-22T19:46:51.496Z");
     }
 }

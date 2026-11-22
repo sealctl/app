@@ -31,6 +31,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # Short paths: the CLI's daemon keeps unix sockets under HOME (104-byte limit).
@@ -40,8 +41,17 @@ LOCK = threading.Lock()
 NEXT = [0]
 
 
+def log(line):
+    """One stderr line stamped with UTC time to the millisecond, to line up with the xcresult."""
+    t = time.time()
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)) + ".%03dZ" % (int(t * 1000) % 1000)
+    sys.stderr.write(f"{stamp} {line}\n")
+    sys.stderr.flush()
+
+
 class Job:
-    def __init__(self, argv, env, stdin, cwd=None, tty=False):
+    def __init__(self, jid, argv, env, stdin, cwd=None, tty=False):
+        self.jid = jid
         self.tty = tty
         self.out = []
         self.code = None
@@ -68,7 +78,10 @@ class Job:
         for line in self.proc.stdout:
             with LOCK:
                 self.out.append(line)
+            # Test machines in temporary homes: their output holds test values only.
+            log(f"job {self.jid}: {line.rstrip()[:200]}")
         self.code = self.proc.wait()
+        log(f"job {self.jid} exited with {self.code}")
 
     def state(self):
         with LOCK:
@@ -132,7 +145,8 @@ def start(spec):
     with LOCK:
         NEXT[0] += 1
         jid = str(NEXT[0])
-    JOBS[jid] = Job(argv, env, spec.get("stdin"), spec.get("cwd"), bool(spec.get("tty")))
+    log(f"job {jid} started: {spec.get('cmd')} {spec.get('home', '')} {' '.join(args[:3])}")
+    JOBS[jid] = Job(jid, argv, env, spec.get("stdin"), spec.get("cwd"), bool(spec.get("tty")))
     return jid
 
 
@@ -165,7 +179,10 @@ class Handler(BaseHTTPRequestHandler):
         return (self.headers.get("Host") or "").rsplit(":", 1)[0] in ("127.0.0.1", "localhost")
 
     def log_message(self, fmt, *args):
-        sys.stderr.write("harness: " + (fmt % args) + "\n")
+        # The tests poll /job/<id> every half second: job lines above say what happened.
+        if self.command == "GET" and self.path.startswith("/job/"):
+            return
+        log("harness: " + (fmt % args))
 
     def do_GET(self):
         if not self._from_test():
@@ -211,7 +228,7 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8790
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    print(f"harness on 127.0.0.1:{port}, homes in {ROOT}", flush=True)
+    log(f"harness on 127.0.0.1:{port}, homes in {ROOT}")
     # `pkill` (CI) sends SIGTERM: leave through the cleanup below.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     try:

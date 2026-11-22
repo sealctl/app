@@ -172,7 +172,7 @@ public struct TextButton: View {
     public init(_ title: String, action: @escaping () -> Void) { self.title = title; self.action = action }
     public var body: some View {
         Button(action: action) {
-            Text(title).font(.body).foregroundStyle(Palette.accent)
+            Text(title).foregroundStyle(Palette.accent)
                 .padding(.horizontal, 8)
                 .frame(minWidth: 44, minHeight: 44)
                 .contentShape(Rectangle())

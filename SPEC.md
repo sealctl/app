@@ -1480,7 +1480,7 @@ The screens for levels 2 and 3 (9.6). They are full-screen, never a sheet, and n
 - Every screen works with VoiceOver and TalkBack. The approval card reads in this order: state, title, facts, buttons. The machine state reads as words: "Open, 2 hours 10 minutes left."
 - Notification actions are reachable by VoiceOver and TalkBack.
 - Dynamic Type up to the largest accessibility size; Android font scale up to 200%. The approval card scrolls while its buttons stay pinned at the bottom.
-- Touch targets at least 44 points (iOS) and 48 dp (Android). The word keypad keys are at least that size.
+- Touch targets at least 44 points (iOS) and 48 dp (Android), text links and inline buttons (Remove, Cancel, Show) included: they keep their look and grow their hit area. The word keypad keys are at least that size.
 - Contrast: the brand tokens pass WCAG AA for text and buttons in both themes; status colours are paired with words.
 - Reduce Motion stops the Waiting pulse. No other animation carries meaning.
 - The words screen reads "Word 7: ocean". A rotor action (iOS) or custom action (Android) spells the word letter by letter.

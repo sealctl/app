@@ -203,10 +203,11 @@ jobs:
         with:
           name: ios-results
           retention-days: 7
-          # Never the staging run's results: they would name the private staging relay.
+          # No raw .xcresult bundles: they hold every failure screenshot and UI tree, words
+          # screens included (the workspace rule: a test phone's words are never in a file or
+          # screenshot). Failed UI tests' attachments come filtered in ui-failures. Never the
+          # staging run's results either: they would name the private staging relay.
           path: |
-            ${{ runner.temp }}/unit.xcresult
-            ${{ runner.temp }}/ui.xcresult
             ${{ runner.temp }}/ui-failures
             ${{ runner.temp }}/fake-relay.log
             ${{ runner.temp }}/harness.log

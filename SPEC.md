@@ -1687,7 +1687,7 @@ New personal developer accounts must run a closed test with at least 12 testers 
 - It adds test-only routes under `/test/` (unsigned, bound to localhost): set `near`, force an error code on the next call, advance the clock, read what the phone replied.
 - `tools/fake-machine`: Rust, using `sealctl-core`. It prints a pairing QR code, waits for pairing, sends any request kind with given context, checks replies decrypt to the expected derived keys, and reports status and uses.
 - `fake-machine --review` is the review machine (15.2): against the production relay, it serves a fresh pairing code as an image on one page, and once paired sends an `open` request every minute, using made-up key names (`DEMO_API_KEY`) and no real secrets. Operations runs it during reviews.
-- Push in tests: iOS simulator gets the alert payload with `xcrun simctl push`, which runs the NSE. Android tests call the messaging service's handler directly through a debug-only entry point.
+- Push in tests: iOS simulator gets the alert payload with `xcrun simctl push`, which runs the NSE. Android tests call the messaging service's handler directly through a debug-only entry point: a receiver guarded by `android.permission.DUMP`, which the adb shell holds and installed apps do not.
 - The same fake relay serves screenshots for the store listings.
 
 ### 16.4 UI tests

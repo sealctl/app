@@ -178,6 +178,21 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/staging.xcresult" | grep -E "Test Case|error|failed|passed|skipped|\*\*" | tail -200
           pkill -f harness.py || true
 
+      - name: Attachments of failed UI tests
+        if: failure()
+        run: |
+          # The failed UI tests' attachments (the screenshot and UI tree XCTest takes at a
+          # failure) as plain files in ios-results, so a failure can be read without Xcode.
+          # Publishing them is fine: these runs use the fake relay and test phones only
+          # (words made on this throwaway simulator, or the public vector words), and the
+          # artifact is kept 7 days. Failed tests only, and never the staging run's results.
+          [ -d "$RUNNER_TEMP/ui.xcresult" ] || exit 0
+          mkdir -p "$RUNNER_TEMP/ui-failures"
+          xcrun xcresulttool export attachments --path "$RUNNER_TEMP/ui.xcresult" \
+            --output-path "$RUNNER_TEMP/ui-failures" --only-failures \
+            || echo "::warning::xcresulttool could not export the attachments"
+          ls "$RUNNER_TEMP/ui-failures" | head -40
+
       - name: Logs and results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -188,6 +203,7 @@ jobs:
           path: |
             ${{ runner.temp }}/unit.xcresult
             ${{ runner.temp }}/ui.xcresult
+            ${{ runner.temp }}/ui-failures
             ${{ runner.temp }}/fake-relay.log
             ${{ runner.temp }}/harness.log
             ${{ runner.temp }}/build-*.log

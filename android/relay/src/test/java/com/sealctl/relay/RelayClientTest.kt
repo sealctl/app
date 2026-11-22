@@ -11,6 +11,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -162,5 +163,18 @@ class RelayClientTest {
         client.deletePush("dev") // treated as done
         server.enqueue(json(404, """{"error":"not_paired"}"""))
         client.removeMachine("m") // treated as done
+    }
+
+    @Test
+    fun delayedRecordsSayWhoCancelled() = runTest {
+        // The relay puts `by` at the top level of a cancelled record (list and single record).
+        server.enqueue(json(200, """{"delayed":[
+            {"id":"d1","machine":"m","created":1,"releaseAt":2,"expires":3,"state":"cancelled","by":"mkey"},
+            {"id":"d2","machine":null,"created":1,"releaseAt":2,"expires":3,"state":"waiting"}]}"""))
+        val list = client.listDelayed()
+        assertEquals("mkey", list[0].by)
+        assertNull(list[1].by)
+        server.enqueue(json(200, """{"id":"d1","machine":"m","created":1,"releaseAt":2,"expires":3,"state":"cancelled","by":"phone"}"""))
+        assertEquals("phone", client.cancelledBy("d1"))
     }
 }

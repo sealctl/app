@@ -30,9 +30,9 @@ class BlockStore(context: Context) {
             .blockstoreDataMap[KEY]?.bytes
     }.getOrNull()
 
-    suspend fun delete() {
-        runCatching { client.deleteBytes(DeleteBytesRequest.Builder().setKeys(listOf(KEY)).build()).await() }
-    }
+    /** Returns whether the copy is gone. */
+    suspend fun delete(): Boolean =
+        runCatching { client.deleteBytes(DeleteBytesRequest.Builder().setKeys(listOf(KEY)).build()).await() }.isSuccess
 
     companion object {
         const val KEY = "com.sealctl.words.v1"

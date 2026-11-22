@@ -21,6 +21,8 @@ class SealctlApp : Application(), NotifyHost, PlacesHost {
         engine.scope.launch {
             engine.computePhase()
             engine.monitorPlaces()
+            // Debug builds only: the FCM token, so the bench can send a test push before pairing.
+            if (BuildConfig.DEBUG) Push.token()?.let { dlog("fcm token $it") }
         }
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {

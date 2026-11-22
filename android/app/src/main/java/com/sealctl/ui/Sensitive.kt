@@ -168,7 +168,9 @@ private fun PlanView(w: Waiting, name: String, level3: Boolean, error: String?, 
     val engine = Graph.engine
     val plan = w.plan
     val kind = engine.placeKind()
-    val place = engine.state.value.places.firstOrNull { it.id == engine.currentPlace.value }?.name
+    val st by engine.state.collectAsState()
+    val here by engine.currentPlace.collectAsState()
+    val place = st.places.firstOrNull { it.id == here }?.name
     Page(null, onBack = null, bottom = {
         ErrorText(error)
         PrimaryButton(Texts.CONFIRM, onConfirm)
@@ -315,12 +317,10 @@ fun CardWords(activity: FragmentActivity, positions: Int, groups: Int, title: St
     }) {
         Title(title)
         Body(body ?: "Have your card ready. Type ${if (positions == 2) "two" else "three"} words from it.")
-        key(tick) {
+        androidx.compose.runtime.key(tick) {
             pos.forEachIndexed { i, p -> WordField(p, typed[i], focus == i, false) { focus = i; prefix = typed[i].take(4) } }
         }
         Spacer(Modifier.height(4.dp))
     }
 }
 
-@Composable
-private fun key(@Suppress("UNUSED_PARAMETER") k: Int, content: @Composable () -> Unit) = androidx.compose.runtime.key(k) { content() }

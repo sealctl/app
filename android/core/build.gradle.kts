@@ -20,6 +20,7 @@ dependencies {
     // UniFFI bindings call the library through JNA (SPEC.md 5.3).
     api("net.java.dev.jna:jna:${libs.versions.jna.get()}@aar")
     api(libs.coroutines.android)
+    implementation("androidx.annotation:annotation:1.1.0")
 
     androidTestImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.runner)

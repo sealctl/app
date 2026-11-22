@@ -2,7 +2,9 @@
 [crates.sealctl_core.bindings.kotlin]
 package_name = "com.sealctl.core"
 cdylib_name = "sealctl_app"
+android = true
 
 [crates.sealctl_app.bindings.kotlin]
 package_name = "com.sealctl.core.app"
 cdylib_name = "sealctl_app"
+android = true

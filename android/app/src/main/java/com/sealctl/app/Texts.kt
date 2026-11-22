@@ -235,7 +235,7 @@ object Texts {
     fun time(ms: Long): String =
         DateTimeFormatter.ofPattern("HH:mm").format(Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()))
 
-    fun isoDate(ms: Long): String = LocalDate.ofInstant(Instant.ofEpochMilli(ms), ZoneId.systemDefault()).toString()
+    fun isoDate(ms: Long): String = Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()).toLocalDate().toString()
 
     fun mediumDate(ms: Long): String =
         DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).format(Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()))

@@ -155,8 +155,9 @@ private fun AboutWords(onNext: () -> Unit) {
 @Composable
 private fun BlankCard(onDone: () -> Unit) {
     val context = ctx()
+    val locale = androidx.compose.ui.platform.LocalConfiguration.current.locales[0]
     val letterRegions = setOf("US", "CA", "MX", "PH", "CL", "CO", "VE")
-    var letter by rememberSaveable { mutableStateOf(Locale.getDefault().country in letterRegions) }
+    var letter by rememberSaveable { mutableStateOf(locale.country in letterRegions) }
     Page(null, onBack = null, bottom = {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             SecondaryButton("Print", { CardPdf.print(context, letter) }, Modifier.weight(1f))

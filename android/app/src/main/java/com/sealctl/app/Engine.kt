@@ -284,11 +284,7 @@ class Engine(
             "status" -> scope.launch { refreshStatus() }
             "delayed" -> scope.launch { refreshDelayed() }
             "cancelled" -> scope.launch {
-                val id = o.str("id")
-                local.value.delayed.firstOrNull { it.id == id }?.let {
-                    applyLocal(LocalEvent.PutDelayed(it.copy(state = "cancelled", cancelledBy = o.strOrNull("by"))))
-                }
-                local.value.plans.firstOrNull { it.delayId == id }?.let { applyLocal(LocalEvent.PutPlan(it.copy(state = "cancelled"))) }
+                delayedCancelled(o.str("id"), o.strOrNull("by"))
                 refreshDelayed()
             }
         }
@@ -357,7 +353,7 @@ class Engine(
                 return@withLock
             }
         }
-        val verdict = decide(req, context(r, machine))
+        val verdict = decide(req, context(r, machine, req.plan()?.hash))
         when (verdict.asking) {
             Asking.SILENT -> silent(req, r)
             Asking.AUTOMATIC -> {
@@ -390,11 +386,11 @@ class Engine(
         }
     }
 
-    private fun context(r: RelayRequest, machine: Machine): DecideContext {
+    private fun context(r: RelayRequest, machine: Machine, planHash: String?): DecideContext {
         val l = local.value
         val s = state.value
         val unlocked = !vault.isDeviceLocked() && vault.canReadRoot()
-        val plan = l.plans.filter { it.machine == r.machine && it.state != "cancelled" }.maxByOrNull { it.notBefore }
+        val plan = Plans.forRequest(l.plans, l.delayed, r.machine, planHash)
         val status = machine.lastStatus
         val open = status?.session == "open" && status.left?.let { left ->
             (System.currentTimeMillis() - status.reportedAt.toLong()) / 1000 < left.toLong()
@@ -461,7 +457,9 @@ class Engine(
 
     private suspend fun planKeys(req: Request, r: RelayRequest) {
         val keys = phoneKeys() ?: return
-        val plan = local.value.plans.filter { it.machine == r.machine }.maxByOrNull { it.notBefore } ?: return
+        // The same plan decide() matched: live, with this request's hash.
+        val hash = req.plan()?.hash ?: return
+        val plan = Plans.forRequest(local.value.plans, local.value.delayed, r.machine, hash)?.takeIf { it.planHash == hash } ?: return
         val approval = PlanApproval(plan.machine, plan.planHash, plan.notBefore, plan.keys.map { com.sealctl.core.KeyRef(it.purpose, it.id) })
         val sealed = withRoot { root -> runCatching { sealPlanKeysReply(root, keys, req, approval) }.getOrNull() } ?: return
         if (post(r, sealed, null, userTapped = false)) {
@@ -690,10 +688,12 @@ class Engine(
                 applyLocal(LocalEvent.PutDelayed(DelayedAction(d.id, if (d.machine != null) "unseal_all" else "unknown", d.machine,
                     d.releaseAt.toULong(), d.expires.toULong(), d.state, null)))
             } else if (mine.state != d.state && mine.state != "cancelled") {
-                val by = if (d.state == "cancelled") runCatching { relay.cancelledBy(d.id) }.getOrNull() else null
-                applyLocal(LocalEvent.PutDelayed(mine.copy(state = d.state, cancelledBy = by)))
+                if (d.state == "cancelled") delayedCancelled(d.id, runCatching { relay.cancelledBy(d.id) }.getOrNull())
+                else applyLocal(LocalEvent.PutDelayed(mine.copy(state = d.state)))
             }
         }
+        // However the cancel arrived (socket, push, this list), its plan hands out no keys.
+        for (p in Plans.toCancel(local.value.plans, local.value.delayed)) applyLocal(LocalEvent.PutPlan(p.copy(state = "cancelled")))
         // Records the relay no longer has: fetched by the machine, finished or expired.
         val ids = list.map { it.id }.toSet()
         for (d in local.value.delayed) {
@@ -702,6 +702,22 @@ class Engine(
                 // only when this phone finishes it or it expires, so a missing one is gone.
                 applyLocal(LocalEvent.PutDelayed(d.copy(state = if (d.machine == null) "gone" else "released")))
             }
+        }
+        delayedTick.value = System.currentTimeMillis()
+    }
+
+    /**
+     * A delayed approval was cancelled elsewhere: record it, close its plan, and when a
+     * computer cancelled it, tell every machine (SPEC.md 11.23).
+     */
+    private suspend fun delayedCancelled(id: String, by: String?) {
+        val d = local.value.delayed.firstOrNull { it.id == id }
+        if (d != null && d.state != "cancelled") {
+            applyLocal(LocalEvent.PutDelayed(d.copy(state = "cancelled", cancelledBy = by)))
+            if (by != null && by != "phone") scope.launch { sendNotice(d.what, "cancelled", d.machine, id, d.releaseAt.toLong()) }
+        }
+        for (p in local.value.plans.filter { it.delayId == id && it.state != "cancelled" }) {
+            applyLocal(LocalEvent.PutPlan(p.copy(state = "cancelled")))
         }
         delayedTick.value = System.currentTimeMillis()
     }

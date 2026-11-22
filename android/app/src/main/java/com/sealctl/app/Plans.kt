@@ -1,0 +1,33 @@
+package com.sealctl.app
+
+import com.sealctl.core.app.DelayedAction
+import com.sealctl.core.app.PlanApprovalRecord
+
+/**
+ * Which approved plan answers a machine's later key requests (SPEC.md 9.6). A plan stops
+ * handing out keys once it, or the delayed record it waits on, is cancelled, however the
+ * phone learnt of the cancel (here, the socket, a push or the relay list).
+ */
+internal object Plans {
+    /** Plans of [machine] that may still hand out keys. */
+    fun live(plans: List<PlanApprovalRecord>, delayed: List<DelayedAction>, machine: String): List<PlanApprovalRecord> {
+        val cancelled = delayed.filter { it.state == "cancelled" }.map { it.id }.toSet()
+        return plans.filter { it.machine == machine && it.state != "cancelled" && it.delayId !in cancelled }
+    }
+
+    /**
+     * The plan a request of [machine] belongs to: the live plan with the request's hash, else
+     * the newest live one (decide() then compares the hash itself).
+     */
+    fun forRequest(plans: List<PlanApprovalRecord>, delayed: List<DelayedAction>, machine: String, hash: String?): PlanApprovalRecord? {
+        val live = live(plans, delayed, machine)
+        return live.filter { hash != null && it.planHash == hash }.maxByOrNull { it.notBefore }
+            ?: live.maxByOrNull { it.notBefore }
+    }
+
+    /** Plans still open whose delayed record is cancelled: these must be recorded as cancelled. */
+    fun toCancel(plans: List<PlanApprovalRecord>, delayed: List<DelayedAction>): List<PlanApprovalRecord> {
+        val cancelled = delayed.filter { it.state == "cancelled" }.map { it.id }.toSet()
+        return plans.filter { it.state != "cancelled" && it.delayId != null && it.delayId in cancelled }
+    }
+}

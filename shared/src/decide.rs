@@ -501,7 +501,7 @@ mod tests {
         assert_eq!(v.asking, Asking::Automatic);
         let v = decide_facts(&with_use(facts(RequestKind::Agent, 1), "OTHER"), &ctx());
         assert_eq!((v.asking, v.agent_first_use), (Asking::OneTap, true));
-        // A use that names no key is not an answered one (F036).
+        // A use that names no key is not an answered one.
         let mut f = facts(RequestKind::Agent, 1);
         f.uses = vec![("claude".into(), "github.com/acme/shop".into(), vec![])];
         assert_eq!(decide_facts(&f, &ctx()).asking, Asking::OneTap);

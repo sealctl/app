@@ -217,5 +217,7 @@ if __name__ == "__main__":
     try:
         server.serve_forever()
     finally:
+        # Free the port first: the daemon stops below can take a while, and CI starts the next harness on it.
+        server.server_close()
         stop_jobs()
         shutil.rmtree(ROOT, ignore_errors=True)

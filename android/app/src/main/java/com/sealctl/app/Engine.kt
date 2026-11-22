@@ -282,7 +282,15 @@ class Engine(
         when (o.str("type")) {
             "request" -> scope.launch { handle(RelayClient.parseRequest(o), fromPush = false) }
             "status" -> scope.launch { refreshStatus() }
-            "delayed", "cancelled" -> scope.launch { refreshDelayed() }
+            "delayed" -> scope.launch { refreshDelayed() }
+            "cancelled" -> scope.launch {
+                val id = o.str("id")
+                local.value.delayed.firstOrNull { it.id == id }?.let {
+                    applyLocal(LocalEvent.PutDelayed(it.copy(state = "cancelled", cancelledBy = o.strOrNull("by"))))
+                }
+                local.value.plans.firstOrNull { it.delayId == id }?.let { applyLocal(LocalEvent.PutPlan(it.copy(state = "cancelled"))) }
+                refreshDelayed()
+            }
         }
     }
 
@@ -672,7 +680,7 @@ class Engine(
             if (mine == null) {
                 applyLocal(LocalEvent.PutDelayed(DelayedAction(d.id, if (d.machine != null) "unseal_all" else "unknown", d.machine,
                     d.releaseAt.toULong(), d.expires.toULong(), d.state, null)))
-            } else if (mine.state != d.state) {
+            } else if (mine.state != d.state && mine.state != "cancelled") {
                 applyLocal(LocalEvent.PutDelayed(mine.copy(state = d.state)))
             }
         }

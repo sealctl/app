@@ -48,6 +48,9 @@ fun LeaveScreen(activity: MainActivity) {
     var error by remember { mutableStateOf<String?>(null) }
     fun go(n: Int, skipped: List<String> = local.leaveSkipped) = engine.applyLocal(LocalEvent.SetLeave(n.toUInt(), skipped))
     fun cancel() { go(0, emptyList()); Ui.pop() }
+    // Skipped computers keep their names after step 5 forgets every machine.
+    fun skippedName(key: String) = engine.state.value.machines.firstOrNull { it.key == key }?.name
+        ?.let { Texts.shown(it, Texts.MAX_NAME) } ?: key.take(8)
 
     when (step) {
         1 -> Page(null, onBack = { cancel() }, bottom = {
@@ -92,6 +95,7 @@ fun LeaveScreen(activity: MainActivity) {
                             when (engine.finishPhoneAction(pending.id)) {
                                 null -> go(4)
                                 "relay" -> error = "The relay isn't answering, and sealctl can't finish until it confirms nothing was cancelled."
+                                "too_early" -> error = "Not yet."
                                 "gone" -> error = "This waited too long. Start again."
                                 else -> error = "Cancelled from another device. Nothing happened."
                             }
@@ -143,7 +147,7 @@ fun LeaveScreen(activity: MainActivity) {
                                 items = listOf(
                                     ReportItem("relay", "Relay data", "deleted", "done"),
                                     ReportItem("backup", "Words backup", "removed", "done"),
-                                ) + local.leaveSkipped.map { ReportItem("computer", engine.machine(it)?.name?.let { n -> Texts.shown(n, Texts.MAX_NAME) } ?: it.take(8), "skipped", "skipped") },
+                                ) + local.leaveSkipped.map { ReportItem("computer", skippedName(it), "skipped", "skipped") },
                                 run = "", time = System.currentTimeMillis().toULong(), updated = 0u,
                             )))
                             go(6)
@@ -162,7 +166,7 @@ fun LeaveScreen(activity: MainActivity) {
             Title("What happened")
             val reports = engine.state.collectAsState().value.reports.filter { it.what == "unseal" }
             for (r in reports) Body("${r.machineName}: handed back · ${r.items.count { it.state == "done" }} objects")
-            for (k in local.leaveSkipped) Body("${engine.machine(k)?.name?.let { Texts.shown(it, Texts.MAX_NAME) } ?: k.take(8)}: skipped")
+            for (k in local.leaveSkipped) Body("${skippedName(k)}: skipped")
             Body("Relay data deleted.")
             Body("Words backup removed.")
         }

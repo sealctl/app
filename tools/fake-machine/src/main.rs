@@ -222,7 +222,7 @@ async fn run(cli: Cli) -> Result<u8> {
                 ..MachineState::default()
             };
             state.save(&cli.home)?;
-            std::fs::write(cli.home.join("pairing-code"), b64u(&code))?;
+            fake_machine::write_private(&cli.home.join("pairing-code"), b64u(&code).as_bytes())?;
             if let Some(f) = link_file {
                 std::fs::write(f, &link)?;
             }
@@ -658,7 +658,9 @@ async fn send_one(
         let msg = match next_json(&mut ws, until).await {
             Ok(Some(m)) => m,
             Ok(None) => return Ok(Outcome::Error("socket closed".into())),
-            Err(_) => return Ok(Outcome::Expired),
+            // Only the deadline is an expiry; a socket failure is an error.
+            Err(_) if tokio::time::Instant::now() >= until => return Ok(Outcome::Expired),
+            Err(e) => return Ok(Outcome::Error(format!("socket: {e}"))),
         };
         match msg["type"].as_str().unwrap_or_default() {
             "queued" => {

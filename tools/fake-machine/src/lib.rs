@@ -312,6 +312,29 @@ pub struct MachineState {
     pub last_plan: Option<String>,
 }
 
+/// Writes `data` to `path` through a new temporary file that is mode 0600 from the start
+/// (never readable by others, never through a link left at the temporary name).
+pub fn write_private(path: &Path, data: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let tmp = path.with_extension("tmp");
+    match std::fs::remove_file(&tmp) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+        _ => {}
+    }
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
+    }
+    let mut f = o.open(&tmp)?;
+    f.write_all(data)?;
+    drop(f);
+    std::fs::rename(tmp, path)?;
+    Ok(())
+}
+
 impl MachineState {
     /// The state file in `home`.
     pub fn path(home: &Path) -> PathBuf {
@@ -328,16 +351,10 @@ impl MachineState {
     /// Saves the state to `home` (file mode 0600).
     pub fn save(&self, home: &Path) -> Result<()> {
         std::fs::create_dir_all(home)?;
-        let path = Self::path(home);
-        let tmp = path.with_extension("tmp");
-        std::fs::write(&tmp, serde_json::to_string_pretty(self)?)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
-        }
-        std::fs::rename(tmp, path)?;
-        Ok(())
+        write_private(
+            &Self::path(home),
+            serde_json::to_string_pretty(self)?.as_bytes(),
+        )
     }
 
     /// The machine keys.
@@ -379,4 +396,26 @@ pub fn random16() -> Result<[u8; 16]> {
     let mut b = [0u8; 16];
     getrandom::fill(&mut b).map_err(|e| anyhow!("random: {e}"))?;
     Ok(b)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn private_files_are_0600_and_skip_a_link_at_the_temporary_name() {
+        let dir = std::env::temp_dir().join(format!("fake-machine-{}", b64u(&random16().unwrap())));
+        std::fs::create_dir_all(&dir).unwrap();
+        let other = dir.join("other");
+        std::fs::write(&other, "untouched").unwrap();
+        let path = dir.join("pairing-code");
+        std::os::unix::fs::symlink(&other, path.with_extension("tmp")).unwrap();
+        write_private(&path, b"secret").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "secret");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        assert_eq!(std::fs::read_to_string(&other).unwrap(), "untouched");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

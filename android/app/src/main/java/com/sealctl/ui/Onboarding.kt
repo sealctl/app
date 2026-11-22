@@ -227,8 +227,8 @@ private fun WordsPages(onDone: () -> Unit) {
         if (page == 3) {
             Gap(16)
             Title("Now fill in the card")
-            Row { Body("Words fingerprint: "); Mono(fp ?: "", size = 18, weight = FontWeight.SemiBold) }
-            Row { Body("Written on: "); Mono(Texts.isoDate(System.currentTimeMillis()), size = 18) }
+            com.sealctl.designsystem.Line(com.sealctl.designsystem.plain("Words fingerprint: "), com.sealctl.designsystem.code(fp ?: "", size = 18, weight = FontWeight.SemiBold, color = Sealctl.colors.ink))
+            com.sealctl.designsystem.Line(com.sealctl.designsystem.plain("Written on: "), com.sealctl.designsystem.code(Texts.isoDate(System.currentTimeMillis()), size = 18, color = Sealctl.colors.ink))
         }
     }
 }
@@ -382,7 +382,7 @@ private fun BackupFoundScreen(found: Phase.BackupFound?, activity: MainActivity,
         Spacer(Modifier.height(48.dp))
         Wordmark()
         Title("Your words are in your Google backup")
-        Row { Body("Words "); Mono(fp); Body(", saved on ${found?.created?.let { Texts.isoDate(it) } ?: ""}.") }
+        com.sealctl.designsystem.Line(com.sealctl.designsystem.plain("Words "), com.sealctl.designsystem.code(fp, size = 15, color = Sealctl.colors.ink), com.sealctl.designsystem.plain(", saved on ${found?.created?.let { Texts.isoDate(it) } ?: ""}."))
     }
 }
 

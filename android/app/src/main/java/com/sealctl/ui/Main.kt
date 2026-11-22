@@ -256,7 +256,7 @@ fun InventoryList(machine: String?) {
         for (i in list) {
             SurfaceCard {
                 val purpose = when (i.purpose) { "secrets" -> "Secret store"; "secret" -> "Own-approval secret"; "volume" -> "Volume"; "backup" -> "Backup"; else -> i.purpose }
-                Row { Text(purpose, fontWeight = FontWeight.SemiBold, color = Sealctl.colors.ink); Text(" "); Mono("${i.id.take(4)}…${i.id.takeLast(2)}", size = 14); Text(" · words "); Mono(i.words, size = 14) }
+                com.sealctl.designsystem.Line(com.sealctl.designsystem.plain(purpose, FontWeight.SemiBold), com.sealctl.designsystem.plain(" "), com.sealctl.designsystem.code("${i.id.take(4)}…${i.id.takeLast(2)}", size = 14), com.sealctl.designsystem.plain(" · words "), com.sealctl.designsystem.code(i.words, size = 14), color = Sealctl.colors.ink)
                 if (i.path.isNotEmpty()) Mono(listOfNotNull(i.path, if (i.size > 0u) "${i.size.toLong() / 1000} KB" else null).joinToString(" · "), size = 13, color = Sealctl.colors.ink2)
                 Muted("First used ${Texts.isoDate(i.firstUse.toLong())} · last used ${Texts.ago(i.lastUse.toLong())}")
                 if (i.stale) Text("Not seen since ${Texts.isoDate(i.lastUse.toLong())}", color = Sealctl.colors.waiting)

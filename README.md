@@ -4,6 +4,8 @@ The sealctl phone app: it holds the root made from your 24 words and answers key
 your computers. This repository has the iPhone app (Swift, SwiftUI), the Android app (Kotlin,
 Jetpack Compose) and the Rust crate both apps share. [`SPEC.md`](SPEC.md) is the build spec.
 
+To install the app on your phone, see [sealctl.com/docs#install](https://sealctl.com/docs#install).
+
 License: AGPL-3.0. The protocol core, `sealctl-core`, is MIT and lives in
 [sealctl/sealctl](https://github.com/sealctl/sealctl).
 
@@ -91,8 +93,8 @@ cargo run --release -p fake-machine -- request --kind open --subject secret:OPEN
 adb shell am broadcast -n com.sealctl.app/.DebugPushReceiver --es type request   # stands in for FCM (debug builds)
 ```
 
-## Pre-release exception
+## sealctl-core version
 
-SPEC.md 5.2 pins `sealctl-core` to a `sealctl` release tag. No release contains the core yet, so
-`Cargo.toml` takes it from the `phone` branch and `Cargo.lock` pins the commit. This changes to
-`tag = "v0.7.0"` when that release exists.
+`Cargo.toml` takes `sealctl-core` from [sealctl/sealctl](https://github.com/sealctl/sealctl) as a
+git dependency and `Cargo.lock` pins the exact commit (SPEC.md 5.2). `CHANGELOG.md` names the
+commit each build uses.

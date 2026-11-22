@@ -48,6 +48,9 @@ fun LeaveScreen(activity: MainActivity) {
     var error by remember { mutableStateOf<String?>(null) }
     fun go(n: Int, skipped: List<String> = local.leaveSkipped) = engine.applyLocal(LocalEvent.SetLeave(n.toUInt(), skipped))
     fun cancel() { go(0, emptyList()); Ui.pop() }
+    // Skipped computers keep their names after step 5 forgets every machine.
+    fun skippedName(key: String) = engine.state.value.machines.firstOrNull { it.key == key }?.name
+        ?.let { Texts.shown(it, Texts.MAX_NAME) } ?: key.take(8)
 
     when (step) {
         1 -> Page(null, onBack = { cancel() }, bottom = {
@@ -92,6 +95,7 @@ fun LeaveScreen(activity: MainActivity) {
                             when (engine.finishPhoneAction(pending.id)) {
                                 null -> go(4)
                                 "relay" -> error = "The relay isn't answering, and sealctl can't finish until it confirms nothing was cancelled."
+                                "too_early" -> error = "Not yet."
                                 "gone" -> error = "This waited too long. Start again."
                                 else -> error = "Cancelled from another device. Nothing happened."
                             }
@@ -137,15 +141,17 @@ fun LeaveScreen(activity: MainActivity) {
                         for (k in local.leaveSkipped) runCatching { engine.relay.removeMachine(k) }
                         val r = deleteRelayData(lockFirst = false)
                         if (r.startsWith("Deleted")) {
-                            Graph.blockStore.delete()
+                            val removed = Graph.blockStore.delete()
                             engine.apply(Event.AddReport(HandbackReport(
                                 id = "leave-${System.currentTimeMillis()}", machine = "", machineName = "This phone", what = "leave", planHash = "",
                                 items = listOf(
                                     ReportItem("relay", "Relay data", "deleted", "done"),
-                                    ReportItem("backup", "Words backup", "removed", "done"),
-                                ) + local.leaveSkipped.map { ReportItem("computer", engine.machine(it)?.name?.let { n -> Texts.shown(n, Texts.MAX_NAME) } ?: it.take(8), "skipped", "skipped") },
+                                    if (removed) ReportItem("backup", "Words backup", "removed", "done")
+                                    else ReportItem("backup", "Words backup", "not removed", "failed"),
+                                ) + local.leaveSkipped.map { ReportItem("computer", skippedName(it), "skipped", "skipped") },
                                 run = "", time = System.currentTimeMillis().toULong(), updated = 0u,
                             )))
+                            error = null
                             go(6)
                         } else error = "The relay isn't answering. Try again."
                         running = false
@@ -157,14 +163,35 @@ fun LeaveScreen(activity: MainActivity) {
                 Body("This removes your words from your Google backup. Your other Android phones lose this copy too.")
             }
         }
-        6 -> Page(null, bottom = { PrimaryButton("Next", { go(7) }) }) {
-            Gap(24)
-            Title("What happened")
-            val reports = engine.state.collectAsState().value.reports.filter { it.what == "unseal" }
-            for (r in reports) Body("${r.machineName}: handed back · ${r.items.count { it.state == "done" }} objects")
-            for (k in local.leaveSkipped) Body("${engine.machine(k)?.name?.let { Texts.shown(it, Texts.MAX_NAME) } ?: k.take(8)}: skipped")
-            Body("Relay data deleted.")
-            Body("Words backup removed.")
+        6 -> {
+            val all = engine.state.collectAsState().value.reports
+            val leave = all.filter { it.what == "leave" }.maxByOrNull { it.time }
+            val backupLeft = leave?.items?.any { it.kind == "backup" && it.state == "failed" } == true
+            var retrying by remember { mutableStateOf(false) }
+            Page(null, bottom = {
+                ErrorText(error)
+                if (backupLeft && leave != null) SecondaryButton("Remove the words backup again", {
+                    if (retrying) return@SecondaryButton
+                    retrying = true
+                    scope.launch {
+                        if (Graph.blockStore.delete()) {
+                            error = null
+                            engine.apply(Event.AddReport(leave.copy(items = leave.items.map {
+                                if (it.kind == "backup") it.copy(to = "removed", state = "done") else it
+                            })))
+                        } else error = "The words backup couldn't be removed. Try again."
+                        retrying = false
+                    }
+                })
+                PrimaryButton("Next", { go(7) })
+            }) {
+                Gap(24)
+                Title("What happened")
+                for (r in all.filter { it.what == "unseal" }) Body("${r.machineName}: handed back · ${r.items.count { it.state == "done" }} objects")
+                for (k in local.leaveSkipped) Body("${skippedName(k)}: skipped")
+                Body("Relay data deleted.")
+                Body(if (backupLeft) "Words backup not removed." else "Words backup removed.")
+            }
         }
         else -> Page(null, onBack = null, bottom = {
             PrimaryButton("Done", {

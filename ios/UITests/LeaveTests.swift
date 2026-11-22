@@ -25,7 +25,11 @@ final class LeaveTests: SealctlTestCase {
         // The other is skipped.
         tap("Skip a computer")
         see("Use it when the computer is lost or already wiped.")
-        tap("Skip")
+        // The rows refresh every 5 seconds; a tap that lands during one is retried.
+        for _ in 0..<3 where !shows("Skipped", 1) {
+            if app.buttons["Skip"].exists { app.buttons["Skip"].tap() }
+            _ = shows("Skipped", 5)
+        }
         see("Skipped")
         tap("Continue")
 

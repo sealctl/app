@@ -74,7 +74,8 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        handle(intent)
+        // A recreated activity (dark mode, font size) keeps its screens: the link was handled.
+        handle(intent, link = savedInstanceState == null)
         lifecycleScope.launch {
             combine(Ui.secure, Graph.words.shown) { n, words -> n > 0 || words != null }.collect { secure ->
                 if (secure) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
@@ -95,7 +96,7 @@ class MainActivity : FragmentActivity() {
      * any app and are never read (SPEC.md 10.2). A notification tap arrives through
      * [OpenActivity], which leaves what to show in [Ui.opening]; a link only opens the scanner.
      */
-    private fun handle(intent: Intent?) {
+    private fun handle(intent: Intent?, link: Boolean = true) {
         val open = Ui.opening.getAndUpdate { null }
         open?.requestId?.let { id ->
             Ui.focusRequest.value = id
@@ -112,8 +113,8 @@ class MainActivity : FragmentActivity() {
                 s.startsWith("delayed:") -> Ui.push(Route.Delayed(s.removePrefix("delayed:")))
             }
         }
-        val link = intent?.takeIf { it.action == Intent.ACTION_VIEW }?.data
-        if (link != null && link.scheme == "https" && link.host == "sealctl.com" && link.path == "/p") {
+        val uri = intent?.takeIf { link && it.action == Intent.ACTION_VIEW }?.data
+        if (uri != null && uri.scheme == "https" && uri.host == "sealctl.com" && uri.path == "/p") {
             // A link opened outside the app leads to the scanner (SPEC.md 11.5).
             Ui.push(Route.Pair(code = null, fromLink = true))
         }

@@ -45,12 +45,7 @@ class SealctlApp : Application(), NotifyHost, PlacesHost {
     override suspend fun onAction(requestId: String, action: String) = Graph.engine.answerFromNotification(requestId, action)
 
     override fun openIntent(context: Context, requestId: String?, screen: String?): Intent =
-        Intent(context, MainActivity::class.java)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            .apply {
-                if (requestId != null) putExtra(Notify.EXTRA_REQUEST, requestId)
-                if (screen != null) putExtra(Notify.EXTRA_SCREEN, screen)
-            }
+        OpenActivity.intent(context, requestId, screen)
 
     override fun onPlaceTransition(placeIds: List<String>, entered: Boolean) = Graph.engine.onPlaceTransition(placeIds, entered)
 }

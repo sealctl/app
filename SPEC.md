@@ -640,6 +640,8 @@ The `answered` notification exists because Android may lower the priority of an 
 - `VISIBILITY_PRIVATE` with a public version "A machine is waiting for your phone.";
 - a `contentIntent` that opens the approval card.
 
+The `contentIntent` targets a small activity that is not exported: it hands the request or screen to the main activity in memory and finishes. The main activity is exported (the launcher and the pairing link), so it reads no extras; another app that starts it only opens the app, and a `VIEW` intent opens the scanner only for `https://sealctl.com/p`.
+
 Actions are the same as on iOS, with the same titles. On Android 12 and later each Allow action uses `setAuthenticationRequired(true)`, so a locked phone asks for its unlock first. On Android 9 to 11 the notification has no action buttons; tapping it opens the card, and the keyguard asks for the unlock before the activity shows (`setShowWhenLocked(false)`).
 
 **Action receiver.** `ApprovalActionReceiver` uses `goAsync()` and finishes within 9 seconds. If the reply is not done by then, it hands the reply to an expedited `WorkManager` job.

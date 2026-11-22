@@ -19,11 +19,12 @@ use crate::prune::prune_state;
 /// Usage entries kept: 13 months, at most 50,000.
 pub const USAGE_MAX: i64 = 50_000;
 const USAGE_MONTHS_MS: u64 = 396 * 86_400_000;
-/// Pending ids are kept 10 minutes past expiry.
+/// Pending ids are kept 10 minutes past the time their signed body can be accepted.
 const PENDING_KEEP_MS: u64 = 10 * 60 * 1000;
-/// However early the relay says a request expires, its id is kept as long as its signed time
-/// can still be accepted after it was first seen (the body's `t` may lie up to the window ahead).
-const PENDING_MIN_KEEP_MS: u64 = 2 * sealctl_core::request::TIME_WINDOW_MS;
+/// A request's id is kept as long as its signed time can still be accepted after it was first
+/// seen (the body's `t` may lie up to the window ahead). The relay's `expires` does not shorten
+/// or lengthen this: a body is refused by its signed time after that anyway.
+const PENDING_SIGNED_KEEP_MS: u64 = 2 * sealctl_core::request::TIME_WINDOW_MS;
 /// The relay state blob limit, less room for the seal.
 pub const STATE_LIMIT: usize = 1_048_576 - 1024;
 
@@ -258,7 +259,7 @@ fn state_hash(c: &Connection) -> Result<Option<u64>> {
 
 /// `updated` for a record changed now: later than its previous value.
 fn bump(prev: u64, now: u64) -> u64 {
-    now.max(prev + 1)
+    now.max(prev.saturating_add(1))
 }
 
 fn item_inventory(item: &RequestItem, machine: &str, now: u64, fp: &str) -> InventoryItem {
@@ -467,8 +468,8 @@ impl Store {
         let mut l: LocalState = read_doc(&c, "local")?;
         let now = now_ms();
         l.pending.retain(|p| {
-            p.expires
-                .max(p.seen.saturating_add(PENDING_MIN_KEEP_MS))
+            p.seen
+                .saturating_add(PENDING_SIGNED_KEEP_MS)
                 .saturating_add(PENDING_KEEP_MS)
                 > now
         });
@@ -933,7 +934,15 @@ fn apply_event(s: &mut State, event: Event, now: u64) -> Result<()> {
             mut machine,
             replaces,
         } => {
-            machine.updated = bump(machine.updated, now);
+            // Newer than any copy of this key already held, a kept tombstone too, so the
+            // pairing wins a merge with it even if that tombstone's time came from a clock
+            // that ran ahead.
+            let held = s
+                .machines
+                .iter()
+                .find(|m| m.key == machine.key)
+                .map_or(0, |m| m.updated);
+            machine.updated = bump(machine.updated.max(held), now);
             machine.deleted = false;
             if let Some(old) = replaces.filter(|o| *o != machine.key) {
                 if let Some(o) = s.machines.iter_mut().find(|m| m.key == old) {
@@ -1149,6 +1158,33 @@ mod tests {
     }
 
     #[test]
+    fn re_pairing_beats_a_tombstone_from_a_clock_ahead() {
+        let st = store();
+        let key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        st.apply(Event::PairMachine {
+            machine: machine(key, "dev@mbp"),
+            replaces: None,
+        })
+        .unwrap();
+        st.apply(Event::UnpairMachine { key: key.into() }).unwrap();
+        // The removal was made on a device whose clock ran a day ahead.
+        let c = lock(&st.conn).unwrap();
+        let mut s: State = read_doc(&c, "state").unwrap();
+        s.machines[0].updated = now_ms() + 86_400_000;
+        write_doc(&c, "state", &s).unwrap();
+        drop(c);
+        let removed = st.snapshot().unwrap();
+        let s = st
+            .apply(Event::PairMachine {
+                machine: machine(key, "dev@mbp"),
+                replaces: None,
+            })
+            .unwrap();
+        let merged = crate::merge::merge_state(removed, s);
+        assert_eq!(merged.live_machines().count(), 1);
+    }
+
+    #[test]
     fn replacing_a_machine_keeps_same_name_tags_right() {
         let (a, b, c, d) = (
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -1233,6 +1269,19 @@ mod tests {
         write_doc(&c, "local", &l).unwrap();
         drop(c);
         assert!(!st.see_request("r2".into(), "m".into(), 1).unwrap());
+        // Dropped once that time has passed, however late the relay says they expire.
+        let c = lock(&st.conn).unwrap();
+        let mut l: LocalState = read_doc(&c, "local").unwrap();
+        for p in &mut l.pending {
+            p.seen = now_ms() - 31 * 60 * 1000;
+        }
+        write_doc(&c, "local", &l).unwrap();
+        drop(c);
+        assert!(st.see_request("r4".into(), "m".into(), u64::MAX).unwrap());
+        let c = lock(&st.conn).unwrap();
+        let l: LocalState = read_doc(&c, "local").unwrap();
+        let ids: Vec<&str> = l.pending.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["r4"]);
     }
 
     #[test]

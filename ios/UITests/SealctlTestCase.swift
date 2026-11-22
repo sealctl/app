@@ -20,7 +20,7 @@ class SealctlTestCase: XCTestCase {
         app.launchArguments = ["-resetForTests"]
         app.launchEnvironment = ["SEALCTL_RELAY": Env.relay, "SEALCTL_TEST_DELAY": "\(Env.delay)"]
         addUIInterruptionMonitor(withDescription: "system alerts") { alert in
-            for b in ["Allow", "Allow While Using App", "OK", "Don’t Allow"] where alert.buttons[b].exists {
+            for b in ["Allow", "Allow While Using App", "Open", "OK", "Don’t Allow"] where alert.buttons[b].exists {
                 alert.buttons[b].tap()
                 return true
             }

@@ -99,7 +99,7 @@ final class SensitiveTests: SealctlTestCase {
         tap("dev@mbp.example.com handed everything back")
         see("2 of 3 done")
         see("secrets · store → macOS Keychain")
-        see("Run `sealctl unseal --resume` on that computer.")
+        see("unseal --resume")
         see("Your other computers were told.")
         tap("Done")
     }

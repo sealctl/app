@@ -18,8 +18,15 @@ final class CLIEndToEndTests: SealctlTestCase {
              button: String? = nil, timeout: TimeInterval = 120) -> (Int, String) {
         let job = Harness.cli("c1", args, stdin: stdin, env: env)
         if let title, let button {
-            card(title, 60)
-            tap(button)
+            // The card, or the command ended without asking: then its output says why.
+            let t = element("card-title")
+            let end = Date().addingTimeInterval(90)
+            while !(t.exists && t.label.contains(title)) && !job.done && Date() < end { Thread.sleep(forTimeInterval: 0.5) }
+            if t.exists && t.label.contains(title) {
+                tap(button)
+            } else {
+                XCTFail("no card \(title) (card: \(t.exists ? t.label : "none")); sealctl \(args.joined(separator: " ")): \(job.output)")
+            }
         }
         return job.wait(timeout)
     }

@@ -17,7 +17,9 @@ use axum::response::{IntoResponse, Response};
 use axum::Router;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64U;
 use base64::Engine;
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use futures_util::{SinkExt, StreamExt};
+use sealctl_core::pairing::verify_move_proof;
 use sealctl_core::relay_auth::{verify_relay_headers, RelayHeaders};
 use sealctl_core::CoreError;
 use serde_json::{json, Map, Value};
@@ -184,6 +186,33 @@ fn is_b64u(s: &str, max: usize) -> bool {
 
 fn is_key_id(s: &str) -> bool {
     s.len() == 43 && is_b64u(s, 43)
+}
+
+fn key32(s: &str) -> Option<[u8; 32]> {
+    B64U.decode(s).ok()?.try_into().ok()
+}
+
+/// The phone key change move proof: `b64u(X_new ‖ sig)`, signed by the phone `holder` that the
+/// machine belongs to now.
+fn machine_moves(holder: &str, phone: &str, machine: &str, proof: Option<&str>) -> bool {
+    let (Some(old), Some(new), Some(m), Some(proof)) =
+        (key32(holder), key32(phone), key32(machine), proof)
+    else {
+        return false;
+    };
+    verify_move_proof(&old, &new, &m, proof).is_ok()
+}
+
+/// The licence move proof: the new key's signature over "sealctl-licence-move-v1\n<old>\n<new>".
+fn licence_moves(old: &str, new: &str, proof: &str) -> bool {
+    let (Some(key), Ok(sig)) = (key32(new), B64U.decode(proof)) else {
+        return false;
+    };
+    let (Ok(key), Ok(sig)) = (VerifyingKey::from_bytes(&key), Signature::from_slice(&sig)) else {
+        return false;
+    };
+    let text = format!("sealctl-licence-move-v1\n{old}\n{new}");
+    key.verify(text.as_bytes(), &sig).is_ok()
 }
 
 fn is_request_id(s: &str) -> bool {
@@ -700,6 +729,14 @@ fn dispatch(
             if !known && p.machines.len() >= MAX_MACHINES {
                 return fail(409, "too_many_machines");
             }
+            // The index decides first: a machine that belongs to another phone moves only with
+            // a move proof signed by that phone (relay/src/machine-index.ts `pair`).
+            if let Some((holder, _)) = r.index.get(&machine).filter(|(h, _)| h != phone) {
+                if !machine_moves(holder, phone, &machine, proof.as_deref()) {
+                    return fail(400, "bad_proof");
+                }
+            }
+            let p = phone_mut(r, phone);
             p.machines.insert(
                 machine.clone(),
                 MachineRecord {
@@ -1027,7 +1064,9 @@ fn dispatch(
             let Some(to) = str_of("to").filter(|t| is_key_id(t) && t != phone) else {
                 return fail(400, "bad_target");
             };
-            if !str_of("proof").is_some_and(|p| p.len() == 86 && is_b64u(&p, 86)) {
+            if !str_of("proof")
+                .is_some_and(|p| p.len() == 86 && is_b64u(&p, 86) && licence_moves(phone, &to, &p))
+            {
                 return fail(400, "bad_proof");
             }
             let days = phone_mut(r, phone).days_used;

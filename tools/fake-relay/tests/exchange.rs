@@ -11,8 +11,9 @@ use sealctl_core::wire::{
     MachineMessage, MachineStatus, MessageKind, ObjectFacts, RequestBody, RequestItem, SessionState,
 };
 use sealctl_core::{
-    open_machine_status, open_request, pairing_proof, seal_machine_message, seal_reply, Decision,
-    MachineKeys, ObjectKey, PairingOffer, PhoneKeys, PhonePublic, Place, Purpose, Root, Words,
+    key_change_proof, licence_move_proof, open_machine_status, open_request, pairing_proof,
+    seal_machine_message, seal_reply, Decision, MachineKeys, ObjectKey, PairingOffer, PhoneKeys,
+    PhonePublic, Place, Purpose, Root, Words,
 };
 use serde_json::{json, Value};
 
@@ -614,4 +615,66 @@ async fn unpair_and_delete_phone_close_waits() {
         .await
         .unwrap();
     assert_eq!(s, 404);
+}
+
+async fn listed(relay: &Relay, keys: &PhoneKeys) -> usize {
+    let path = format!("/v1/phones/{}/machines", keys.public_id());
+    let (_, res) = relay
+        .call(&Signer::Phone(keys), "GET", &path, None)
+        .await
+        .unwrap();
+    res["machines"].as_array().unwrap().len()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn moves_need_a_proof_from_the_current_phone() {
+    let relay = relay().await;
+    let phone = Phone::b();
+    let machine = pair(&relay, &phone).await;
+    let other = PhoneKeys::from_root(&Root::from_bytes(vec![7; 32]).unwrap());
+    let path = format!("/v1/phones/{}/machines", other.public_id());
+
+    // Without a proof, with a proof signed by the wrong phone: refused, nothing changes.
+    let forged = key_change_proof(&other, &other, machine.id()).unwrap();
+    for proof in [None, Some("A".repeat(128)), Some(forged)] {
+        let mut body = json!({"machine": machine.id(), "name": "x"});
+        if let Some(p) = proof {
+            body["proof"] = json!(p);
+        }
+        let (s, res) = relay
+            .call(&Signer::Phone(&other), "POST", &path, Some(&body))
+            .await
+            .unwrap();
+        assert_eq!(
+            (s, res["error"].clone()),
+            (400, json!("bad_proof")),
+            "{body}"
+        );
+    }
+    assert_eq!(listed(&relay, &phone.keys).await, 1);
+    assert_eq!(listed(&relay, &other).await, 0);
+
+    // With the current phone's move proof the machine moves.
+    let proof = key_change_proof(&phone.keys, &other, machine.id()).unwrap();
+    let body = json!({"machine": machine.id(), "name": "x", "proof": proof});
+    let (s, res) = relay
+        .call(&Signer::Phone(&other), "POST", &path, Some(&body))
+        .await
+        .unwrap();
+    assert_eq!(s, 201, "{res}");
+    assert_eq!(listed(&relay, &phone.keys).await, 0);
+    assert_eq!(listed(&relay, &other).await, 1);
+
+    // The licence move proof is the new key's signature.
+    let path = format!("/v1/phones/{}/licence/move", phone.id());
+    let wrong = licence_move_proof(&phone.keys, phone.id()).unwrap();
+    let right = licence_move_proof(&other, phone.id()).unwrap();
+    for (proof, want) in [(wrong, 400), (right, 200)] {
+        let body = json!({"to": other.public_id(), "proof": proof});
+        let (s, res) = relay
+            .call(&phone.signer(), "POST", &path, Some(&body))
+            .await
+            .unwrap();
+        assert_eq!(s, want, "{res}");
+    }
 }

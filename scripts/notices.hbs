@@ -1,0 +1,20 @@
+Rust crates in the sealctl app
+
+The app's shared library (sealctl-app and sealctl-core) is built from the Rust crates below.
+Each is used under the licence shown. Where a crate offers a choice of licences, the one
+listed is the one we use.
+
+{{#each overview}}
+{{{name}}} ({{id}}): {{count}}
+{{/each}}
+
+{{#each licenses}}
+=== {{{name}}} ({{id}})
+
+{{#each used_by}}
+{{crate.name}} {{crate.version}}{{#if crate.repository}}  {{{crate.repository}}}{{/if}}
+{{/each}}
+
+{{{text}}}
+
+{{/each}}

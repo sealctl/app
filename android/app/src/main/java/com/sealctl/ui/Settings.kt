@@ -155,8 +155,7 @@ fun AboutScreen() {
         Body("Version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) · core ${coreVersion()} · protocol ${protocolVersion()} · rules ${appRulesVersion()}")
         Muted("Relay ${Graph.engine.relay.host}")
         NavRow("Source code", "") { openUrl(context, "https://github.com/sealctl/app") }
-        NavRow("Licences", "") {}
-        Muted("sealctl app: AGPL-3.0. sealctl-core: MIT. Libraries: AndroidX and Jetpack Compose, OkHttp, kotlinx.serialization, JNA, CameraX, zxing-cpp (Apache-2.0); Firebase Messaging and Google Play services (Android SDK terms); Rust crates of sealctl-core (MIT/Apache-2.0); SQLite (public domain).")
+        NavRow("Licences", "") { Ui.push(Route.Licences) }
         NavRow("Privacy policy", "") { openUrl(context, "https://sealctl.com/privacy") }
         NavRow("Terms", "") { openUrl(context, "https://sealctl.com/terms") }
         NavRow("Report a security issue", "") {

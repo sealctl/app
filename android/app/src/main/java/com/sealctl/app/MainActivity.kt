@@ -37,6 +37,7 @@ sealed class Route {
     data object Places : Route()
     data object Devices : Route()
     data object About : Route()
+    data object Licences : Route()
     data object ShowWords : Route()
     data object DeleteRelay : Route()
     data object Erase : Route()

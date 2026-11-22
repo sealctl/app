@@ -29,6 +29,7 @@ updates:
       cargo-minor-and-patch:
         applies-to: version-updates
         update-types: [minor, patch]
+    open-pull-requests-limit: 5
 
   - package-ecosystem: gradle
     directory: /android
@@ -54,6 +55,7 @@ updates:
       gradle-other-minor-and-patch:
         applies-to: version-updates
         update-types: [minor, patch]
+    open-pull-requests-limit: 5
 
   - package-ecosystem: github-actions
     directory: /
@@ -65,3 +67,4 @@ updates:
       actions:
         applies-to: version-updates
         patterns: ["*"]
+    open-pull-requests-limit: 5

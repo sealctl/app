@@ -4,12 +4,14 @@ name: Supply chain
 # on Linux too, `cargo deny` (advisories, licences, sources: deny.toml) and `cargo vet`
 # (supply-chain/). Weekly as well, so a new advisory against a locked crate shows up without a push.
 
+# Its jobs are required checks, so the workflow runs on every pull request (no workflow-level
+# path filter, which would leave a required check pending forever); the `changes` job skips
+# the Gradle or Cargo jobs when a pull request does not touch their files, and a skipped job
+# counts as passed.
 on:
   push:
     branches: [main]
-    paths: ["Cargo.toml", "Cargo.lock", "**/Cargo.toml", "deny.toml", "supply-chain/**", "rust-toolchain.toml", "android/**", ".github/workflows/supply-chain.yml"]
   pull_request:
-    paths: ["Cargo.toml", "Cargo.lock", "**/Cargo.toml", "deny.toml", "supply-chain/**", "rust-toolchain.toml", "android/**", ".github/workflows/supply-chain.yml"]
   schedule:
     - cron: "17 6 * * 1"
   workflow_dispatch:
@@ -18,11 +20,50 @@ permissions:
   contents: read
 
 concurrency:
-  group: supply-chain-${{ github.ref }}
+  # one run per pull request (a new push cancels the old run); push, schedule and manual runs
+  # get a group of their own, so a run on main is never cancelled or replaced
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      gradle: ${{ steps.files.outputs.gradle }}
+      cargo: ${{ steps.files.outputs.cargo }}
+    steps:
+      - id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            printf 'gradle=true\ncargo=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename')
+          gradle=false
+          cargo=false
+          while IFS= read -r f; do
+            case "$f" in
+              android/*|.github/workflows/supply-chain.yml) gradle=true ;;
+            esac
+            case "$f" in
+              Cargo.toml|Cargo.lock|*/Cargo.toml|deny.toml|supply-chain/*|rust-toolchain.toml|\
+              .github/workflows/supply-chain.yml) cargo=true ;;
+            esac
+          done <<< "$files"
+          printf 'gradle=%s\ncargo=%s\n' "$gradle" "$cargo" >> "$GITHUB_OUTPUT"
+          echo "gradle=$gradle cargo=$cargo"
+
   gradle-wrapper:
+    needs: changes
+    if: needs.changes.outputs.gradle == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -32,7 +73,8 @@ jobs:
       - uses: gradle/actions/wrapper-validation@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
 
   gradle-verification:
-    needs: gradle-wrapper
+    needs: [changes, gradle-wrapper]
+    if: needs.changes.outputs.gradle == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -48,6 +90,8 @@ jobs:
         run: ./gradlew --no-daemon --stacktrace assembleDebug
 
   cargo:
+    needs: changes
+    if: needs.changes.outputs.cargo == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

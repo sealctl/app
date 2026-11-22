@@ -146,7 +146,7 @@ struct MachinesTab: View {
         let change = e.local.delayed.filter { $0.state == "waiting" && Int64($0.releaseAt) > now }
         ForEach(change, id: \.id) { d in
             let name = d.machine.flatMap { e.machine($0) }.map(e.displayName) ?? "This phone"
-            Banner(Texts.handsBackAt(name, at: Int64(d.releaseAt)), tone: Palette.accentSoft) {
+            Banner(Texts.delayedAt(d.what, name: name, at: Int64(d.releaseAt)), tone: Palette.accentSoft) {
                 HStack(spacing: 16) {
                     Button("Show") { router.push(.delayed(d.id)) }
                     Button("Cancel") { Task { await e.cancelDelayed(d.id) } }

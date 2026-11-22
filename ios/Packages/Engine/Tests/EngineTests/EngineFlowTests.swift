@@ -303,7 +303,7 @@ struct EngineUnitTests {
         let g = Texts.Facts(kind: .open, level: 1, machineName: "dev@mbp")
         #expect(Texts.title(g) == "Open dev@mbp?")
         let n = Texts.notification(Texts.Facts(kind: .unseal, level: 3, machineName: "dev@mbp"))
-        #expect(n.title == "Leave sealctl on dev@mbp?")
+        #expect(n.title == "Unseal everything on dev@mbp?")
         #expect(Texts.notification(Texts.Facts(kind: .rewrap, level: 2, machineName: "m")).body == "Open sealctl to confirm with Face ID.")
     }
 }

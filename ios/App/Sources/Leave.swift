@@ -23,7 +23,7 @@ struct LeaveView: View {
         case 1:
             Page(onBack: { cancel(e) }) {
                 Gap(24)
-                TitleText("Leave sealctl")
+                TitleText("Unseal all machines and leave")
                 BodyText("sealctl hands everything back to you before you go. On each computer, `sealctl unseal --all` moves your volumes, backups, SSH keys and secrets to passwords of your own. Your files stay encrypted.")
                 BodyText("Then this phone deletes your data on the relay and the copy of your words in iCloud Keychain.")
                 ErrorText(error)

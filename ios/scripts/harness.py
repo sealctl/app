@@ -10,7 +10,7 @@ server, bound to 127.0.0.1, runs exactly two programs for them, each in a tempor
 
 and drives the booted simulator with `xcrun simctl openurl` and `xcrun simctl push`.
 
-  POST /job      {"cmd": "machine"|"cli", "home": "m1", "args": [...], "stdin": "...", "env": {...}}
+  POST /job      {"cmd": "machine"|"cli", "home": "m1", "args": [...], "stdin": "...", "env": {...}, "tty": false}
   GET  /job/<id> {"done": bool, "code": int|null, "out": "..."}
   POST /stop/<id>
   POST /openurl  {"url": "..."}
@@ -36,7 +36,8 @@ NEXT = [0]
 
 
 class Job:
-    def __init__(self, argv, env, stdin, cwd=None):
+    def __init__(self, argv, env, stdin, cwd=None, tty=False):
+        self.tty = tty
         self.out = []
         self.code = None
         self.proc = subprocess.Popen(argv, env=env, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -52,7 +53,9 @@ class Job:
         try:
             self.proc.stdin.write(text)
             self.proc.stdin.flush()
-            self.proc.stdin.close()
+            # Under `script`, an early end of input reaches the command as ^D: keep it open.
+            if not self.tty:
+                self.proc.stdin.close()
         except OSError:
             pass
 
@@ -89,13 +92,16 @@ def start(spec):
         env.update(HOME=h, SEALCTL_RELAY=relay, SEALCTL_NO_SERVICE="1", SEALCTL_AGENT="0")
         env.update({k: str(v) for k, v in spec.get("env", {}).items() if k.startswith("SEALCTL_")})
         argv = [os.environ["SEALCTL_BIN"]] + args
+        if spec.get("tty"):
+            # Commands that need a person at a terminal (unseal) run under a pseudo-terminal.
+            argv = ["/usr/bin/script", "-q", "/dev/null"] + argv
         spec.setdefault("cwd", h)
     else:
         raise ValueError("unknown command")
     with LOCK:
         NEXT[0] += 1
         jid = str(NEXT[0])
-    JOBS[jid] = Job(argv, env, spec.get("stdin"), spec.get("cwd"))
+    JOBS[jid] = Job(argv, env, spec.get("stdin"), spec.get("cwd"), bool(spec.get("tty")))
     return jid
 
 

@@ -19,6 +19,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -62,8 +63,12 @@ import com.sealctl.designsystem.Title
 import com.sealctl.designsystem.Wordmark
 import com.sealctl.designsystem.monoStyle
 import com.sealctl.vault.AuthResult
+import com.sealctl.vault.NoBiometricsException
 import java.util.Locale
 import kotlinx.coroutines.launch
+
+/** Android 9 and 10 keep the words behind a fingerprint only (SPEC.md 7.3). */
+const val NEEDS_FINGERPRINT = "On this version of Android, sealctl keeps your words behind a fingerprint. Add a fingerprint in your phone's settings, then try again."
 
 private enum class Step { Welcome, About, Card, Ready, Words, Check, Backups, Notifications, Places, PlacesAlways, Pair, Restore, RestoreConfirm, Restoring, OldPhone, ChangeNow, BackupFound }
 
@@ -75,7 +80,11 @@ fun OnboardingFlow(activity: MainActivity, phase: Phase) {
         is Phase.Onboarding -> when (phase.step) { 7 -> Step.Backups; 8 -> Step.Notifications; 9 -> Step.Places; else -> Step.Pair }
         else -> Step.Welcome
     }
-    var step by rememberSaveable(phase) { mutableStateOf(start) }
+    // A restore persists step 7 before its last screens; the phase that follows must not
+    // skip them (Restoring, the old phone, changing the words).
+    var restoreStep by rememberSaveable { mutableStateOf<Step?>(null) }
+    var step by rememberSaveable(phase) { mutableStateOf(if (phase is Phase.Onboarding) restoreStep ?: start else start) }
+    SideEffect { restoreStep = step.takeIf { it == Step.Restoring || it == Step.OldPhone || it == Step.ChangeNow } }
     var restoring by rememberSaveable { mutableStateOf(false) }
     val engine = Graph.engine
     val scope = rememberCoroutineScope()
@@ -103,7 +112,7 @@ fun OnboardingFlow(activity: MainActivity, phase: Phase) {
                 setStep(Step.Backups)
             }
         })
-        Step.Backups -> Backups { setStep(Step.Notifications) }
+        Step.Backups -> Backups(activity) { setStep(Step.Notifications) }
         Step.Notifications -> NotificationsStep { if (restoring) finish() else setStep(Step.Places) }
         Step.Places -> PlacesStep(onAlways = { step = Step.PlacesAlways }, onDone = { setStep(Step.Pair) })
         Step.PlacesAlways -> PlacesAlways { setStep(Step.Pair) }
@@ -188,7 +197,8 @@ private fun GetReady(activity: MainActivity, onShown: () -> Unit) {
         ErrorText(error)
         PrimaryButton("Show my words", {
             scope.launch {
-                when (val r = Graph.words.create(activity)) {
+                val r = try { Graph.words.create(activity) } catch (e: NoBiometricsException) { error = NEEDS_FINGERPRINT; return@launch }
+                when (r) {
                     is AuthResult.Success -> onShown()
                     AuthResult.Cancelled -> {}
                     AuthResult.LockedOut -> error = Texts.LOCKED_OUT
@@ -265,8 +275,10 @@ private fun CardCheck(onAgain: () -> Unit, onPassed: () -> Unit) {
 }
 
 @Composable
-private fun Backups(onContinue: () -> Unit) {
+private fun Backups(activity: MainActivity, onContinue: () -> Unit) {
     val engine = Graph.engine
+    val scope = rememberCoroutineScope()
+    var message by remember { mutableStateOf<String?>(null) }
     val state by engine.state.collectAsState()
     var e2ee by remember { mutableStateOf<Boolean?>(null) }
     LaunchedEffect(Unit) { e2ee = Graph.blockStore.e2eeAvailable() }
@@ -275,9 +287,13 @@ private fun Backups(onContinue: () -> Unit) {
         Title("Backups")
         Row { Text("Paper card", fontWeight = FontWeight.SemiBold, color = Sealctl.colors.ink); Muted(" · Written and checked") }
         ToggleRow("Google backup", state.settings.keychainBackup && e2ee != false, enabled = e2ee == true) {
-            engine.apply(Event.SetSettings(state.settings.copy(keychainBackup = it)))
-            if (!it) engine.scope.launch { Graph.blockStore.delete() }
+            message = null
+            if (!it) {
+                engine.apply(Event.SetSettings(state.settings.copy(keychainBackup = false)))
+                engine.scope.launch { Graph.blockStore.delete() }
+            } else scope.launch { message = enableGoogleBackup(activity) }
         }
+        ErrorText(message)
         if (e2ee == false) Muted("Off: Google can't end-to-end encrypt it on this phone.")
         else Muted("A new Android phone on the same Google account restores without the words. End-to-end encrypted because this phone has a screen lock.")
         ToggleRow("Encrypted backup on the relay", state.settings.relayBackup) {
@@ -369,7 +385,8 @@ private fun BackupFoundScreen(found: Phase.BackupFound?, activity: MainActivity,
                 val bytes = Graph.blockStore.read() ?: run { error = "The backup is gone."; return@launch }
                 val item = runCatching { backupItemDecode(bytes) }.getOrNull() ?: run { error = "The backup can't be read."; return@launch }
                 bytes.fill(0)
-                if (Graph.words.restore(activity, item.words) is AuthResult.Success) {
+                val r = try { Graph.words.restore(activity, item.words) } catch (e: NoBiometricsException) { error = NEEDS_FINGERPRINT; return@launch }
+                if (r is AuthResult.Success) {
                     Graph.words.restored(item.fingerprint)
                     Graph.words.release()
                     onRestored()
@@ -439,12 +456,15 @@ private fun RestoreWords(onBack: () -> Unit, onParsed: () -> Unit) {
 @Composable
 private fun RestoreConfirm(activity: MainActivity, onNo: () -> Unit, onYes: () -> Unit) {
     val scope = rememberCoroutineScope()
+    var error by remember { mutableStateOf<String?>(null) }
     val words = Typed.parsed ?: run { LaunchedEffect(Unit) { onNo() }; return }
     val fp = remember(words) { Root.fromWords(words).let { r -> fingerprint(r).also { r.destroy() } } }
     Page(null, onBack = onNo, bottom = {
+        ErrorText(error)
         PrimaryButton("Yes", {
             scope.launch {
-                if (Graph.words.restore(activity, words) is AuthResult.Success) {
+                val r = try { Graph.words.restore(activity, words) } catch (e: NoBiometricsException) { error = NEEDS_FINGERPRINT; return@launch }
+                if (r is AuthResult.Success) {
                     Graph.words.restored(fp)
                     Graph.words.release()
                     Typed.clear()

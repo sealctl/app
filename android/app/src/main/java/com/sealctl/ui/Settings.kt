@@ -32,6 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.fragment.app.FragmentActivity
 import com.sealctl.app.BuildConfig
 import com.sealctl.app.Graph
 import com.sealctl.app.MachineView
@@ -42,6 +43,7 @@ import com.sealctl.app.Texts
 import com.sealctl.app.Ui
 import com.sealctl.core.Place as PlaceKind
 import com.sealctl.core.app.Event
+import com.sealctl.core.app.LocalEvent
 import com.sealctl.core.app.answerDaysLeft
 import com.sealctl.core.app.appRulesVersion
 import com.sealctl.core.coreVersion
@@ -57,6 +59,8 @@ import com.sealctl.designsystem.StateLabel
 import com.sealctl.designsystem.SurfaceCard
 import com.sealctl.designsystem.Title
 import com.sealctl.designsystem.Wordmark
+import com.sealctl.vault.AuthResult
+import com.sealctl.relay.ConflictException
 import com.sealctl.relay.RelayException
 import com.sealctl.relay.contentOrNull
 import kotlinx.coroutines.delay
@@ -72,6 +76,7 @@ fun SettingsTab() {
     val context = ctx()
     val scope = rememberCoroutineScope()
     var testMessage by remember { mutableStateOf<String?>(null) }
+    var backupMessage by remember { mutableStateOf<String?>(null) }
     val words = state.words
     Page("Settings", onBack = null) {
         SectionLabel("Words")
@@ -84,15 +89,20 @@ fun SettingsTab() {
         SecondaryButton("Show words", { Ui.push(Route.ShowWords) })
         SectionLabel("Backups")
         ToggleRow("Google backup", state.settings.keychainBackup) {
+            backupMessage = null
             if (!it) {
                 engine.apply(Event.SetSettings(state.settings.copy(keychainBackup = false)))
                 scope.launch { Graph.blockStore.delete() }
-            } else engine.apply(Event.SetSettings(state.settings.copy(keychainBackup = true)))
+            } else (context as? FragmentActivity)?.let { activity -> scope.launch { backupMessage = enableGoogleBackup(activity) } }
         }
         ToggleRow("Encrypted backup on the relay", state.settings.relayBackup) {
+            backupMessage = null
             engine.apply(Event.SetSettings(state.settings.copy(relayBackup = it)), upload = it)
-            if (!it) scope.launch { runCatching { engine.relay.putState(local.stateRev.toLong(), null) } }
+            if (!it) scope.launch {
+                if (!clearRelayBackup()) backupMessage = "The copy on the relay couldn't be removed yet. Turn the backup on and off again to retry."
+            }
         }
+        ErrorText(backupMessage)
         if (local.lastUpload > 0u) Muted("Saved ${Texts.ago(local.lastUpload.toLong())}")
         if (local.backupShortened) Muted("The relay backup is full. Old inventory entries were shortened.")
         NavRow("Places", "${state.places.count { !it.deleted }}") { Ui.push(Route.Places) }
@@ -137,6 +147,49 @@ fun SettingsTab() {
         SectionLabel("About")
         NavRow("Version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) · core ${coreVersion()} · protocol ${protocolVersion()}", "") { Ui.push(Route.About) }
     }
+}
+
+/**
+ * Turning Google backup on writes the Block Store item, which needs the words open: the words
+ * prompt comes first, and the setting stays on only once the item is saved. Returns the error
+ * to show, or null.
+ */
+internal suspend fun enableGoogleBackup(activity: FragmentActivity): String? {
+    val engine = Graph.engine
+    engine.apply(Event.SetSettings(engine.state.value.settings.copy(keychainBackup = true)))
+    val r = Graph.words.unlockForCheck(activity)
+    val saved = if (r is AuthResult.Success) {
+        try { Graph.words.saveBackup() } finally { Graph.words.release() }
+    } else null
+    if (saved != null) return null
+    engine.apply(Event.SetSettings(engine.state.value.settings.copy(keychainBackup = false)))
+    return when (r) {
+        AuthResult.Cancelled -> null
+        is AuthResult.Success -> "The copy couldn't be saved to your Google backup. Try again later."
+        else -> "Your words weren't opened, so nothing was saved to your Google backup."
+    }
+}
+
+/**
+ * Turning the relay backup off (SPEC.md 6.5): the stored blob is replaced by a sealed empty
+ * state, at the relay's current revision. Returns whether the relay confirmed it.
+ */
+private suspend fun clearRelayBackup(): Boolean {
+    val engine = Graph.engine
+    var rev = engine.local.value.stateRev.toLong()
+    repeat(3) {
+        val blob = engine.withRoot { root -> runCatching { com.sealctl.core.stateSeal(root, ByteArray(0)) }.getOrNull() } ?: return false
+        try {
+            val stored = engine.relay.putState(rev, blob)
+            engine.applyLocal(LocalEvent.Synced(stored.toULong(), uploaded = false))
+            return true
+        } catch (e: ConflictException) {
+            rev = e.rev
+        } catch (e: Exception) {
+            return false
+        }
+    }
+    return false
 }
 
 @Composable
@@ -277,6 +330,7 @@ private fun TrustHere(activity: MainActivity) {
                         Ui.toast("Trusted ${place.name}.")
                     }
                     GateResult.Cancelled -> {}
+                    GateResult.NoBiometrics -> error = Texts.NO_BIOMETRICS
                     else -> error = "Couldn't confirm it's you."
                 }
             }
@@ -321,6 +375,7 @@ fun MachineDetailScreen(activity: MainActivity, key: String) {
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { while (true) { delay(1000); now = System.currentTimeMillis() } }
     var confirmUnpair by remember { mutableStateOf(false) }
+    var releaseError by remember { mutableStateOf<String?>(null) }
     var nickname by remember(m?.nickname) { mutableStateOf(m?.nickname ?: "") }
     if (m == null) { Page(null) { Muted("This machine is no longer paired.") }; return }
     val v = MachineView.of(m, engine, now)
@@ -334,9 +389,16 @@ fun MachineDetailScreen(activity: MainActivity, key: String) {
             Text(Texts.held(engine.displayName(m), hold.until.toLong()), color = Sealctl.colors.waiting)
             TextButton({
                 scope.launch {
-                    if (biometricGate(activity, "Confirm releasing ${engine.displayName(m)}.") == GateResult.Passed) engine.releaseHold(key)
+                    releaseError = when (biometricGate(activity, "Confirm releasing ${engine.displayName(m)}.")) {
+                        GateResult.Passed -> { engine.releaseHold(key); null }
+                        GateResult.Cancelled -> null
+                        GateResult.NoBiometrics -> Texts.NO_BIOMETRICS
+                        GateResult.LockedOut -> Texts.LOCKED_OUT
+                        else -> "Couldn't confirm it's you."
+                    }
                 }
             }) { Text("Release now") }
+            ErrorText(releaseError)
         }
         if (v.state == com.sealctl.designsystem.MachineState.Open) PrimaryButton("Lock now", { scope.launch { if (engine.lock(m)) Ui.toast("Locked ${engine.displayName(m)}.") } })
         OutlinedTextField(nickname, { nickname = it.take(40) }, label = { Text("Nickname") }, singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -382,14 +444,29 @@ fun LostMachineScreen(key: String) {
 
 // ---------- level 3 actions on the phone (11.18, 11.19) ----------
 
-/** A level 3 action: biometrics, then at once at a trusted place or after the hour. */
+/**
+ * A level 3 action: biometrics, then at once at a trusted place or after the hour. After a
+ * fingerprint or face was added or removed, two words from the card come first (9.6).
+ * `prepare` is the user's own step (a prompt) that must succeed before a delayed record is
+ * used up; `abandon` undoes it when the record can't be finished.
+ */
 @Composable
-private fun PhoneAction(activity: MainActivity, what: String, reason: String, intro: @Composable () -> Unit, button: String, onRun: suspend () -> String?) {
+private fun PhoneAction(
+    activity: MainActivity,
+    what: String,
+    reason: String,
+    intro: @Composable () -> Unit,
+    button: String,
+    prepare: (suspend () -> Boolean)? = null,
+    abandon: () -> Unit = {},
+    onRun: suspend () -> String?,
+) {
     val engine = Graph.engine
     val scope = rememberCoroutineScope()
     val local by engine.local.collectAsState()
     var error by remember { mutableStateOf<String?>(null) }
     var done by remember { mutableStateOf<String?>(null) }
+    var cardCheck by remember { mutableStateOf(false) }
     val pending = local.delayed.lastOrNull { it.what == what && it.state in setOf("waiting", "released") }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { while (true) { delay(1000); now = System.currentTimeMillis() } }
@@ -397,8 +474,44 @@ private fun PhoneAction(activity: MainActivity, what: String, reason: String, in
         error = null
         done = onRun()
     }
+    suspend fun confirm() {
+        when (val g = biometricGate(activity, reason)) {
+            GateResult.Passed -> {}
+            GateResult.Cancelled -> return
+            GateResult.LockedOut -> { error = Texts.LOCKED_OUT; return }
+            GateResult.NoBiometrics -> { error = Texts.NO_BIOMETRICS; return }
+            // The gate is made again only after the card check.
+            GateResult.Changed -> { error = null; cardCheck = true; return }
+            is GateResult.Failed -> { error = g.message; return }
+        }
+        if (pending != null) {
+            if (prepare != null && !prepare()) return
+            when (val r = engine.finishPhoneAction(pending.id)) {
+                null -> { run(); return }
+                "too_early" -> error = "Not yet."
+                "gone" -> error = "This waited too long. Start again."
+                "relay" -> error = "The relay isn't answering, and sealctl can't finish until it confirms nothing was cancelled."
+                else -> error = "Cancelled from ${r.removePrefix("cancelled:").let { by -> engine.machine(by)?.let { engine.displayName(it) } ?: "another device" }}. Nothing happened."
+            }
+            abandon()
+            return
+        }
+        val delayed = try { engine.startPhoneAction(what) } catch (e: Exception) { error = Texts.RELAY_DOWN; return }
+        if (delayed == null) run()
+    }
     if (done != null) {
         Page(null, bottom = { PrimaryButton("Done", { Ui.pop() }) }) { Gap(24); Body(done!!) }
+        return
+    }
+    if (cardCheck) {
+        CardWords(activity, positions = 2, groups = 2, title = "Use your card",
+            body = "A fingerprint or face was added or removed on this phone. Type two words from your card to go on.",
+            onPassed = {
+                engine.vault.resetGate()
+                cardCheck = false
+                scope.launch { confirm() }
+            },
+            onCancel = { cardCheck = false })
         return
     }
     if (pending != null && pending.releaseAt.toLong() > now) {
@@ -407,29 +520,7 @@ private fun PhoneAction(activity: MainActivity, what: String, reason: String, in
     }
     Page(null, bottom = {
         ErrorText(error)
-        PrimaryButton(if (pending != null) "Finish" else button, {
-            scope.launch {
-                when (val g = biometricGate(activity, reason)) {
-                    GateResult.Passed -> {}
-                    GateResult.Cancelled -> return@launch
-                    GateResult.LockedOut -> { error = Texts.LOCKED_OUT; return@launch }
-                    GateResult.Changed -> { error = "A fingerprint or face was added or removed. Check two words from your card first."; engine.vault.resetGate(); return@launch }
-                    is GateResult.Failed -> { error = g.message; return@launch }
-                }
-                if (pending != null) {
-                    when (val r = engine.finishPhoneAction(pending.id)) {
-                        null -> run()
-                        "too_early" -> error = "Not yet."
-                        "gone" -> error = "This waited too long. Start again."
-                        "relay" -> error = "The relay isn't answering, and sealctl can't finish until it confirms nothing was cancelled."
-                        else -> error = "Cancelled from ${r.removePrefix("cancelled:").let { by -> engine.machine(by)?.let { engine.displayName(it) } ?: "another device" }}. Nothing happened."
-                    }
-                    return@launch
-                }
-                val delayed = try { engine.startPhoneAction(what) } catch (e: Exception) { error = Texts.RELAY_DOWN; return@launch }
-                if (delayed == null) run()
-            }
-        })
+        PrimaryButton(if (pending != null) "Finish" else button, { scope.launch { confirm() } })
         PlainButton("Cancel", { Ui.pop() })
     }) {
         Gap(16)
@@ -444,10 +535,12 @@ fun ShowWordsScreen(activity: MainActivity) {
     val shown by Graph.words.shown.collectAsState()
     val scope = rememberCoroutineScope()
     var error by remember { mutableStateOf<String?>(null) }
-    if (shown != null) {
+    // Words opened for a delayed record show only once the relay has confirmed it finished.
+    var revealed by remember { mutableStateOf(false) }
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { Graph.words.release() } }
+    if (shown != null && revealed) {
         SecureScreen()
         val list = shown!!
-        androidx.compose.runtime.DisposableEffect(Unit) { onDispose { Graph.words.release() } }
         Page("Your words", onBack = { Graph.words.release(); Ui.pop() }) {
             list.forEachIndexed { i, w ->
                 Row(Modifier.semantics { contentDescription = "Word ${i + 1}: $w" }) {
@@ -458,18 +551,23 @@ fun ShowWordsScreen(activity: MainActivity) {
         }
         return
     }
+    suspend fun open(): Boolean = when (Graph.words.show(activity)) {
+        is com.sealctl.vault.AuthResult.Success -> true
+        else -> { error = "The words weren't opened."; false }
+    }
     PhoneAction(activity, "words", "Confirm showing your words.", {
         Title("Show your words")
         Body("Showing the words is a sensitive action. Every paired computer is told.")
         ErrorText(error)
-    }, "Confirm with fingerprint or face") {
-        when (Graph.words.show(activity)) {
-            is com.sealctl.vault.AuthResult.Success -> {
-                scope.launch { Graph.engine.sendNotice("words", "done", null, null, null) }
-                null
-            }
-            else -> { error = "The words weren't opened."; null }
-        }.let { null }
+    }, "Confirm with fingerprint or face",
+        prepare = { error = null; open() },
+        abandon = { Graph.words.release() },
+    ) {
+        if (Graph.words.shown.value != null || open()) {
+            revealed = true
+            scope.launch { Graph.engine.sendNotice("words", "done", null, null, null) }
+        }
+        null
     }
 }
 
@@ -507,12 +605,23 @@ suspend fun deleteRelayData(lockFirst: Boolean): String {
 fun EraseScreen(activity: MainActivity) {
     val scope = rememberCoroutineScope()
     var alsoBackup by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
     Page(null, bottom = {
+        ErrorText(error)
         SecondaryButton("Delete relay data and unpair first", { Ui.pop(); Ui.push(Route.DeleteRelay) })
         PrimaryButton("Remove", {
             scope.launch {
-                when (com.sealctl.vault.Biometric.words(activity, "Remove sealctl from this phone", "Use your fingerprint, face or screen lock", "Cancel",
-                    runCatching { Graph.engine.vault.wordsDecryptCipher() }.getOrElse { Graph.engine.vault.wordsEncryptCipher() })) {
+                val vault = Graph.engine.vault
+                // On API 28 and 29 the words key needs a fingerprint; with none enrolled it can't be made.
+                val cipher = try {
+                    runCatching { vault.wordsDecryptCipher() }.getOrElse { vault.wordsEncryptCipher() }
+                } catch (e: com.sealctl.vault.NoBiometricsException) {
+                    error = NEEDS_FINGERPRINT; return@launch
+                } catch (e: Exception) {
+                    error = "Couldn't confirm it's you."; return@launch
+                }
+                error = null
+                when (com.sealctl.vault.Biometric.words(activity, "Remove sealctl from this phone", "Use your fingerprint, face or screen lock", "Cancel", cipher)) {
                     is com.sealctl.vault.AuthResult.Success -> erase(alsoBackup)
                     else -> {}
                 }

@@ -6,7 +6,6 @@ import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
-import android.security.keystore.StrongBoxUnavailableException
 import android.security.keystore.UserNotAuthenticatedException
 import com.sealctl.core.PhoneKeys
 import com.sealctl.core.Root
@@ -21,6 +20,12 @@ import javax.crypto.spec.GCMParameterSpec
 
 /** The words or a key were invalidated (screen lock changed): the app moves to WordsLost. */
 class KeysInvalidatedException : Exception("keys invalidated")
+
+/**
+ * A key that needs a biometric for every use can't be made: none is enrolled. On API 28 and
+ * 29 this is the words key too; from API 30 only the gate key.
+ */
+class NoBiometricsException(cause: Throwable) : Exception("no biometric enrolled", cause)
 
 /** The root can't be read now: the device is locked. */
 class DeviceLockedException : Exception("device locked")
@@ -85,7 +90,10 @@ class Vault(private val context: Context) {
 
     // ---------- words (behind biometrics or the screen lock) ----------
 
-    /** A cipher to encrypt new words; authenticate it with BiometricPrompt first. */
+    /**
+     * A cipher to encrypt new words; authenticate it with BiometricPrompt first. Throws
+     * [NoBiometricsException] on API 28 and 29 when no fingerprint is enrolled.
+     */
     fun wordsEncryptCipher(): Cipher {
         val key = key(WORDS_KEY) { wordsAuth() }
         return try {
@@ -144,7 +152,8 @@ class Vault(private val context: Context) {
     /**
      * A cipher on `sealctl.gate` for a strong-biometric-only prompt. The gate file holds 32
      * random bytes; decrypting it is the proof of a fresh match. When there is no gate yet the
-     * cipher encrypts a new one. Throws [KeysInvalidatedException] after an enrolment change.
+     * cipher encrypts a new one. Throws [KeysInvalidatedException] after an enrolment change and
+     * [NoBiometricsException] when a new gate key can't be made.
      */
     fun gate(): Gate {
         val existing = existingKey(GATE_KEY)
@@ -228,11 +237,18 @@ class Vault(private val context: Context) {
                 .generateKey()
         }
         return try {
-            build(strongBox = true)
-        } catch (e: StrongBoxUnavailableException) {
-            build(strongBox = false)
-        } catch (e: java.security.ProviderException) {
-            build(strongBox = false)
+            try {
+                build(strongBox = true)
+            } catch (e: java.security.ProviderException) {
+                // StrongBoxUnavailableException is one.
+                build(strongBox = false)
+            }
+        } catch (e: IllegalStateException) {
+            // Keystore: "At least one biometric must be enrolled to create keys requiring user
+            // authentication for every use", thrown as is or inside the next one.
+            throw NoBiometricsException(e)
+        } catch (e: java.security.InvalidAlgorithmParameterException) {
+            if (e.cause is IllegalStateException) throw NoBiometricsException(e) else throw e
         }
     }
 

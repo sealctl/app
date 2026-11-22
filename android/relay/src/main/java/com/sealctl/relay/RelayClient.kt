@@ -80,6 +80,12 @@ class RelayClient(
     /** Milliseconds left in the rate-limit window (0 when calls may go out). */
     fun rateLimitedForMs(): Long = (rateLimitedUntil - now()).coerceAtLeast(0)
 
+    /** A `429 rate_limited` answer (a call or the socket upgrade): no calls for `retryAfter` seconds (60 when absent). */
+    fun noteRateLimited(retryAfterSecs: Long?): Long {
+        rateLimitedUntil = now() + (retryAfterSecs ?: 60) * 1000
+        return rateLimitedUntil
+    }
+
     private fun unixTime(): Long = now() / 1000 + clockOffsetSecs
 
     /** One signed call. Throws [RelayException] on an error answer and [IOException] offline. */
@@ -98,10 +104,11 @@ class RelayClient(
             val (status, json) = result
             if (status in 200..299) return@withContext json
             when {
-                status == 429 -> {
-                    val retry = json["retryAfter"]?.jsonPrimitive?.longOrNull ?: 60
-                    rateLimitedUntil = now() + retry * 1000
-                    throw RateLimitedException(rateLimitedUntil, json["scope"]?.jsonPrimitive?.contentOrNull(), json)
+                // Only `rate_limited` (or a 429 without a relay body) opens the window; a cap such
+                // as `too_many_delayed` is an ordinary error with its own code.
+                status == 429 && (json.code() == "rate_limited" || json.code().startsWith("http_")) -> {
+                    val until = noteRateLimited(json["retryAfter"]?.jsonPrimitive?.longOrNull)
+                    throw RateLimitedException(until, json["scope"]?.jsonPrimitive?.contentOrNull(), json)
                 }
                 status == 409 && json.code() == "conflict" ->
                     throw ConflictException(json["rev"]?.jsonPrimitive?.longOrNull ?: 0, json)

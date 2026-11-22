@@ -47,6 +47,12 @@ public actor PhoneSocket {
                 try? await Task.sleep(for: .seconds(60))
                 continue
             }
+            // The relay said to slow down: no upgrade (and no catch-up after it) until then.
+            let limited = await client.rateLimitedForMs()
+            if limited > 0 {
+                try? await Task.sleep(for: .milliseconds(limited))
+                continue
+            }
             upgrades.append(now)
             if await connectOnce() { attempt = 0 }
             if Task.isCancelled { break }

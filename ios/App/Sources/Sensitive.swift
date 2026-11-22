@@ -1,0 +1,407 @@
+import DesignSystem
+import Engine
+import EngineKit
+import SealCore
+import SwiftUI
+import UIKit
+import Vault
+
+private enum SStep { case number, wrongNumber, plan, cardWords, done, delay }
+
+/// Levels 2 and 3 (SPEC.md 11.23): full screen, never a sheet, never from a notification
+/// button. Number match, the plan or objects, biometrics, the delay, the report.
+struct SensitiveView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(Router.self) private var router
+    let requestId: String
+    @SwiftUI.State private var step: SStep?
+    @SwiftUI.State private var error: String?
+    @SwiftUI.State private var cardChecked = false
+    @SwiftUI.State private var name = ""
+    @SwiftUI.State private var machineKey = ""
+
+    var body: some View {
+        let e = model.engine!
+        let w = e.waiting.first { $0.id == requestId }
+        let current = step ?? (w?.verdict.needsNumber == true ? .number : .plan)
+        Group {
+            if w == nil && current != .delay && current != .done && current != .wrongNumber {
+                Page(onBack: { router.pop() }) {
+                    Gap(24)
+                    TitleText(Texts.stoppedWaiting(name.isEmpty ? "The machine" : name))
+                } bottom: { SecondaryButton("Close") { router.pop() } }
+            } else {
+                switch current {
+                case .number: NumberMatchView(w: w!, name: name, onPick: { ok in
+                    if ok { step = .plan } else { Task { await e.wrongNumber(w!); step = .wrongNumber } }
+                }, onNone: { deny(w, e) })
+                case .wrongNumber:
+                    Page(onBack: { router.pop() }) {
+                        Gap(24)
+                        TitleText(Texts.wrongNumber(name))
+                        BodyText(Texts.wrongNumberBody)
+                        MutedText(Texts.wrongNumberWhat)
+                    } bottom: {
+                        SecondaryButton("What to do") {
+                            router.pop()
+                            router.push(.lostMachine(machineKey))
+                        }
+                        PrimaryButton("Close") { router.pop() }
+                    }
+                case .plan: PlanView(w: w!, name: name, error: error, onConfirm: { confirm(w!, e) }, onDeny: { deny(w, e) })
+                case .cardWords:
+                    CardWordsView(positions: 2, groups: 2, title: "Use your card", body: nil, onPassed: {
+                        cardChecked = true
+                        Task {
+                            if w?.verdict.needsBiometrics == true { await e.vault.resetGate() }
+                            step = .plan
+                        }
+                    }, onCancel: { step = .plan })
+                case .delay: DelayView(id: requestId, title: Texts.leaving(name))
+                case .done:
+                    Page(onBack: { router.pop() }) {
+                        Gap(24)
+                        TitleText("Confirmed")
+                        BodyText("\(name) goes ahead now. Its report shows here when it is done.")
+                    } bottom: { PrimaryButton("Done") { router.pop() } }
+                }
+            }
+        }
+        .onAppear {
+            // The name stays after the request leaves the waiting list (answered, refused).
+            if let w, name.isEmpty {
+                name = e.displayName(w.machine)
+                machineKey = w.machine.key
+            }
+        }
+    }
+
+    private func deny(_ w: Waiting?, _ e: AppEngine) {
+        Task {
+            if let w { await e.deny(w) }
+            haptic(false)
+            router.pop()
+        }
+    }
+
+    private func confirm(_ w: Waiting, _ e: AppEngine) {
+        Task {
+            let level3 = w.verdict.level >= 3
+            if w.verdict.needsCardWords && !cardChecked {
+                step = .cardWords
+                return
+            }
+            if w.verdict.needsBiometrics && !cardChecked {
+                switch await e.vault.gate(reason: "Confirm handing back \(name).") {
+                case .passed: break
+                case .cancelled: return
+                case .lockedOut:
+                    if level3 {
+                        await e.refuse(w, .noBiometrics)
+                        error = Texts.lockedOut(e.biometryName)
+                        return
+                    }
+                    step = .cardWords
+                    return
+                case .unavailable:
+                    if level3 {
+                        await e.refuse(w, .noBiometrics)
+                        error = Texts.noBiometrics(e.biometryName)
+                        return
+                    }
+                    step = .cardWords
+                    return
+                case .changed:
+                    step = .cardWords
+                    return
+                case .failed(let m):
+                    error = "Couldn't confirm (\(m))."
+                    return
+                }
+            }
+            let ok = await e.confirmSensitive(w)
+            if !ok {
+                error = Texts.stoppedWaiting(name)
+                return
+            }
+            haptic(true)
+            step = e.delaySecs(Int(w.verdict.delaySecs)) > 0 && w.verdict.kind == .unseal ? .delay : .done
+        }
+    }
+}
+
+/// "Which number does dev@mbp.example.com show?" Nothing on this screen comes from the machine.
+private struct NumberMatchView: View {
+    let w: Waiting
+    let name: String
+    let onPick: (Bool) -> Void
+    let onNone: () -> Void
+    @SwiftUI.State private var choices: [UInt32] = []
+
+    var body: some View {
+        Page(onBack: nil) {
+            Gap(24)
+            TitleText(Texts.whichNumber(name))
+            BodyText(Texts.lookAtTerminal)
+            HStack(spacing: 12) {
+                ForEach(choices, id: \.self) { n in
+                    Button { onPick(w.request.checkMatch(pick: n)) } label: {
+                        Text(verbatim: "\(n)").font(.system(size: 34, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(Palette.ink)
+                            .frame(maxWidth: .infinity, minHeight: 76)
+                            .background(Palette.surface, in: RoundedRectangle(cornerRadius: 12))
+                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Palette.border, lineWidth: 1.5))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Number \(n)")
+                    .accessibilityIdentifier("number \(n)")
+                }
+            }
+        } bottom: {
+            PlainButton(Texts.noNumber, action: onNone)
+        }
+        .onAppear { if choices.isEmpty { choices = w.request.matchChoices() } }
+    }
+}
+
+/// The plan or object list, the delay line and [Confirm with Face ID].
+private struct PlanView: View {
+    @Environment(AppModel.self) private var model
+    let w: Waiting
+    let name: String
+    let error: String?
+    let onConfirm: () -> Void
+    let onDeny: () -> Void
+
+    var body: some View {
+        let e = model.engine!
+        let level3 = w.verdict.level >= 3
+        Page(onBack: nil) {
+            Gap(12)
+            switch w.verdict.kind {
+            case .unseal:
+                let plan = w.plan
+                let all = plan?.all == true || level3
+                let first = plan?.items.first { $0.kind != "pairing" }
+                TitleText(all ? Texts.handBackAll(name) : "Hand back \(first?.kind ?? "") \(first?.name ?? "") from \(name)?")
+                if all { BodyText(Texts.handBackAllBody) }
+                ForEach(Array((plan?.items ?? []).enumerated()), id: \.offset) { i, it in
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(verbatim: "\(i + 1)").font(Fonts.mono(.subheadline)).foregroundStyle(Palette.muted).frame(width: 28, alignment: .leading)
+                        MonoText("\(planLabel(it.kind)) · \(it.name)")
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+            case .keys:
+                let s = w.request.ctx()?.subject
+                TitleText("Let sealctl seal take over \(s?.kind ?? "") \(s?.name ?? "") on \(name)?")
+                ForEach(Array(w.request.items().enumerated()), id: \.offset) { _, i in
+                    MonoText("\(i.purpose) · \(i.object?.path ?? i.id)")
+                }
+            case .rewrap:
+                TitleText("Move \(name) to new words?")
+                BodyText("\(w.request.items().count) objects. Each takes seconds.")
+            default:
+                TitleText(Texts.title(Texts.facts(w, machineName: name)))
+            }
+            if level3 {
+                Gap(4)
+                switch e.placeKind() {
+                case .trusted: BodyText("At \(e.currentPlaceName ?? "your trusted place"): \(Texts.atTrusted)")
+                case .noLocation: BodyText(Texts.awayNoLocation)
+                case .other: BodyText(Texts.away)
+                }
+            }
+            if w.verdict.needsCardWords {
+                MutedText("This phone has no \(e.biometryName) set up: two words from your card confirm it instead.")
+            }
+        } bottom: {
+            ErrorText(error)
+            PrimaryButton(Texts.confirm(e.biometryName), action: onConfirm)
+            PlainButton("Deny", action: onDeny)
+        }
+    }
+}
+
+/// The countdown of a delayed approval, with Cancel (11.23 Delay).
+struct DelayView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(Router.self) private var router
+    let id: String
+    let title: String
+
+    var body: some View {
+        let e = model.engine!
+        let d = e.local.delayed.first { $0.id == id }
+        Ticker { now in
+            Page(onBack: { router.pop() }) {
+                Gap(24)
+                TitleText(title)
+                switch d?.state {
+                case "waiting":
+                    Text(Texts.startsAt(Int64(d!.releaseAt), now: now)).font(.title3.weight(.semibold)).foregroundStyle(Palette.waiting)
+                        .accessibilityIdentifier("countdown")
+                    BodyText(Texts.delayBody)
+                case "cancelled":
+                    if d?.cancelledBy == nil || d?.cancelledBy == "phone" {
+                        BodyText(d?.what == "unseal_all" ? Texts.cancelledHere : "Cancelled. Nothing happened.")
+                    } else {
+                        BodyText(Texts.cancelledFrom(d!.cancelledBy.flatMap { e.machine($0) }.map(e.displayName) ?? "a computer"))
+                    }
+                case "released", "finished":
+                    BodyText(d?.what == "unseal_all" ? "The hour is over. The computer goes ahead." : "The hour is over.")
+                default:
+                    BodyText("This waited too long. Start again.")
+                }
+            } bottom: {
+                if d?.state == "waiting" {
+                    PrimaryButton("Cancel") { Task { await e.cancelDelayed(id) } }
+                } else {
+                    PrimaryButton("Close") { router.pop() }
+                }
+            }
+        }
+        .task(id: id) {
+            while !Task.isCancelled {
+                await e.refreshDelayed()
+                try? await Task.sleep(for: .seconds(15))
+            }
+        }
+    }
+}
+
+struct DelayedView: View {
+    @Environment(AppModel.self) private var model
+    let id: String
+
+    var body: some View {
+        let e = model.engine!
+        let d = e.local.delayed.first { $0.id == id }
+        let title: String = switch d?.what {
+        case "words": "Showing your words"
+        case "delete": "Deleting your relay data"
+        case "leave": "Leaving sealctl"
+        default: Texts.leaving(d?.machine.flatMap { e.machine($0) }.map(e.displayName) ?? "this computer")
+        }
+        DelayView(id: id, title: title)
+    }
+}
+
+/// The hand-back report (11.23 Report).
+struct ReportView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(Router.self) private var router
+    let id: String
+
+    var body: some View {
+        let r = model.engine!.state.reports.first { $0.id == id }
+        Page(onBack: { router.pop() }) {
+            if let r {
+                TitleText(r.what == "leave" ? "This phone left sealctl" : "\(r.machineName) handed everything back")
+                let done = r.items.filter { $0.state == "done" }.count
+                MutedText("\(done) of \(r.items.count) done · \(Texts.time(Int64(r.time)))")
+                ForEach(Array(r.items.enumerated()), id: \.offset) { _, i in
+                    let color = i.state == "failed" ? Palette.waiting : i.state == "skipped" ? Palette.muted : Palette.ink
+                    MonoText("\(planLabel(i.kind)) · \(i.name) → \(i.to)", style: .subheadline, color: color)
+                    if i.state == "failed" {
+                        Text("Run `sealctl unseal --resume` on that computer.").font(.footnote).foregroundStyle(Palette.waiting)
+                    }
+                }
+                if !r.run.isEmpty {
+                    BodyText("Run folder on that computer:")
+                    MonoText(r.run, style: .footnote)
+                }
+                BodyText("Your other computers were told.")
+            } else {
+                TitleText("Report")
+                MutedText("This report is not on this phone.")
+            }
+        } bottom: {
+            PrimaryButton("Done") { router.pop() }
+        }
+    }
+}
+
+/// Typed words from the card (level 2 fallback, Leave sealctl). The words are opened behind
+/// Face ID or the passcode and checked inside the core; nothing typed is kept.
+struct CardWordsView: View {
+    @Environment(AppModel.self) private var model
+    let positions: Int
+    let groups: Int
+    let title: String
+    let body_: String?
+    let onPassed: () -> Void
+    let onCancel: () -> Void
+    @SwiftUI.State private var opened = false
+    @SwiftUI.State private var pos: [Int] = []
+    @SwiftUI.State private var typed: [String] = []
+    @SwiftUI.State private var focus = 0
+    @SwiftUI.State private var prefix = ""
+    @SwiftUI.State private var message: String?
+
+    init(positions: Int, groups: Int, title: String, body: String?, onPassed: @escaping () -> Void, onCancel: @escaping () -> Void) {
+        self.positions = positions; self.groups = groups; self.title = title; self.body_ = body
+        self.onPassed = onPassed; self.onCancel = onCancel
+    }
+
+    private var intro: String {
+        body_ ?? "Have your card ready. Type \(positions == 2 ? "two" : "three") words from it."
+    }
+
+    var body: some View {
+        let words = model.engine!.words
+        Group {
+            if !opened {
+                Page(onBack: onCancel) {
+                    Gap(24)
+                    TitleText(title)
+                    BodyText(intro)
+                } bottom: {
+                    ErrorText(message)
+                    PrimaryButton("Use my card") {
+                        Task {
+                            switch await words.unlockForCheck() {
+                            case .passed:
+                                pos = words.positions(count: positions, groups: groups)
+                                typed = Array(repeating: "", count: positions)
+                                opened = true
+                            case .cancelled: break
+                            case .failed(let m): message = "Couldn't open the words (\(m))."
+                            }
+                        }
+                    }
+                }
+            } else {
+                Page(onBack: { words.release(); onCancel() }) {
+                    TitleText(title)
+                    BodyText(intro)
+                    ForEach(Array(pos.enumerated()), id: \.offset) { i, p in
+                        WordField(number: p, value: typed[i], focused: focus == i, error: false) {
+                            focus = i
+                            prefix = String(typed[i].prefix(4))
+                        }
+                    }
+                } bottom: {
+                    ErrorText(message)
+                    WordKeypad(prefix: prefix, onChange: { p in
+                        prefix = p
+                        typed[focus] = p
+                    }, onWord: { w in
+                        typed[focus] = w
+                        prefix = ""
+                        if focus < positions - 1 { focus += 1 }
+                    })
+                    PrimaryButton("Check", enabled: typed.allSatisfy { !$0.isEmpty }) {
+                        if let wrong = pos.indices.first(where: { !words.matches(pos[$0], typed[$0]) }) {
+                            message = "That's not word \(pos[wrong]) on these words."
+                        } else {
+                            words.release()
+                            onPassed()
+                        }
+                    }
+                }
+                .secureScreen()
+            }
+        }
+    }
+}

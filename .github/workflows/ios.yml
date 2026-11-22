@@ -131,7 +131,7 @@ jobs:
         env:
           SEALCTL_TEST_RELAY: ${{ env.FAKE_RELAY }}
         run: |
-          for p in SealCore Vault Relay Engine; do
+          for p in SealCore Vault Relay Engine DesignSystem; do
             echo "::group::$p"
             (cd "ios/Packages/$p" && swift test) || exit 1
             echo "::endgroup::"

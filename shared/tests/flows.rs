@@ -244,7 +244,7 @@ fn unseal_all_needs_number_and_delay() {
     let v = decide(req.clone(), ctx());
     assert_eq!(v.asking, Asking::InApp);
     assert!(v.needs_number && v.needs_biometrics && v.shows_plan);
-    assert_eq!(v.delay_secs, 3600);
+    assert_eq!(v.delay_secs, 7200);
 }
 
 fn base64url(b: &[u8]) -> String {

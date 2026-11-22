@@ -109,7 +109,7 @@ fun LeaveScreen(activity: MainActivity) {
                 Body(
                     if (pending != null) "The hour is over. Confirm again to finish."
                     else if (engine.delayLifted()) "At your trusted place: this happens as soon as you confirm."
-                    else "This starts one hour after you confirm. Your phone and your computers can cancel it until then.",
+                    else "This starts two hours after you confirm. Your phone and your computers can cancel it until then.",
                 )
             }
         }

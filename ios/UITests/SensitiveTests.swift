@@ -70,7 +70,7 @@ final class SensitiveTests: SealctlTestCase {
         see("sealctl unseal --all moves these to passwords of your own.")
         see("volume · safe")
         see("pairing · dev@mbp.example.com")
-        see("This starts one hour after you confirm.")
+        see("This starts two hours after you confirm.")
         tap("Confirm with Face ID")
         faceID(then: "Leaving sealctl on dev@mbp.example.com")
         see("Starts at")

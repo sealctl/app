@@ -10,8 +10,8 @@ use sealctl_core::{Decision, Place as PlaceKind, RefuseReason, Request, RequestK
 use crate::day::day_end;
 use crate::model::{DayRecord, Hold, PlanApprovalRecord, RememberedAnswer, TrustedPlace};
 
-/// One hour, the level 3 delay away from a trusted place.
-pub const DELAY_SECS: u32 = 3600;
+/// Two hours, the level 3 delay away from a trusted place.
+pub const DELAY_SECS: u32 = 7200;
 /// How long after `not_before` an approved plan hands out keys.
 pub const PLAN_WINDOW_MS: u64 = 30 * 60 * 1000;
 /// How long a wrong number holds a machine's sensitive requests.

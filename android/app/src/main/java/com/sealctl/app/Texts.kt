@@ -183,15 +183,15 @@ object Texts {
     fun handBackAll(name: String) = "Hand back everything on $name?"
     const val HAND_BACK_ALL_BODY = "sealctl unseal --all moves these to passwords of your own. Your files stay encrypted. Then the computer is unpaired."
     const val AT_TRUSTED = "this starts as soon as you confirm."
-    const val AWAY = "Away from your trusted places: this starts one hour after you confirm. Your phone and your computers can cancel it until then."
-    const val AWAY_NO_LOCATION = "This starts one hour after you confirm. Your phone and your computers can cancel it until then."
+    const val AWAY = "Away from your trusted places: this starts two hours after you confirm. Your phone and your computers can cancel it until then."
+    const val AWAY_NO_LOCATION = "This starts two hours after you confirm. Your phone and your computers can cancel it until then."
     const val CONFIRM = "Confirm with fingerprint or face"
     fun leaving(name: String) = "Leaving sealctl on $name"
     fun startsAt(at: Long, now: Long): String {
         val mins = ((at - now).coerceAtLeast(0) + 59_999) / 60_000
         return "Starts at ${time(at)} · $mins min left"
     }
-    const val DELAY_BODY = "You approved this away from your trusted places, so it waits an hour. Every paired computer has been told. If this wasn't you, cancel it."
+    const val DELAY_BODY = "You approved this away from your trusted places, so it waits two hours. Every paired computer has been told. If this wasn't you, cancel it."
     const val CANCELLED_HERE = "Cancelled. Nothing was handed back."
     fun cancelledFrom(name: String) = "Cancelled from $name."
     fun handsBackAt(name: String, at: Long) = "$name hands everything back at ${time(at)}."
@@ -226,7 +226,7 @@ object Texts {
 
     const val TEST_PUSH = "Test from the relay. Requests reach this phone."
     const val DELAYED_TITLE = "Approved on your phone"
-    const val DELAYED_BODY = "Something sensitive was approved on your phone and starts in an hour. Open sealctl to see it or cancel it."
+    const val DELAYED_BODY = "Something sensitive was approved on your phone and starts in two hours. Open sealctl to see it or cancel it."
     const val CANCELLED_TITLE = "Cancelled"
     const val CANCELLED_BODY = "A pending sensitive action was cancelled."
     const val PLACE_LEARNED = "Trust this place? You opened your machines here on 3 mornings."

@@ -321,7 +321,7 @@ extension AppEngine {
     }
 
     /// After biometrics: answers a level 2 or 3 request. `unseal` signs the plan, with the
-    /// not-before time an hour on away from a trusted place.
+    /// not-before time two hours on away from a trusted place.
     public func confirmSensitive(_ w: Waiting) async -> Bool {
         let place = placeKind()
         switch w.verdict.kind {
@@ -426,7 +426,7 @@ extension AppEngine {
     /// delayed record the relay keeps for the hour.
     public func startPhoneAction(_ what: String) async throws -> DelayedAction? {
         if delayLifted() { return nil }
-        let delay = delaySecs(3600)
+        let delay = delaySecs(7200)
         let id = randomId()
         let d = try await relay.addDelayed(id: id, delay: delay)
         let action = DelayedAction(id: id, what: what, machine: nil, releaseAt: UInt64(d.releaseAt), expires: UInt64(d.expires),

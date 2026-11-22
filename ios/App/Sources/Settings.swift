@@ -1,6 +1,7 @@
 import DesignSystem
 import Engine
 import EngineKit
+import Places
 import Relay
 import SealCore
 import SwiftUI
@@ -60,10 +61,13 @@ struct SettingsTab: View {
                 Text(e.banners.relayDown ? " · Not answering" : " · Connected").font(.subheadline).foregroundStyle(Palette.muted)
             }
             .accessibilityElement(children: .combine)
-            SecondaryButton("Delete my relay data") { router.push(.deleteRelay) }
+            SecondaryButton("Delete relay data and unpair") { router.push(.deleteRelay) }
+            MutedText("Your machines are unpaired and the relay forgets them. Your words stay on this phone.")
             SectionLabel("This phone")
-            SecondaryButton("Erase sealctl from this phone") { router.push(.erase) }
-            SecondaryButton("Leave sealctl") { router.push(.leave) }
+            SecondaryButton("Remove from this phone") { router.push(.erase) }
+            MutedText("Your words, machines and history leave this phone. Your computers stay sealed; your card restores everything.")
+            SecondaryButton("Unseal all machines and leave") { router.push(.leave) }
+            MutedText("Every computer gets its passwords back, then sealctl forgets you.")
             SectionLabel("About")
             NavRow("Version \(BuildConfig.version) (\(BuildConfig.build)) · core \(coreVersion()) · protocol \(protocolVersion())") {
                 router.push(.about)
@@ -170,10 +174,14 @@ struct PlacesView: View {
             } else if places.isEmpty {
                 MutedText("No places yet. After three mornings of approving at the same spot, sealctl asks whether to trust it.")
             }
+            if model.places.hasForeground && e.currentPlace == nil && e.placeOffer == nil { TrustHereView() }
             ForEach(places, id: \.id) { p in
                 SurfaceCard {
                     Text(p.name).fontWeight(.semibold).foregroundStyle(Palette.ink)
                     MutedText("trusted since \(Texts.isoDate(Int64(p.created)))" + (e.currentPlace == p.id ? " · You're here" : ""))
+                    if p.manual && Int64(p.created) + 86_400_000 > nowMs() {
+                        MutedText("Skips the one-hour wait from \(Texts.time(Int64(p.created) + 86_400_000)) tomorrow")
+                    }
                     if removing == p.id {
                         BodyText("Remove \(p.name)? Machines opened here stay Open until their allowance ends.")
                         HStack {
@@ -194,9 +202,65 @@ struct PlacesView: View {
                     }
                 }
             }
-            MutedText("Places are learned: after three mornings of approving at the same spot, sealctl asks whether to trust it.")
+            MutedText("Places are learned: after three mornings of approving at the same spot, sealctl asks whether to trust it. You can also trust where you are now.")
         }
         .onAppear { name = "Place \(places.count + 1)" }
+    }
+}
+
+/// "Trust where I am now": a place added by hand (11.9), with biometrics. Its comforts start
+/// at once; it lifts the level 3 delay only after 24 hours.
+struct TrustHereView: View {
+    @Environment(AppModel.self) private var model
+    @SwiftUI.State private var fix: Fix?
+    @SwiftUI.State private var locating = false
+    @SwiftUI.State private var name = "Home"
+    @SwiftUI.State private var error: String?
+
+    var body: some View {
+        let e = model.engine!
+        if let f = fix {
+            SurfaceCard {
+                TitleText("Trust this place?")
+                BodyText("From now on here: reopening your machines needs no tap while your phone is unlocked and near them, sessions can stay open up to 4 hours, and leaving locks the machines you opened here.")
+                BodyText("Showing your words and leaving sealctl skip the one-hour wait here from \(Texts.time(nowMs() + 86_400_000)) tomorrow, so someone holding your unlocked phone can't trust a place to skip it.")
+                MutedText("Accurate to \(Int(f.accuracy)) m. The location stays on this phone.")
+                TextField("Name", text: $name).textFieldStyle(.roundedBorder)
+                ErrorText(error)
+                PrimaryButton("Trust") {
+                    Task {
+                        guard await e.vault.gate(reason: "Trust this place") == .passed else {
+                            error = "Couldn't confirm it's you."
+                            return
+                        }
+                        let n = name.trimmingCharacters(in: .whitespaces)
+                        await e.apply(.addPlace(place: TrustedPlace(id: randomId(), name: n.isEmpty ? "Place" : String(n.prefix(40)),
+                                                                    lat: f.lat, lon: f.lon, radius: 150, created: UInt64(nowMs()),
+                                                                    updated: 0, deleted: false, manual: true)), upload: true)
+                        await e.monitorPlaces()
+                        fix = nil
+                        e.show("Trusted \(n.isEmpty ? "Place" : n).")
+                    }
+                }
+            }
+        } else {
+            SecondaryButton(locating ? "Finding where you are…" : "Trust where I am now", enabled: !locating) {
+                locating = true
+                error = nil
+                Task {
+                    let got = await model.places.sample()
+                    locating = false
+                    if let got, got.accuracy <= 100 {
+                        fix = got
+                    } else if let got {
+                        error = "Your location is only accurate to \(Int(got.accuracy)) m. Try again in a moment, near a window."
+                    } else {
+                        error = "Couldn't get your location. Try again in a moment."
+                    }
+                }
+            }
+            ErrorText(error)
+        }
     }
 }
 
@@ -510,7 +574,7 @@ struct EraseView: View {
         let e = model.engine!
         Page(onBack: { router.pop() }) {
             Gap(24)
-            TitleText("Erase sealctl from this phone?")
+            TitleText("Remove sealctl from this phone?")
             BodyText("This removes your words, machines, places and history from this phone. Your machines stay paired; your card restores everything on any phone.")
             Toggle(isOn: $alsoBackup) {
                 Text("Also remove the copy in iCloud Keychain").foregroundStyle(Palette.ink)
@@ -524,7 +588,7 @@ struct EraseView: View {
             }
             PrimaryButton("Erase") {
                 Task {
-                    guard await e.vault.authenticateOwner(reason: "Erase sealctl from this phone.") == .passed else { return }
+                    guard await e.vault.authenticateOwner(reason: "Remove sealctl from this phone.") == .passed else { return }
                     router.reset()
                     await e.erase(alsoBackup: alsoBackup)
                 }

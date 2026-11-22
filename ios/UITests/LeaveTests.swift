@@ -14,7 +14,7 @@ final class LeaveTests: SealctlTestCase {
         pairFakeMachine("m2", name: "ci@build.example.com", hint: "serial-2")
         tab("Settings")
         app.swipeUp()
-        tap("Leave sealctl")
+        tap("Unseal all machines and leave")
         see("sealctl hands everything back to you before you go.")
         tap("Start")
         faceID(then: "Hand back each computer")

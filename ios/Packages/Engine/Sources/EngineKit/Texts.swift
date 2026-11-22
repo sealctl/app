@@ -99,7 +99,7 @@ public enum Texts {
         switch f.kind {
         case .rewrap: return ("Move \(name) to new words?", "Open sealctl to confirm with \(biometry).")
         case .keys where f.level >= 2: return ("sealctl seal on \(name)", "Open sealctl to see what it takes over.")
-        case .unseal where f.level >= 3: return ("Leave sealctl on \(name)?", "Open sealctl to confirm. You'll need the number on its screen.")
+        case .unseal where f.level >= 3: return ("Unseal everything on \(name)?", "Open sealctl to confirm. You'll need the number on its screen.")
         case .unseal: return ("Hand back from \(name)?", "Open sealctl to see what.")
         case .oldWords: return ("\(name) has an object sealed with old words.", "Open sealctl to move it.")
         case .unknown: return (title(f), "")
@@ -241,6 +241,14 @@ public enum Texts {
     public static let cancelledHere = "Cancelled. Nothing was handed back."
     public static func cancelledFrom(_ name: String) -> String { "Cancelled from \(name)." }
     public static func handsBackAt(_ name: String, at: Int64) -> String { "\(name) hands everything back at \(time(at))." }
+    /// The banner of a waiting level 3 action, by its kind.
+    public static func delayedAt(_ what: String, name: String, at: Int64) -> String {
+        switch what {
+        case "words": return "Your words can be shown at \(time(at))."
+        case "delete": return "Your relay data is deleted at \(time(at))."
+        default: return handsBackAt(name, at: at)
+        }
+    }
     public static func handedBack(_ name: String, done: Int, failed: Int) -> String { "\(name) handed back \(done) objects. \(failed) failed." }
 
     // MARK: pairing and errors (11.5, 11.20)

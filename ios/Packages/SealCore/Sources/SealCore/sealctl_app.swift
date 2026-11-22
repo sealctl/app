@@ -6547,6 +6547,24 @@ public func cardWordMatches(words: Words, position: UInt32, typed: String) -> Bo
 })
 }
 /**
+ * Makes a string that came from a machine safe to show on the approval card, the plan and in
+ * notifications (SPEC.md 11.7). Line breaks, tabs and other spacing controls become
+ * one space each; every other control character, bidi control and invisible format character
+ * becomes U+FFFD, so an attempt to reorder or hide text shows instead of working. With
+ * `max_chars` above zero, a longer result is cut in the middle with "…" to `max_chars`
+ * characters, keeping the start and the end (a path's file name stays visible). Zero keeps the
+ * whole text (the card shows it in full on tap).
+ */
+public func displayText(text: String, maxChars: UInt32) -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_func_display_text(
+        FfiConverterString.lower(text),
+        FfiConverterUInt32.lower(maxChars),uniffiCallStatus
+    )
+})
+}
+/**
  * Random 22-character id (16 bytes of base64url-ish text from the alphabet below).
  */
 public func randomId() -> String  {
@@ -6751,6 +6769,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_func_card_word_matches() != 37446) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sealctl_app_checksum_func_display_text() != 5202) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_func_random_id() != 2785) {

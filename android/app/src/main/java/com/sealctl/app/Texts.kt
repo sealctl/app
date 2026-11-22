@@ -2,6 +2,7 @@ package com.sealctl.app
 
 import com.sealctl.core.RequestKind
 import com.sealctl.core.app.ReplyOption
+import com.sealctl.core.app.displayText
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -31,21 +32,35 @@ object Texts {
         val all: Boolean,
     )
 
-    fun facts(w: Waiting, machineName: String): Facts {
+    /** Longest machine-controlled values on the card and in notifications; tap shows them whole. */
+    const val MAX_NAME = 60
+    const val MAX_AGENT = 40
+    const val MAX_LINE = 80
+
+    /**
+     * A machine-controlled string made safe to show (SPEC.md 11.7): no bidi or control
+     * characters, no line breaks, and, when `short`, cut in the middle to `max` characters.
+     */
+    fun shown(text: String, max: Int, short: Boolean = true): String =
+        displayText(text, if (short) max.toUInt() else 0u)
+
+    /** The facts with every machine-controlled value sanitised; `short` also caps their length. */
+    fun facts(w: Waiting, machineName: String, short: Boolean = true): Facts {
         val ctx = w.request.ctx()
         val plan = w.plan
+        fun s(text: String?, max: Int) = text?.takeIf { it.isNotEmpty() }?.let { shown(it, max, short) }
         return Facts(
             kind = w.verdict.kind,
             level = w.verdict.level.toInt(),
-            subjectKind = ctx?.subject?.kind,
-            subjectName = ctx?.subject?.name?.takeIf { it.isNotEmpty() },
-            names = ctx?.names ?: emptyList(),
-            agent = ctx?.agent,
-            command = ctx?.command?.takeIf { it.isNotEmpty() },
-            cwd = ctx?.cwd?.takeIf { it.isNotEmpty() },
-            repoName = ctx?.repo?.name?.takeIf { it.isNotEmpty() },
+            subjectKind = ctx?.subject?.kind?.let { shown(it, MAX_AGENT, short) },
+            subjectName = s(ctx?.subject?.name, MAX_NAME),
+            names = ctx?.names?.mapNotNull { s(it, MAX_NAME) } ?: emptyList(),
+            agent = s(ctx?.agent, MAX_AGENT),
+            command = s(ctx?.command, MAX_LINE),
+            cwd = s(ctx?.cwd, MAX_LINE),
+            repoName = s(ctx?.repo?.name, MAX_NAME),
             machineName = machineName,
-            firstItem = w.request.items().firstOrNull()?.let { it.`object`?.path?.takeIf { p -> p.isNotEmpty() } ?: it.id },
+            firstItem = w.request.items().firstOrNull()?.let { s(it.`object`?.path, MAX_LINE) ?: s(it.id, MAX_LINE) },
             all = plan?.all ?: false,
         )
     }
@@ -92,7 +107,7 @@ object Texts {
     /** Notification title and body (11.7 "Notification text"). */
     fun notification(w: Waiting, machineName: String): Pair<String, String> {
         val f = facts(w, machineName)
-        val cmdIn = listOfNotNull(f.command?.let(::cut), f.cwd?.let { "in $it" }).joinToString(" ")
+        val cmdIn = listOfNotNull(f.command, f.cwd?.let { "in $it" }).joinToString(" ")
         return when {
             f.kind == RequestKind.REWRAP -> "Move $machineName to new words?" to "Open sealctl to confirm with your fingerprint."
             f.kind == RequestKind.KEYS && f.level >= 2 -> "sealctl seal on $machineName" to "Open sealctl to see what it takes over."
@@ -100,22 +115,18 @@ object Texts {
             f.kind == RequestKind.UNSEAL -> "Hand back from $machineName?" to "Open sealctl to see what."
             f.kind == RequestKind.OLD_WORDS -> "$machineName has an object sealed with old words." to "Open sealctl to move it."
             f.kind == RequestKind.UNKNOWN -> title(f) to ""
-            f.kind == RequestKind.AGENT -> title(f) to listOfNotNull(f.repoName?.let { "First use in $it" }, f.command?.let(::cut), machineName).joinToString(" · ")
+            f.kind == RequestKind.AGENT -> title(f) to listOfNotNull(f.repoName?.let { "First use in $it" }, f.command, machineName).joinToString(" · ")
             f.kind == RequestKind.OWN -> title(f) to listOfNotNull(cmdIn.ifEmpty { null }, machineName).joinToString(" · ")
             f.kind == RequestKind.KEYS -> title(f) to machineName
             else -> title(f) to listOfNotNull(cmdIn.ifEmpty { null }, machineName, f.agent).joinToString(" · ")
         }
     }
 
-    /** "For" is cut in the middle after 80 characters. */
-    fun cut(command: String): String =
-        if (command.length <= 80) command else command.take(39) + "…" + command.takeLast(40)
-
     /** The note under the facts (11.7 "By kind"). */
     fun note(w: Waiting): String? {
         val ctx = w.request.ctx()
-        val agent = ctx?.agent ?: w.request.uses().firstOrNull()?.agent
-        val repo = ctx?.repo?.name ?: w.request.uses().firstOrNull()?.repository?.substringAfterLast('/')
+        val agent = (ctx?.agent ?: w.request.uses().firstOrNull()?.agent)?.let { shown(it, MAX_AGENT) }
+        val repo = (ctx?.repo?.name ?: w.request.uses().firstOrNull()?.repository?.substringAfterLast('/'))?.let { shown(it, MAX_NAME) }
         return when (w.verdict.kind) {
             RequestKind.OPEN -> if (w.verdict.agentFirstUse && agent != null) "First use of this key by $agent in $repo. Allow is remembered." else null
             RequestKind.AGENT -> "First use of this key by $agent in $repo. Allow is remembered; remove it in Answers."
@@ -145,8 +156,8 @@ object Texts {
 
     private fun remembered(w: Waiting): String {
         val u = w.request.uses().firstOrNull()
-        val repo = w.request.ctx()?.repo?.name ?: u?.repository?.substringAfterLast('/') ?: ""
-        return "Remembered for ${u?.agent ?: "the agent"} in $repo"
+        val repo = shown(w.request.ctx()?.repo?.name ?: u?.repository?.substringAfterLast('/') ?: "", MAX_NAME)
+        return "Remembered for ${u?.agent?.let { shown(it, MAX_AGENT) } ?: "the agent"} in $repo"
     }
 
     fun waitingFor(seconds: Long) = "WAITING · %d:%02d".format(seconds / 60, seconds % 60)

@@ -7,6 +7,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use sealctl_core::wire::{MachineStatus, RequestItem};
 use sealctl_core::{Request, RequestKind};
 
+use crate::cards::display_text;
 use crate::codec::{encode_state, shrink_to_fit};
 use crate::day::{day_end, local_month};
 use crate::error::{AppError, Result};
@@ -854,17 +855,22 @@ fn insert_usage(c: &Connection, e: &UsageEntry) -> Result<()> {
     Ok(())
 }
 
-/// A machine's display name: nickname, or `user@host` (and the tag when shown).
+/// The longest machine name shown; the tag after it always shows in full.
+pub const NAME_DISPLAY_MAX: u32 = 64;
+
+/// A machine's display name: nickname, or `user@host` (and the tag when shown). The name
+/// comes from the machine, so it passes [`display_text`] (SPEC.md 11.7).
 pub fn display_name(m: &Machine) -> String {
     if let Some(n) = m.nickname.as_ref().filter(|n| !n.is_empty()) {
-        return n.clone();
+        return display_text(n.clone(), NAME_DISPLAY_MAX);
     }
+    let name = display_text(m.name.clone(), NAME_DISPLAY_MAX);
     if m.tag_shown {
         if let Ok(tag) = sealctl_core::machine_tag(m.key.clone()) {
-            return format!("{} #{}", m.name, tag);
+            return format!("{name} #{tag}");
         }
     }
-    m.name.clone()
+    name
 }
 
 /// [`display_name`] for the apps.
@@ -1044,6 +1050,23 @@ mod tests {
             name: name.into(),
             ..Machine::default()
         }
+    }
+
+    #[test]
+    fn display_names_are_sanitised() {
+        let mut m = machine(
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "dev@\u{202E}pbm\nroot",
+        );
+        assert_eq!(display_name(&m), "dev@\u{FFFD}pbm root");
+        m.name = "n".repeat(200);
+        assert_eq!(display_name(&m).chars().count(), NAME_DISPLAY_MAX as usize);
+        m.tag_shown = true;
+        let shown = display_name(&m);
+        let tag = sealctl_core::machine_tag(m.key.clone()).unwrap();
+        assert!(shown.ends_with(&format!(" #{tag}")), "{shown}");
+        m.nickname = Some("desk\u{2066}top".into());
+        assert_eq!(display_name(&m), "desk\u{FFFD}top");
     }
 
     #[test]

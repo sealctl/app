@@ -93,7 +93,7 @@ fun PairingScreen(activity: MainActivity, route: Route.Pair) {
         if (Biometric.availability(activity) != com.sealctl.core.app.Biometrics.AVAILABLE) {
             step = PairStep.CardWords(offer, replaces); return
         }
-        when (val g = biometricGate(activity, "Confirm pairing ${offer.name()}.")) {
+        when (val g = biometricGate(activity, "Confirm pairing ${Texts.shown(offer.name(), Texts.MAX_NAME)}.")) {
             GateResult.Passed -> register(offer, replaces)
             GateResult.Cancelled -> {}
             GateResult.Changed, GateResult.LockedOut -> step = PairStep.CardWords(offer, replaces)
@@ -111,7 +111,7 @@ fun PairingScreen(activity: MainActivity, route: Route.Pair) {
         }) {
             Gap(24)
             Title("Pair this machine?")
-            Mono(s.offer.name(), size = 18, weight = FontWeight.SemiBold)
+            Mono(Texts.shown(s.offer.name(), 0), size = 18, weight = FontWeight.SemiBold)
             Row3(s.offer)
             Body("It will be able to ask this phone for keys. You still approve every request.")
         }
@@ -131,10 +131,10 @@ fun PairingScreen(activity: MainActivity, route: Route.Pair) {
                 Gap(24)
                 if (sameHint) {
                     Title("Already paired")
-                    Body("${s.offer.name()} is already paired (same hardware, last seen ${Texts.ago(s.existing.lastSeen?.toLong())}). Replace it?")
+                    Body("${Texts.shown(s.offer.name(), Texts.MAX_NAME)} is already paired (same hardware, last seen ${Texts.ago(s.existing.lastSeen?.toLong())}). Replace it?")
                 } else {
                     Title("Same machine?")
-                    Body("Another machine is already called ${s.offer.name()} (${s.existing.model ?: s.existing.os}, paired ${Texts.isoDate(s.existing.pairedAt.toLong())}). Same machine?")
+                    Body("Another machine is already called ${Texts.shown(s.offer.name(), Texts.MAX_NAME)} (${s.existing.model ?: s.existing.os}, paired ${Texts.isoDate(s.existing.pairedAt.toLong())}). Same machine?")
                 }
             }
         }

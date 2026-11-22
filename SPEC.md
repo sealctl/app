@@ -939,7 +939,9 @@ At Desk, this answers by itself.       (muted, only when the phone is inside a t
 | No single subject (session open with `sealctl open`) | "Open dev@mbp.example.com?" |
 | `keys` for a new object | "Allow volume clients?" (or the backup or key name) |
 
-**Facts:** "For" is the command, cut in the middle with an ellipsis after 80 characters (the full command on long press). "In" is the working directory with `~` for home. "From" is the machine's display name (nickname, or `user@host` and the tag when shown) and the agent: `claude`, `codex`, `gemini`, `qwen`, `copilot`, `cursor`, or nothing when a person typed the command. Facts the request lacks are left out.
+**Facts:** "For" is the command, cut in the middle with an ellipsis after 80 characters (the full command on tap). "In" is the working directory with `~` for home. "From" is the machine's display name (nickname, or `user@host` and the tag when shown) and the agent: `claude`, `codex`, `gemini`, `qwen`, `copilot`, `cursor`, or nothing when a person typed the command. Facts the request lacks are left out.
+
+**Text from the machine.** Every string the machine controls (subject, names, agent, command, working directory, repository, object paths, plan items, report lines, the machine's name) passes `display_text` in the shared core before it is shown on the card, the plan, a report or a notification: line breaks and tabs become spaces; other control characters, bidi embeddings, overrides, isolates and marks (U+202A to U+202E, U+2066 to U+2069, U+200E, U+200F, U+061C) and invisible format characters become U+FFFD, so an attempt to reorder or hide text shows instead of working. The subject, names and repository are cut in the middle after 60 characters, the agent after 40, the command, working directory and paths after 80, the machine's name after 64 (its tag always shows). A tap on the title or the facts shows the values in full, still sanitised.
 
 **By kind:**
 

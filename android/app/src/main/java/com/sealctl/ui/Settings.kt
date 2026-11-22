@@ -173,11 +173,11 @@ fun AnswersScreen() {
         if (answers.isEmpty()) Muted("No answers yet. When you tap Allow on an agent's first use of a key, it's remembered here.")
         for (a in answers) SurfaceCard {
             Text(buildAnnotatedString {
-                withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(Texts.agentName(a.agent)) }
+                withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(Texts.shown(Texts.agentName(a.agent), Texts.MAX_AGENT)) }
                 append(" may use ")
-                withStyle(SpanStyle(fontFamily = FontFamily.Monospace)) { append(a.keyName) }
+                withStyle(SpanStyle(fontFamily = FontFamily.Monospace)) { append(Texts.shown(a.keyName, Texts.MAX_NAME)) }
                 append(" in ")
-                withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(a.repoName.ifEmpty { a.repoId }) }
+                withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(Texts.shown(a.repoName.ifEmpty { a.repoId }, Texts.MAX_NAME)) }
             }, color = Sealctl.colors.ink)
             val left = answerDaysLeft(a.lastUsed, System.currentTimeMillis().toULong())
             if (left <= 10) Text("Unused for ${90 - left} days. Removed in $left days.", color = Sealctl.colors.waiting)
@@ -326,7 +326,7 @@ fun MachineDetailScreen(activity: MainActivity, key: String) {
     val v = MachineView.of(m, engine, now)
     val tag = remember(key) { runCatching { com.sealctl.core.machineTag(key) }.getOrDefault("") }
     Page(null) {
-        Row(verticalAlignment = Alignment.CenterVertically) { Mono(m.name, size = 18, weight = FontWeight.SemiBold); Text("  "); Mono("#$tag", color = Sealctl.colors.muted) }
+        Row(verticalAlignment = Alignment.CenterVertically) { Mono(Texts.shown(m.name, 0), size = 18, weight = FontWeight.SemiBold); Text("  "); Mono("#$tag", color = Sealctl.colors.muted) }
         StateLabel(v.state, v.row)
         if (v.detail.isNotEmpty()) Body(v.detail)
         val hold = local.holds.firstOrNull { it.machine == key && it.until.toLong() > now }
@@ -367,7 +367,7 @@ fun LostMachineScreen(key: String) {
         .filter { it.time.toLong() > since && it.key.isNotEmpty() }.groupBy { it.key }.map { (k, l) -> k to l.maxOf { it.time.toLong() } }
     val held = state.inventory.filter { it.machine == key && !it.deleted && it.purpose in setOf("volume", "backup") }
     Page(null, bottom = { PrimaryButton("Done", { Ui.pop() }) }) {
-        Title("${m?.name ?: "This machine"} was lost or stolen")
+        Title("${m?.name?.let { Texts.shown(it, Texts.MAX_NAME) } ?: "This machine"} was lost or stolen")
         Row(verticalAlignment = Alignment.CenterVertically) {
             Body("1. Unpair it now. ", Modifier.weight(1f))
             if (m != null && !m.deleted) TextButton({ scope.launch { engine.unpair(m) } }) { Text("Unpair") } else Muted("Unpaired")

@@ -1,5 +1,6 @@
 package com.sealctl.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -71,7 +72,11 @@ fun ApprovalCard(w: Waiting, more: Int) {
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(w.relay.id) { while (true) { now = System.currentTimeMillis(); delay(1000) } }
     val name = engine.displayName(w.machine)
-    val f = Texts.facts(w, name)
+    // Machine-controlled values are sanitised and cut; a tap on the title or facts shows them whole.
+    var whole by remember(w.relay.id) { mutableStateOf(false) }
+    val short = Texts.facts(w, name)
+    val full = Texts.facts(w, name, short = false)
+    val f = if (whole) full else short
     val local by engine.local.collectAsState()
     Column(
         Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).navigationBarsPadding(),
@@ -94,11 +99,14 @@ fun ApprovalCard(w: Waiting, more: Int) {
                 } else append(title)
             },
             fontSize = 24.sp, fontWeight = FontWeight.SemiBold, color = Sealctl.colors.ink,
-            modifier = Modifier.semantics { contentDescription = title },
+            modifier = Modifier.clickable(enabled = short != full) { whole = !whole }.semantics { contentDescription = title },
         )
-        f.command?.let { Fact("For", Texts.cut(it)) }
-        f.cwd?.let { Fact("In", it) }
-        Fact("From", listOfNotNull(name, f.agent).joinToString(" · "))
+        Column(Modifier.clickable(enabled = short != full) { whole = !whole }, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            f.command?.let { Fact("For", it) }
+            f.cwd?.let { Fact("In", it) }
+            Fact("From", listOfNotNull(name, f.agent).joinToString(" · "))
+            if (short != full) Muted(if (whole) "Tap to shorten." else "Cut to fit. Tap to show in full.")
+        }
         Texts.note(w)?.let { Muted(it) }
         if (w.verdict.agentFirstUse && !local.agentNoteShown) Muted(Texts.AGENT_NOTE)
         if (w.expired) {

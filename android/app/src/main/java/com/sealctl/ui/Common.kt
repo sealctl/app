@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +28,11 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -38,7 +44,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import com.sealctl.app.Texts
 import com.sealctl.app.Ui
+import com.sealctl.designsystem.Mono
 import com.sealctl.designsystem.Sealctl
 
 /** A screen with a title bar and a back arrow. */
@@ -66,7 +74,19 @@ fun Page(title: String?, onBack: (() -> Unit)? = { Ui.pop() }, bottom: (@Composa
     }
 }
 
-/** Marks a screen that shows words: FLAG_SECURE while it is up (SPEC.md 11.21). */
+/**
+ * A value that came from a machine (a plan item, a path, a report line): sanitised and cut to
+ * `max` characters; a tap shows it whole (SPEC.md 11.7).
+ */
+@Composable
+fun MachineMono(text: String, max: Int = Texts.MAX_LINE, size: Int = 15, color: Color = Sealctl.colors.ink) {
+    var whole by remember(text) { mutableStateOf(false) }
+    val short = Texts.shown(text, max)
+    val full = Texts.shown(text, max, short = false)
+    Mono(if (whole) full else short, Modifier.clickable(enabled = short != full) { whole = !whole }, size = size, color = color)
+}
+
+/** Marks a screen that shows words or an approval: FLAG_SECURE while it is up (SPEC.md 11.21). */
 @Composable
 fun SecureScreen() {
     DisposableEffect(Unit) {

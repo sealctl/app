@@ -143,7 +143,7 @@ fun LeaveScreen(activity: MainActivity) {
                                 items = listOf(
                                     ReportItem("relay", "Relay data", "deleted", "done"),
                                     ReportItem("backup", "Words backup", "removed", "done"),
-                                ) + local.leaveSkipped.map { ReportItem("computer", engine.machine(it)?.name ?: it.take(8), "skipped", "skipped") },
+                                ) + local.leaveSkipped.map { ReportItem("computer", engine.machine(it)?.name?.let { n -> Texts.shown(n, Texts.MAX_NAME) } ?: it.take(8), "skipped", "skipped") },
                                 run = "", time = System.currentTimeMillis().toULong(), updated = 0u,
                             )))
                             go(6)
@@ -162,7 +162,7 @@ fun LeaveScreen(activity: MainActivity) {
             Title("What happened")
             val reports = engine.state.collectAsState().value.reports.filter { it.what == "unseal" }
             for (r in reports) Body("${r.machineName}: handed back · ${r.items.count { it.state == "done" }} objects")
-            for (k in local.leaveSkipped) Body("${engine.machine(k)?.name ?: k.take(8)}: skipped")
+            for (k in local.leaveSkipped) Body("${engine.machine(k)?.name?.let { Texts.shown(it, Texts.MAX_NAME) } ?: k.take(8)}: skipped")
             Body("Relay data deleted.")
             Body("Words backup removed.")
         }
@@ -216,12 +216,12 @@ private fun EachComputer(onContinue: () -> Unit, onSkip: (String) -> Unit, onBac
         Mono("sealctl unseal --all", size = 18)
         Body("It shows a plan and asks before it changes anything. When it asks this phone, tap Allow.")
         for ((m, status, _) in rows) Row(verticalAlignment = Alignment.CenterVertically) {
-            Mono(m.name, size = 14); Text(" · $status", color = Sealctl.colors.ink2)
+            Mono(Texts.shown(m.name, Texts.MAX_NAME), size = 14); Text(" · $status", color = Sealctl.colors.ink2)
         }
         if (rows.isEmpty()) Muted("No computers are paired.")
         val s = skipping
         if (s != null) {
-            Body("Skip ${engine.machine(s)?.name ?: ""}? Use it when the computer is lost or already wiped. Anything it holds then opens only with your card.")
+            Body("Skip ${engine.machine(s)?.name?.let { Texts.shown(it, Texts.MAX_NAME) } ?: ""}? Use it when the computer is lost or already wiped. Anything it holds then opens only with your card.")
             Row { TextButton({ onSkip(s); skipping = null }) { Text("Skip") }; TextButton({ skipping = null }) { Text("Cancel") } }
         }
     }

@@ -36,7 +36,6 @@ import com.sealctl.core.Place as PlaceKind
 import com.sealctl.core.RefuseReason
 import com.sealctl.core.RequestKind
 import com.sealctl.designsystem.Body
-import com.sealctl.designsystem.Mono
 import com.sealctl.designsystem.Muted
 import com.sealctl.designsystem.PlainButton
 import com.sealctl.designsystem.PrimaryButton
@@ -86,6 +85,8 @@ fun SensitiveScreen(activity: MainActivity, requestId: String) {
     var step by remember(requestId) { mutableStateOf(if (w?.verdict?.needsNumber == true) SStep.Number else SStep.Plan) }
     var error by remember { mutableStateOf<String?>(null) }
     var cardChecked by remember { mutableStateOf(false) }
+    // The number match and the plan are kept out of screenshots and recents (SPEC.md 11.21).
+    SecureScreen()
     if (w == null && step != SStep.Delay && step != SStep.Done && step != SStep.WrongNumber) {
         Page(null) { Title(Texts.stoppedWaiting("The machine")); SecondaryButton("Close", { Ui.pop() }) }
         return
@@ -181,16 +182,16 @@ private fun PlanView(w: Waiting, name: String, level3: Boolean, error: String?, 
             RequestKind.UNSEAL -> {
                 val all = plan?.all == true || level3
                 val first = plan?.items?.firstOrNull { it.kind != "pairing" }
-                Title(if (all) Texts.handBackAll(name) else "Hand back ${first?.kind ?: ""} ${first?.name ?: ""} from $name?")
+                Title(if (all) Texts.handBackAll(name) else "Hand back ${first?.kind?.let { Texts.shown(it, Texts.MAX_AGENT) } ?: ""} ${first?.name?.let { Texts.shown(it, Texts.MAX_NAME) } ?: ""} from $name?")
                 if (all) Body(Texts.HAND_BACK_ALL_BODY)
                 plan?.items?.forEachIndexed { i, it ->
-                    Row { Text("${i + 1}", style = monoStyle(15), color = Sealctl.colors.muted, modifier = Modifier.width(28.dp)); Mono("${label(it.kind)} · ${it.name}") }
+                    Row { Text("${i + 1}", style = monoStyle(15), color = Sealctl.colors.muted, modifier = Modifier.width(28.dp)); MachineMono("${label(it.kind)} · ${it.name}") }
                 }
             }
             RequestKind.KEYS -> {
                 val s = w.request.ctx()?.subject
-                Title("Let sealctl seal take over ${s?.kind ?: ""} ${s?.name ?: ""} on $name?")
-                for (i in w.request.items()) Mono("${i.purpose} · ${i.`object`?.path ?: i.id}")
+                Title("Let sealctl seal take over ${s?.kind?.let { Texts.shown(it, Texts.MAX_AGENT) } ?: ""} ${s?.name?.let { Texts.shown(it, Texts.MAX_NAME) } ?: ""} on $name?")
+                for (i in w.request.items()) MachineMono("${i.purpose} · ${i.`object`?.path ?: i.id}")
             }
             RequestKind.REWRAP -> {
                 Title("Move $name to new words?")
@@ -261,15 +262,15 @@ fun ReportScreen(id: String) {
     val r = engine.state.collectAsState().value.reports.firstOrNull { it.id == id }
     Page(null, bottom = { PrimaryButton("Done", { Ui.pop() }) }) {
         if (r == null) { Title("Report"); Muted("This report is not on this phone."); return@Page }
-        Title("${r.machineName} handed everything back")
+        Title("${Texts.shown(r.machineName, Texts.MAX_NAME)} handed everything back")
         val done = r.items.count { it.state == "done" }
         Muted("$done of ${r.items.size} done · ${Texts.time(r.time.toLong())}")
         for (i in r.items) {
             val color = when (i.state) { "failed" -> Sealctl.colors.waiting; "skipped" -> Sealctl.colors.muted; else -> Sealctl.colors.ink }
-            Mono("${label(i.kind)} · ${i.name} → ${i.to}", color = color, size = 14)
+            MachineMono("${label(i.kind)} · ${i.name} → ${i.to}", color = color, size = 14)
             if (i.state == "failed") Text("Run `sealctl unseal --resume` on that computer.", color = Sealctl.colors.waiting, fontSize = 13.sp)
         }
-        if (r.run.isNotEmpty()) { Body("Run folder on that computer:"); Mono(r.run, size = 13) }
+        if (r.run.isNotEmpty()) { Body("Run folder on that computer:"); MachineMono(r.run, size = 13) }
         Body("Your other computers were told.")
     }
 }

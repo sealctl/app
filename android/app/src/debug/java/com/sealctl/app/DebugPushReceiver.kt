@@ -9,6 +9,10 @@ import android.content.Intent
  * arrived, for tests against the fake relay, which sends no real pushes.
  *
  *   adb shell am broadcast -n com.sealctl.app/.DebugPushReceiver --es type request
+ *
+ * The manifest guards it with `android.permission.DUMP` (signature|privileged|development):
+ * the adb shell holds it, an installed app never does unless it is granted over adb, so other
+ * apps on a phone with a debug build cannot drive it.
  */
 class DebugPushReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {

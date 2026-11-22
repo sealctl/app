@@ -43,6 +43,15 @@
             </intent-filter>
         </activity>
 
+        <!-- Notification taps land here (not exported); MainActivity ignores extras. -->
+        <activity
+            android:name=".OpenActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <receiver android:name=".BootReceiver" android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />

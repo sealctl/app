@@ -95,14 +95,35 @@ struct AboutView: View {
     }
 }
 
+/// Licences (SPEC.md 11.19): the app's own licences, then every Rust crate in SealctlFFI with its
+/// licence text (notices/rust-crates.txt, made by scripts/notices.sh with cargo-about).
 struct LicencesView: View {
     @Environment(Router.self) private var router
+    /// One block per paragraph, so no single Text is thousands of lines long.
+    private static let blocks: [String] = {
+        guard let url = Bundle.main.url(forResource: "rust-crates", withExtension: "txt"),
+              let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        return text.components(separatedBy: "\n\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }()
     var body: some View {
         Page("Licences", onBack: { router.pop() }) {
-            BodyText("sealctl app: AGPL-3.0.")
-            BodyText("sealctl-core: MIT.")
-            BodyText("Rust crates of sealctl-core and sealctl-app (MIT or Apache-2.0), SQLite (public domain), UniFFI (MPL-2.0).")
+            BodyText("sealctl app: AGPL-3.0. sealctl-core: MIT.")
+            BodyText("Swift packages: only the app's own, under AGPL-3.0.")
             BodyText("Apple frameworks: SwiftUI, LocalAuthentication, CoreLocation, AVFoundation, UserNotifications (Apple SDK terms).")
+            LazyVStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(Self.blocks.enumerated()), id: \.offset) { _, block in
+                    if block.hasPrefix("=== ") {
+                        Text(verbatim: String(block.dropFirst(4))).font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Palette.ink).padding(.top, 12)
+                    } else {
+                        Text(verbatim: block).font(Fonts.mono(.caption2)).foregroundStyle(Palette.ink2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
         }
     }
 }

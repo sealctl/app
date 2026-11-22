@@ -77,6 +77,19 @@ final class SettingsTests: SealctlTestCase {
         faceID(then: "Your phone holds the keys.", 30)
     }
 
+    /// 11.18 Licences: the app's licences and the bundled Rust crate notices.
+    func testLicencesListTheRustCrates() {
+        onboardNewWords()
+        tab("Settings")
+        app.swipeUp()
+        see("core 0.7").tap()
+        tap("Licences")
+        see("sealctl app: AGPL-3.0. sealctl-core: MIT.")
+        see("Rust crates in the sealctl app")
+        tap("Back")
+        see("Source code")
+    }
+
     /// 11.4 "Backup found": Erase keeps the iCloud Keychain copy unless asked; Welcome then
     /// offers it first. (On an unsigned simulator the item stays on this device: no sync.)
     func testEraseKeepsTheICloudCopyAndRestoresFromIt() throws {

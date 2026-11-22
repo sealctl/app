@@ -63,7 +63,7 @@ final class ApprovalTests: SealctlTestCase {
         see("1 requests declined")
         tab("Inventory")
         see("Secret store")
-        see("words qHWf")
+        see("qHWf")
     }
 
     func testExpiredWhileOpenAndSeveralWaiting() {

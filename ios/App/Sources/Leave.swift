@@ -91,10 +91,10 @@ struct LeaveView: View {
                 Gap(24)
                 TitleText("What happened")
                 ForEach(e.state.reports.filter { $0.what != "leave" }, id: \.id) { r in
-                    BodyText("\(r.machineName): handed back · \(r.items.filter { $0.state == "done" }.count) objects")
+                    BodyText("\(shown(r.machineName)): handed back · \(r.items.filter { $0.state == "done" }.count) objects", markdown: false)
                 }
                 ForEach(e.local.leaveSkipped, id: \.self) { k in
-                    BodyText("\(e.state.machines.first { $0.key == k }?.name ?? String(k.prefix(8))): skipped")
+                    BodyText("\(shown(e.state.machines.first { $0.key == k }?.name ?? String(k.prefix(8)))): skipped", markdown: false)
                 }
                 BodyText("Relay data deleted.")
                 BodyText("Words backup removed.")
@@ -240,8 +240,8 @@ private struct EachComputerView: View {
             BodyText("It shows a plan and asks before it changes anything. When it asks this phone, tap Allow.")
             ForEach(rows, id: \.0.key) { m, status, _ in
                 HStack(alignment: .firstTextBaseline, spacing: 0) {
-                    MonoText(m.name, style: .subheadline)
-                    Text(LocalizedStringKey(" · \(status)")).font(.subheadline).foregroundStyle(Palette.ink2)
+                    MonoText(shown(m.name), style: .subheadline)
+                    Text(inlineMarkdown: " · \(status)").font(.subheadline).foregroundStyle(Palette.ink2)
                 }
                 .accessibilityElement(children: .combine)
             }
@@ -254,7 +254,7 @@ private struct EachComputerView: View {
                 TextButton("Cancel") { choosing = false }
             }
             if let s = skipping {
-                BodyText("Skip \(e.state.machines.first { $0.key == s }?.name ?? "")? Use it when the computer is lost or already wiped. Anything it holds then opens only with your card.")
+                BodyText("Skip \(shown(e.state.machines.first { $0.key == s }?.name ?? ""))? Use it when the computer is lost or already wiped. Anything it holds then opens only with your card.", markdown: false)
                 HStack(spacing: 20) {
                     TextButton("Skip") { onSkip(s); skipping = nil }
                     TextButton("Cancel") { skipping = nil }

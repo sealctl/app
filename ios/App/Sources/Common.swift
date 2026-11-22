@@ -122,6 +122,9 @@ extension MachineState {
     }
 }
 
+/// Machine-supplied text, sanitised and capped (11.7).
+func shown(_ text: String, _ max: Int = Texts.maxName) -> String { Texts.shown(text, max) }
+
 func purposeName(_ p: String) -> String {
     switch p {
     case "secrets": return "Secret store"

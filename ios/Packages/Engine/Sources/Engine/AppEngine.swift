@@ -129,7 +129,9 @@ public final class AppEngine {
 
     public func machine(_ key: String) -> Machine? { liveMachines.first { $0.key == key } }
 
-    public func displayName(_ m: Machine) -> String { machineDisplayName(machine: m) }
+    /// The machine's name as shown: its nickname, or `user@host` and the tag; machine-supplied
+    /// text is sanitised and capped (11.7).
+    public func displayName(_ m: Machine) -> String { Texts.shown(machineDisplayName(machine: m), Texts.maxName) }
 
     public func show(_ text: String) { toast = Toast(text: text) }
 

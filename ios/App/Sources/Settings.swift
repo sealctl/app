@@ -121,8 +121,8 @@ struct AnswersView: View {
             }
             ForEach(answers, id: \.self) { a in
                 SurfaceCard {
-                    (Text(Texts.agentName(a.agent)).bold() + Text(" may use ") + Text(verbatim: a.keyName).font(Fonts.mono())
-                        + Text(" in ") + Text(a.repoName.isEmpty ? a.repoId : a.repoName).bold())
+                    (Text(verbatim: shown(Texts.agentName(a.agent), Texts.maxAgent)).bold() + Text(" may use ") + Text(verbatim: shown(a.keyName)).font(Fonts.mono())
+                        + Text(" in ") + Text(verbatim: shown(a.repoName.isEmpty ? a.repoId : a.repoName)).bold())
                         .foregroundStyle(Palette.ink)
                     let left = answerDaysLeft(lastUsed: a.lastUsed, now: UInt64(nowMs()))
                     if left <= 10 {
@@ -326,7 +326,7 @@ struct MachineDetailView: View {
                 let tag = (try? machineTag(machineKey: key)) ?? ""
                 Page(onBack: { router.pop() }) {
                     HStack(spacing: 10) {
-                        MonoText(m.name, style: .title3, weight: .semibold)
+                        MonoText(shown(m.name, 0), style: .title3, weight: .semibold)
                         MonoText("#\(tag)", color: Palette.muted)
                     }
                     StateLabel(v.state.kind, v.row, spoken: v.spoken)
@@ -388,7 +388,7 @@ struct LostMachineView: View {
         let m = e.state.machines.first { $0.key == key }
         let held = e.state.inventory.filter { $0.machine == key && !$0.deleted && ($0.purpose == "volume" || $0.purpose == "backup") }
         Page(onBack: { router.pop() }) {
-            TitleText("\(m?.name ?? "This machine") was lost or stolen")
+            TitleText("\(m.map { shown($0.name) } ?? "This machine") was lost or stolen")
             HStack {
                 BodyText("1. Unpair it now.")
                 if let m, !m.deleted {
@@ -400,13 +400,13 @@ struct LostMachineView: View {
             BodyText("2. Change these secrets at their providers. It used them in the last 90 days:")
             ForEach(used, id: \.0) { k, t in
                 HStack(spacing: 0) {
-                    MonoText(k, style: .subheadline)
+                    MonoText(shown(k), style: .subheadline)
                     Text(" · last used \(Texts.isoDate(t))").font(.subheadline).foregroundStyle(Palette.muted)
                 }
             }
             BodyText("3. Re-encrypt what it had open. On another machine that has them, run `sealctl migrate`:")
             ForEach(held, id: \.id) { i in
-                MonoText("\(i.purpose == "volume" ? "Volume" : "Backup") \(i.path.isEmpty ? i.id : i.path)", style: .subheadline)
+                MonoText("\(i.purpose == "volume" ? "Volume" : "Backup") \(shown(i.path.isEmpty ? i.id : i.path, Texts.maxLine))", style: .subheadline)
             }
             BodyText("Your words were never on that machine, so they don't need to change.")
         } bottom: {

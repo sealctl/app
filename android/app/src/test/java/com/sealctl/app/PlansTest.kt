@@ -3,6 +3,7 @@ package com.sealctl.app
 import com.sealctl.core.app.DelayedAction
 import com.sealctl.core.app.PlanApprovalRecord
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -40,5 +41,20 @@ class PlansTest {
         assertEquals("c", Plans.forRequest(plans, emptyList(), "m", "x")?.planHash)
         assertEquals("c", Plans.forRequest(plans, emptyList(), "m", null)?.planHash)
         assertNull(Plans.forRequest(plans, emptyList(), "nobody", "a"))
+    }
+
+    @Test
+    fun aDelayedPlanAsksTheRelayFirst() {
+        val delayedPlan = plan("h", 1000, state = "delayed", delayId = "d1")
+        assertTrue(Plans.needsRelayCheck(delayedPlan))
+        assertFalse(Plans.needsRelayCheck(plan("h", 1000)))
+        assertFalse(Plans.needsRelayCheck(null))
+        val plans = listOf(delayedPlan)
+        // The relay's list says a computer cancelled it: no plan.
+        assertNull(Plans.afterRelayCheck(true, plans, listOf(delayed("d1", "cancelled")), "m", "h"))
+        // Still released and not cancelled: the plan answers.
+        assertEquals("h", Plans.afterRelayCheck(true, plans, listOf(delayed("d1", "released")), "m", "h")?.planHash)
+        // The relay did not answer: no plan, the person decides.
+        assertNull(Plans.afterRelayCheck(false, plans, listOf(delayed("d1", "released")), "m", "h"))
     }
 }

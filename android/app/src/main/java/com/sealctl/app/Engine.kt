@@ -262,9 +262,10 @@ class Engine(
         }
         socket?.start()
         scope.launch {
+            // Cancels first: a plan whose delay was cancelled while away hands out no keys.
+            refreshDelayed()
             catchUp()
             refreshStatus()
-            refreshDelayed()
             refreshMachines()
             if (System.currentTimeMillis() - local.value.lastDownload.toLong() > 3_600_000) download()
             if (local.value.dirty) scheduleUpload(0)
@@ -355,7 +356,15 @@ class Engine(
                 return@withLock
             }
         }
-        val verdict = decide(req, context(r, machine, req.plan()?.hash))
+        val hash = req.plan()?.hash
+        val found = Plans.forRequest(local.value.plans, local.value.delayed, r.machine, hash)
+        var verdict = decide(req, context(r, machine, found))
+        if (verdict.asking == Asking.PLAN_KEYS && Plans.needsRelayCheck(found)) {
+            // A cancel made on a computer reaches this phone only by the socket, a push or a refresh:
+            // ask the relay before a delayed plan hands out keys. Without an answer, ask the person.
+            val fetched = refreshDelayed()
+            verdict = decide(req, context(r, machine, Plans.afterRelayCheck(fetched, local.value.plans, local.value.delayed, r.machine, hash)))
+        }
         when (verdict.asking) {
             Asking.SILENT -> silent(req, r)
             Asking.AUTOMATIC -> {
@@ -388,11 +397,10 @@ class Engine(
         }
     }
 
-    private fun context(r: RelayRequest, machine: Machine, planHash: String?): DecideContext {
+    private fun context(r: RelayRequest, machine: Machine, plan: PlanApprovalRecord?): DecideContext {
         val l = local.value
         val s = state.value
         val unlocked = !vault.isDeviceLocked() && vault.canReadRoot()
-        val plan = Plans.forRequest(l.plans, l.delayed, r.machine, planHash)
         val status = machine.lastStatus
         val open = status?.session == "open" && status.left?.let { left ->
             (System.currentTimeMillis() - status.reportedAt.toLong()) / 1000 < left.toLong()
@@ -681,16 +689,17 @@ class Engine(
 
     // ---------- delayed approvals (SPEC.md 11.23) ----------
 
-    suspend fun refreshDelayed() {
-        if (phoneKeys() == null) return
-        val list = runCatching { relay.listDelayed() }.getOrNull() ?: return
+    /** Returns whether the relay's list was fetched. */
+    suspend fun refreshDelayed(): Boolean {
+        if (phoneKeys() == null) return false
+        val list = runCatching { relay.listDelayed() }.getOrNull() ?: return false
         for (d in list) {
             val mine = local.value.delayed.firstOrNull { it.id == d.id }
             if (mine == null) {
                 applyLocal(LocalEvent.PutDelayed(DelayedAction(d.id, if (d.machine != null) "unseal_all" else "unknown", d.machine,
-                    d.releaseAt.toULong(), d.expires.toULong(), d.state, null)))
+                    d.releaseAt.toULong(), d.expires.toULong(), d.state, d.by)))
             } else if (mine.state != d.state && mine.state != "cancelled") {
-                if (d.state == "cancelled") delayedCancelled(d.id, runCatching { relay.cancelledBy(d.id) }.getOrNull())
+                if (d.state == "cancelled") delayedCancelled(d.id, d.by)
                 else applyLocal(LocalEvent.PutDelayed(mine.copy(state = d.state)))
             }
         }
@@ -706,6 +715,7 @@ class Engine(
             }
         }
         delayedTick.value = System.currentTimeMillis()
+        return true
     }
 
     /**

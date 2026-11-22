@@ -25,6 +25,16 @@ internal object Plans {
             ?: live.maxByOrNull { it.notBefore }
     }
 
+    /**
+     * A plan that waited on a delay could have been cancelled from a computer without this
+     * phone hearing of it yet: the relay is asked before it hands out keys.
+     */
+    fun needsRelayCheck(plan: PlanApprovalRecord?): Boolean = plan?.delayId != null
+
+    /** The plan after asking the relay: none when the relay did not answer, so the person decides. */
+    fun afterRelayCheck(fetched: Boolean, plans: List<PlanApprovalRecord>, delayed: List<DelayedAction>, machine: String, hash: String?): PlanApprovalRecord? =
+        if (fetched) forRequest(plans, delayed, machine, hash) else null
+
     /** Plans still open whose delayed record is cancelled: these must be recorded as cancelled. */
     fun toCancel(plans: List<PlanApprovalRecord>, delayed: List<DelayedAction>): List<PlanApprovalRecord> {
         val cancelled = delayed.filter { it.state == "cancelled" }.map { it.id }.toSet()

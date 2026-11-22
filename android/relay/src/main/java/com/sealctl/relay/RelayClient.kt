@@ -52,7 +52,8 @@ data class RelayMachine(val machine: String, val name: String, val os: String?, 
 
 data class RelayStatus(val machine: String, val sealed: String, val updated: Long)
 
-data class RelayDelayed(val id: String, val machine: String?, val created: Long, val releaseAt: Long, val expires: Long, val state: String)
+/** [by] is who cancelled it ("phone" or a machine key), for a cancelled record. */
+data class RelayDelayed(val id: String, val machine: String?, val created: Long, val releaseAt: Long, val expires: Long, val state: String, val by: String? = null)
 
 data class RelayDevice(val device: String, val platform: String, val sandbox: Boolean, val updated: Long)
 
@@ -225,12 +226,12 @@ class RelayClient(
     suspend fun listDelayed(): List<RelayDelayed> =
         call("GET", "${phone()}/delayed")["delayed"]?.jsonArray.orEmpty().map {
             val o = it.jsonObject
-            RelayDelayed(o.str("id"), o.strOrNull("machine"), o.long("created"), o.long("releaseAt"), o.long("expires"), o.str("state"))
+            RelayDelayed(o.str("id"), o.strOrNull("machine"), o.long("created"), o.long("releaseAt"), o.long("expires"), o.str("state"), o.strOrNull("by"))
         }
 
-    /** One record; `cancelled.by` says who cancelled. Null when the relay has no such record. */
+    /** One record; `by` says who cancelled. Null when the relay has no such record. */
     suspend fun cancelledBy(id: String): String? = try {
-        (call("GET", "${phone()}/delayed/$id")["cancelled"] as? JsonObject)?.strOrNull("by")
+        call("GET", "${phone()}/delayed/$id").strOrNull("by")
     } catch (e: RelayException) {
         null
     }

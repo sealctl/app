@@ -143,6 +143,24 @@ public struct PlainButton: View {
     }
 }
 
+/// A text button inside a row or banner (Remove, Cancel, Show): accent text with at least a
+/// 44-point touch target (SPEC.md 12), so a tap near its edge still lands.
+public struct TextButton: View {
+    let title: String
+    let action: () -> Void
+    public init(_ title: String, action: @escaping () -> Void) { self.title = title; self.action = action }
+    public var body: some View {
+        Button(action: action) {
+            Text(title).font(.body).foregroundStyle(Palette.accent)
+                .padding(.horizontal, 8)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(title)
+    }
+}
+
 /// One answer of the 3-of-4 card check, in monospace.
 public struct ChoiceButton: View {
     let title: String

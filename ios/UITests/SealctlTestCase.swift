@@ -87,6 +87,20 @@ class SealctlTestCase: XCTestCase {
         see(next, 1, file: file, line: line)
     }
 
+    /// Answers the notification permission alert, which only the first launch of a run sees
+    /// (iOS asks once per install): SpringBoard's own "Allow"; the interruption monitor only
+    /// when an alert without "Allow" shows. Tests that see no alert lose 2 s.
+    func allowSystemAlert() {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let alert = springboard.alerts.firstMatch
+        guard alert.waitForExistence(timeout: 2) else { return }
+        if alert.buttons["Allow"].exists {
+            alert.buttons["Allow"].tap()
+        } else {
+            nudge()
+        }
+    }
+
     /// Lets the interruption monitor answer a system alert.
     func nudge() {
         app.swipeUp()
@@ -144,7 +158,7 @@ class SealctlTestCase: XCTestCase {
         tap("Continue")
         see("Requests arrive as notifications")
         tap("Allow notifications")
-        nudge()
+        allowSystemAlert()
         if restored {
             see("Machines", 20)
             return

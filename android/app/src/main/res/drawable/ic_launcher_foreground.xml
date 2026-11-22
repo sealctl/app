@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- brand/app-icon.svg: the shield in white with the prompt chevron cut in sealing wax.
+     108 dp canvas; the 66 dp safe zone holds the glyph. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <group android:translateX="30" android:translateY="30" android:scaleX="1.5" android:scaleY="1.5">
+        <group android:translateX="1.6" android:translateY="1.5" android:scaleX="0.9" android:scaleY="0.9">
+            <path android:fillColor="#FFFFFFFF"
+                android:pathData="M16,2.5 L27.5,6.8 V15.2 C27.5,22.3 22.6,27.4 16,29.8 C9.4,27.4 4.5,22.3 4.5,15.2 V6.8 Z" />
+        </group>
+        <path android:strokeColor="#FFB4232C" android:strokeWidth="3" android:fillColor="#00000000"
+            android:strokeLineCap="round" android:strokeLineJoin="round"
+            android:pathData="M12.8,11 L17.6,15.8 L12.8,20.6" />
+    </group>
+</vector>

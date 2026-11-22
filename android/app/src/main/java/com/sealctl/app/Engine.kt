@@ -791,7 +791,13 @@ class Engine(
     suspend fun refreshMachines() {
         val list = runCatching { relay.machines() }.getOrNull() ?: return
         apply(Event.MachinesListed(list.map { MachineSeen(it.machine, it.lastSeen?.toULong()) }))
-        relayMachines.value = list.map { it.machine }.toSet()
+        val keys = list.map { it.machine }.toSet()
+        relayMachines.value = keys
+        // A machine that unpaired itself (`sealctl unseal --all`, `sealctl unpair`) leaves the
+        // list; while leaving, the rows stay to show "Handed back".
+        if (local.value.leaveStep == 0u) {
+            for (m in liveMachines().filter { it.key !in keys }) apply(Event.UnpairMachine(m.key))
+        }
     }
 
     /** Machines the relay lists as paired, for Leave sealctl (SPEC.md 11.22 step 2). */

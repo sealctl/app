@@ -70,9 +70,12 @@ fun MainScreen(activity: MainActivity) {
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(Unit) { engine.toasts.collect { snackbar.showSnackbar(it.text) } }
     // Sensitive requests open full screen as soon as they arrive in the foreground.
-    LaunchedEffect(waiting) {
+    LaunchedEffect(waiting, Ui.stack.size) {
         val inApp = waiting.firstOrNull { it.verdict.asking == Asking.IN_APP && !it.expired }
-        if (inApp != null && Ui.stack.none { it is Route.Sensitive }) Ui.push(Route.Sensitive(inApp.relay.id))
+        if (inApp != null && Ui.stack.none { it is Route.Sensitive && it.requestId == inApp.relay.id }) {
+            Ui.stack.removeAll { it is Route.Sensitive }
+            Ui.push(Route.Sensitive(inApp.relay.id))
+        }
     }
     Box(Modifier.fillMaxSize()) {
         when (top) {
@@ -158,7 +161,12 @@ private fun MachinesTab() {
             }
         }
         val waitingCount = waiting.count { !it.expired }
-        if (waitingCount > 0) Banner("$waitingCount waiting on this phone", tone = Sealctl.colors.accentSoft)
+        if (waitingCount > 0) Banner("$waitingCount waiting on this phone", tone = Sealctl.colors.accentSoft) {
+            TextButton({
+                val w = waiting.first { !it.expired }
+                if (w.verdict.asking == Asking.IN_APP) Ui.push(Route.Sensitive(w.relay.id)) else Ui.focusRequest.value = w.relay.id
+            }) { Text("Show") }
+        }
         if (views.isEmpty()) {
             Gap(24)
             Muted("No machines yet. On your computer, run `sealctl pair` and scan the code.")

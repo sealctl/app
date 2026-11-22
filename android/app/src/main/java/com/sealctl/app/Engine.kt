@@ -407,6 +407,7 @@ class Engine(
             onWifi = onWifi,
             placesOn = places.hasForeground(),
             currentPlace = currentPlace.value,
+            currentPlaceSettled = placeSettled(),
             day = l.days.firstOrNull { it.machine == r.machine },
             answers = s.answers.filter { !it.deleted },
             sessionOpen = open,
@@ -420,6 +421,14 @@ class Engine(
         currentPlace.value?.let { id -> state.value.places.firstOrNull { it.id == id && !it.deleted }?.name }
 
     fun placeKind(): PlaceKind = com.sealctl.core.app.placeKind(places.hasForeground(), currentPlace.value)
+
+    /** The place the phone is inside also lifts the level 3 delay (a place added by hand: after 24 hours). */
+    fun placeSettled(): Boolean = currentPlace.value
+        ?.let { id -> state.value.places.firstOrNull { it.id == id && !it.deleted } }
+        ?.let { com.sealctl.core.app.placeSettled(it, System.currentTimeMillis().toULong()) } ?: false
+
+    /** A level 3 action happens at once here (SPEC.md 9.6). */
+    fun delayLifted(): Boolean = placeKind() == PlaceKind.TRUSTED && placeSettled()
 
     private suspend fun silent(req: Request, r: RelayRequest) {
         val keys = phoneKeys() ?: return
@@ -712,7 +721,7 @@ class Engine(
 
     /** Starts a level 3 action on the phone: at once at a trusted place, else after the hour. */
     suspend fun startPhoneAction(what: String): DelayedAction? {
-        if (placeKind() == PlaceKind.TRUSTED) return null
+        if (delayLifted()) return null
         val delay = delaySecs(3600)
         val id = randomId()
         val d = relay.addDelayed(id, delay)

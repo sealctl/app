@@ -399,7 +399,7 @@ struct PhoneAction<Intro: View>: View {
                     Gap(16)
                     intro
                     if pending == nil {
-                        BodyText(e.placeKind() == .trusted ? "At your trusted place: this happens as soon as you confirm."
+                        BodyText(e.delayLifted() ? "At your trusted place: this happens as soon as you confirm."
                                  : "This starts one hour after you confirm. Your phone and your computers can cancel it until then.")
                     } else {
                         BodyText("The hour is over. Confirm again to finish.")

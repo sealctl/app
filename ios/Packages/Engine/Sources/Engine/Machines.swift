@@ -155,7 +155,7 @@ extension AppEngine {
     public func trustPlace(_ c: PlaceCandidate, name: String) async {
         let n = name.trimmingCharacters(in: .whitespaces)
         await apply(.addPlace(place: TrustedPlace(id: c.id, name: n.isEmpty ? "Place 1" : String(n.prefix(40)), lat: c.lat,
-                                                  lon: c.lon, radius: 150, created: UInt64(nowMs()), updated: 0, deleted: false)),
+                                                  lon: c.lon, radius: 150, created: UInt64(nowMs()), updated: 0, deleted: false, manual: false)),
                     upload: true)
         placeOffer = nil
         await monitorPlaces()

@@ -52,6 +52,7 @@ fn ctx() -> DecideContext {
         on_wifi: false,
         places_on: false,
         current_place: None,
+        current_place_settled: false,
         day: None,
         answers: Vec::new(),
         session_open: false,

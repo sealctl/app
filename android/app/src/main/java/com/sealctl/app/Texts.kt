@@ -96,7 +96,7 @@ object Texts {
         return when {
             f.kind == RequestKind.REWRAP -> "Move $machineName to new words?" to "Open sealctl to confirm with your fingerprint."
             f.kind == RequestKind.KEYS && f.level >= 2 -> "sealctl seal on $machineName" to "Open sealctl to see what it takes over."
-            f.kind == RequestKind.UNSEAL && f.level >= 3 -> "Leave sealctl on $machineName?" to "Open sealctl to confirm. You'll need the number on its screen."
+            f.kind == RequestKind.UNSEAL && f.level >= 3 -> "Unseal everything on $machineName?" to "Open sealctl to confirm. You'll need the number on its screen."
             f.kind == RequestKind.UNSEAL -> "Hand back from $machineName?" to "Open sealctl to see what."
             f.kind == RequestKind.OLD_WORDS -> "$machineName has an object sealed with old words." to "Open sealctl to move it."
             f.kind == RequestKind.UNKNOWN -> title(f) to ""
@@ -195,6 +195,13 @@ object Texts {
     const val CANCELLED_HERE = "Cancelled. Nothing was handed back."
     fun cancelledFrom(name: String) = "Cancelled from $name."
     fun handsBackAt(name: String, at: Long) = "$name hands everything back at ${time(at)}."
+
+    /** The banner of a waiting level 3 action, by its kind. */
+    fun delayedAt(what: String, name: String, at: Long) = when (what) {
+        "words" -> "Your words can be shown at ${time(at)}."
+        "delete" -> "Your relay data is deleted at ${time(at)}."
+        else -> handsBackAt(name, at)
+    }
     fun handedBack(name: String, done: Int, failed: Int) = "$name handed back $done objects. $failed failed."
 
     // ---------- pairing and errors (11.5, 11.20) ----------

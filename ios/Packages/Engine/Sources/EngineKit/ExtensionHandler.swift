@@ -77,7 +77,10 @@ public struct ExtensionHandler: Sendable {
         let ctx = DecideContext(
             now: UInt64(now), utcOffsetSecs: Int32(TimeZone.current.secondsFromGMT()),
             phoneUnlocked: await vault.canReadRoot(), near: r.near, onWifi: await onWifiNow(),
-            placesOn: snap.placesOn, currentPlace: snap.currentPlace, day: snap.day(r.machine),
+            placesOn: snap.placesOn, currentPlace: snap.currentPlace,
+            currentPlaceSettled: snap.currentPlace.flatMap { id in state.places.first { $0.id == id && !$0.deleted } }
+                .map { placeSettled(place: $0, now: UInt64(now)) } ?? false,
+            day: snap.day(r.machine),
             answers: state.answers.filter { !$0.deleted }, sessionOpen: open, hold: snap.hold(r.machine),
             biometrics: await vault.biometrics(), plan: snap.plan(r.machine))
         let verdict = decide(request: req, ctx: ctx)

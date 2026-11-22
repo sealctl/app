@@ -84,7 +84,7 @@ fun MainScreen(activity: MainActivity) {
             is Route.LostMachine -> LostMachineScreen(top.key)
             is Route.Pair -> PairingScreen(activity, top)
             Route.Answers -> AnswersScreen()
-            Route.Places -> PlacesScreen()
+            Route.Places -> PlacesScreen(activity)
             Route.Devices -> DevicesScreen()
             Route.About -> AboutScreen()
             Route.ShowWords -> ShowWordsScreen(activity)
@@ -153,7 +153,7 @@ private fun MachinesTab() {
         if (am?.isBackgroundRestricted == true) Banner(Texts.BACKGROUND_RESTRICTED) { TextButton({ openAppSettings(context) }) { Text("Open settings") } }
         for (d in local.delayed.filter { it.state == "waiting" && it.releaseAt.toLong() > now }) {
             val name = d.machine?.let { k -> engine.machine(k)?.let { engine.displayName(it) } } ?: "This phone"
-            Banner(Texts.handsBackAt(name, d.releaseAt.toLong()), tone = Sealctl.colors.accentSoft) {
+            Banner(Texts.delayedAt(d.what, name, d.releaseAt.toLong()), tone = Sealctl.colors.accentSoft) {
                 Row {
                     TextButton({ Ui.push(Route.Delayed(d.id)) }) { Text("Show") }
                     TextButton({ scope.launch { engine.cancelDelayed(d.id) } }) { Text("Cancel") }

@@ -269,6 +269,16 @@ No secret is ever stored in the database. Places sit there protected by the OS f
 - Several installs can share one set of words (8.7). Each one merges what the others uploaded, so `409 conflict` is normal, not an error.
 - The relay deletes a phone's data after 730 days with no signed call from the phone. Normal use (any answer, any launch) keeps it; the app adds no keep-alive.
 
+### 6.6 Constraints from 0.9
+
+sealctl 0.9 (Teams and Enterprise) puts a separate work identity, with its own 24 words and its own relay (the employer's server), next to the personal one on the same phone. Until then the app holds one identity and one relay, but the data model must not assume it:
+
+- **The relay and the identity are properties of each pairing.** Every `Machine` records the relay origin it was paired through (it already has `relay`) and the identity it belongs to (by words fingerprint or an identity id), even while only one of each exists. Nothing reads "the" relay or "the" phone key from a global when handling a machine, a request, a status or a message: it takes them from the pairing.
+- **Per-identity records stay separable.** Local records keyed by machine (days, pending, holds, plans, delayed actions, message counters) and the push registration are keyed so that a second identity can be added without a migration that rewrites them. The state blob stays per identity, sealed with that identity's own state key.
+- **`decide()` takes everything from its context.** No asking rule reads app-wide settings directly; 0.9 adds an organisation's effective policy to `DecideContext` for work identities only, and a personal identity must keep behaving exactly as specified here.
+
+The 0.9 design, including the multi-identity data model, enrolment and the policy rules for `decide()`, is in the `sealctl/enterprise` repository's `SPEC.md` (sections 4, 6.6 and 24.3).
+
 ## 7. Key storage
 
 ### 7.1 What exists

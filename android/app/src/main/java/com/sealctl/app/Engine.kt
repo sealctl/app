@@ -698,7 +698,9 @@ class Engine(
         val ids = list.map { it.id }.toSet()
         for (d in local.value.delayed) {
             if (d.id !in ids && d.state == "waiting" && System.currentTimeMillis() > d.releaseAt.toLong()) {
-                applyLocal(LocalEvent.PutDelayed(d.copy(state = "released")))
+                // A machine's record leaves when the machine fetches it; a phone-only one leaves
+                // only when this phone finishes it or it expires, so a missing one is gone.
+                applyLocal(LocalEvent.PutDelayed(d.copy(state = if (d.machine == null) "gone" else "released")))
             }
         }
         delayedTick.value = System.currentTimeMillis()
@@ -746,7 +748,12 @@ class Engine(
                 "cancelled:" + (e.body.strOrNull("by") ?: "")
             }
             "too_early" -> "too_early"
-            "gone" -> "gone"
+            "gone" -> {
+                // Terminal: the relay no longer has it (it expired). Record that, so the screen
+                // offers a new start instead of a Finish that can only get `gone` again.
+                local.value.delayed.firstOrNull { it.id == id }?.let { applyLocal(LocalEvent.PutDelayed(it.copy(state = "gone"))) }
+                "gone"
+            }
             else -> "relay"
         }
     } catch (e: IOException) {

@@ -16,7 +16,7 @@ import okhttp3.WebSocketListener
 /**
  * The phone socket while the app is in the foreground (SPEC.md 8.3): `ping` every 30 s, a
  * dead socket after 10 s without `pong`, reconnect with backoff 1, 2, 4, 8, 16 then 30 s
- * (±20% jitter), at most 60 upgrades an hour.
+ * (±20% jitter, reset by a `pong`), at most 60 upgrades an hour, none during a `429` window.
  */
 class PhoneSocket(
     private val client: RelayClient,
@@ -41,17 +41,24 @@ class PhoneSocket(
                 if (upgrades.size >= 60) {
                     delay(60_000); continue
                 }
+                // The relay said to slow down: no upgrade (and no catch-up after it) until then.
+                val limited = client.rateLimitedForMs()
+                if (limited > 0) {
+                    delay(limited); continue
+                }
                 upgrades.addLast(now)
                 val closed = kotlinx.coroutines.CompletableDeferred<Unit>()
                 runCatching {
                     socket = client.openSocket(object : WebSocketListener() {
                         override fun onOpen(webSocket: WebSocket, response: Response) {
-                            open = true; attempt = 0; lastPong = System.currentTimeMillis()
+                            // `attempt` resets on the first pong, not here: a relay that accepts and
+                            // then closes at once must not get a reconnect (and a catch-up) every second.
+                            open = true; lastPong = System.currentTimeMillis()
                             onState(true); onConnected()
                         }
 
                         override fun onMessage(webSocket: WebSocket, text: String) {
-                            if (text == "pong") { lastPong = System.currentTimeMillis(); return }
+                            if (text == "pong") { lastPong = System.currentTimeMillis(); attempt = 0; return }
                             runCatching { Json.parseToJsonElement(text).jsonObject }.getOrNull()?.let(onMessage)
                         }
 

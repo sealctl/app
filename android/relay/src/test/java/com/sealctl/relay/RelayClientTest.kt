@@ -89,6 +89,25 @@ class RelayClientTest {
     }
 
     @Test
+    fun theSocketWaitsOutTheRateLimitWindow() {
+        // Staging incident 2026-11-22: a client that kept calling after 429 sent ~86,000 calls.
+        server.enqueue(json(429, """{"error":"rate_limited","retryAfter":3600,"scope":"key"}"""))
+        try {
+            kotlinx.coroutines.runBlocking { client.machines() }
+            fail("expected 429")
+        } catch (e: RateLimitedException) {
+            assertEquals("key", e.scope)
+        }
+        assertEquals(3_600_000L, client.rateLimitedForMs())
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default)
+        val socket = PhoneSocket(client, scope, onMessage = {}, onConnected = {})
+        socket.start()
+        Thread.sleep(1_000)
+        socket.stop()
+        assertEquals("no upgrade during the window", 1, server.requestCount)
+    }
+
+    @Test
     fun stateConflictCarriesTheRevision() = runTest {
         server.enqueue(json(409, """{"error":"conflict","rev":7}"""))
         try {

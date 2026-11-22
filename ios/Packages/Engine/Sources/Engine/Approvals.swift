@@ -267,7 +267,8 @@ extension AppEngine {
     func post(_ r: RelayRequest, _ sealed: String, delay: Int?, userTapped: Bool) async -> Bool {
         let backoff: [Double] = [1, 2, 4]
         var attempt = 0
-        while nowMs() < r.expires {
+        // `try? Task.sleep` returns at once in a cancelled task: stop then, or this spins until `expires`.
+        while nowMs() < r.expires && !Task.isCancelled {
             do {
                 try await relay.reply(id: r.id, sealed: sealed, delay: delay, userTapped: userTapped)
                 relayOk()
@@ -388,7 +389,9 @@ extension AppEngine {
         let ids = Set(list.map(\.id))
         for d in local.delayed where !ids.contains(d.id) && d.state == "waiting" && nowMs() > Int64(d.releaseAt) {
             var m = d
-            m.state = "released"
+            // A machine's record leaves when the machine fetches it; a phone-only one leaves
+            // only when this phone finishes it or it expires, so a missing one is gone.
+            m.state = d.machine == nil ? "gone" : "released"
             await applyLocal(.putDelayed(action: m))
         }
         delayedTick = nowMs()
@@ -460,7 +463,14 @@ extension AppEngine {
                 }
                 return "cancelled:" + (by ?? "")
             case "too_early": return "too_early"
-            case "gone": return "gone"
+            case "gone":
+                // Terminal: the relay no longer has it (it expired). Record that, so the screen
+                // offers a new start instead of a Finish that can only get `gone` again.
+                if var d = local.delayed.first(where: { $0.id == id }) {
+                    d.state = "gone"
+                    await applyLocal(.putDelayed(action: d))
+                }
+                return "gone"
             default: return "relay"
             }
         } catch {

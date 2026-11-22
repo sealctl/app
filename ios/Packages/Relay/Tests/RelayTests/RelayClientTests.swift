@@ -84,7 +84,9 @@ struct RelayClientTests {
         } catch let e as RelayError {
             #expect(e.code == "rate_limited")
         }
-        // Until retryAfter, calls stop without reaching the relay.
+        // Until retryAfter, calls stop without reaching the relay; the phone socket waits too.
+        let left = await c.rateLimitedForMs()
+        #expect(left > 110_000 && left <= 120_000)
         await #expect(throws: RelayError.self) { _ = try await c.requests() }
         // A reply the user taps still goes out (here: 404 gone, the relay was reached).
         do {

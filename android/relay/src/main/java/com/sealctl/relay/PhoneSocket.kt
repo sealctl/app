@@ -64,7 +64,11 @@ class PhoneSocket(
 
                         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { finish() }
                         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(1000, null) }
-                        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { finish() }
+                        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                            // The upgrade itself was refused with 429: the same window as a call's.
+                            if (response?.code == 429) client.noteRateLimited(response.header("Retry-After")?.trim()?.toLongOrNull())
+                            finish()
+                        }
 
                         private fun finish() {
                             open = false; onState(false); closed.complete(Unit)

@@ -108,6 +108,37 @@ class RelayClientTest {
     }
 
     @Test
+    fun aRefusedSocketUpgradeOpensTheRateLimitWindow() {
+        server.enqueue(json(429, """{"error":"rate_limited","retryAfter":1800,"scope":"phone"}""").addHeader("Retry-After", "1800"))
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default)
+        val socket = PhoneSocket(client, scope, onMessage = {}, onConnected = {})
+        socket.start()
+        val deadline = System.currentTimeMillis() + 5_000
+        while (client.rateLimitedForMs() == 0L && System.currentTimeMillis() < deadline) Thread.sleep(50)
+        Thread.sleep(1_500)
+        socket.stop()
+        assertEquals(1_800_000L, client.rateLimitedForMs())
+        assertEquals("no second upgrade during the window", 1, server.requestCount)
+    }
+
+    @Test
+    fun anOther429IsAnErrorWithItsCodeNotAWindow() = runTest {
+        server.enqueue(json(429, """{"error":"too_many_delayed"}"""))
+        try {
+            client.reply("id", "sealed", delay = 7200); fail()
+        } catch (e: RateLimitedException) {
+            fail("too_many_delayed is not a rate limit")
+        } catch (e: RelayException) {
+            assertEquals(429, e.status)
+            assertEquals("too_many_delayed", e.code)
+        }
+        assertEquals(0L, client.rateLimitedForMs())
+        server.enqueue(json(200, """{"requests":[]}"""))
+        client.requests()
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
     fun stateConflictCarriesTheRevision() = runTest {
         server.enqueue(json(409, """{"error":"conflict","rev":7}"""))
         try {

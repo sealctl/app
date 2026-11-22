@@ -61,7 +61,8 @@ private sealed class PairStep {
     data object Type : PairStep()
     data class Confirm(val offer: PairingOffer) : PairStep()
     data class Duplicate(val offer: PairingOffer, val existing: Machine) : PairStep()
-    data class CardWords(val offer: PairingOffer, val replaces: String?) : PairStep()
+    /** `back` is the step it came from, where an error after the card shows. */
+    data class CardWords(val offer: PairingOffer, val replaces: String?, val back: PairStep) : PairStep()
     data class Done(val name: String) : PairStep()
 }
 
@@ -91,12 +92,12 @@ fun PairingScreen(activity: MainActivity, route: Route.Pair) {
 
     suspend fun confirm(offer: PairingOffer, replaces: String?) {
         if (Biometric.availability(activity) != com.sealctl.core.app.Biometrics.AVAILABLE) {
-            step = PairStep.CardWords(offer, replaces); return
+            step = PairStep.CardWords(offer, replaces, step); return
         }
         when (val g = biometricGate(activity, "Confirm pairing ${Texts.shown(offer.name(), Texts.MAX_NAME)}.")) {
             GateResult.Passed -> register(offer, replaces)
             GateResult.Cancelled -> {}
-            GateResult.Changed, GateResult.LockedOut -> step = PairStep.CardWords(offer, replaces)
+            GateResult.Changed, GateResult.LockedOut, GateResult.NoBiometrics -> step = PairStep.CardWords(offer, replaces, step)
             is GateResult.Failed -> error = g.message
         }
     }
@@ -140,8 +141,12 @@ fun PairingScreen(activity: MainActivity, route: Route.Pair) {
         }
         is PairStep.CardWords -> CardWords(activity, 2, 2, "Use your card", onPassed = {
             engine.vault.resetGate()
-            scope.launch { register(s.offer, s.replaces) }
-        }, onCancel = { step = PairStep.Confirm(s.offer) })
+            scope.launch {
+                register(s.offer, s.replaces)
+                // Not paired: back to the step it came from, which shows the error.
+                if (step is PairStep.CardWords) step = s.back
+            }
+        }, onCancel = { step = s.back })
         is PairStep.Done -> Page(null, bottom = { PrimaryButton("Done", { Ui.pop() }) }) {
             Gap(24)
             Title(Texts.paired(s.name))
@@ -189,7 +194,17 @@ private fun Camera(onCode: (String) -> Unit) {
     val owner = LocalLifecycleOwner.current
     var last by remember { mutableStateOf<String?>(null) }
     val executor = remember { Executors.newSingleThreadExecutor() }
-    DisposableEffect(Unit) { onDispose { executor.shutdown() } }
+    // The camera is bound to the activity: unbind it when the scan step leaves, not when the
+    // activity stops. `bound` is touched only on the main thread.
+    val bound = remember { arrayOfNulls<ProcessCameraProvider>(1) }
+    val disposed = remember { booleanArrayOf(false) }
+    DisposableEffect(Unit) {
+        onDispose {
+            disposed[0] = true
+            bound[0]?.unbindAll(); bound[0] = null
+            executor.shutdown()
+        }
+    }
     Box(
         Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(12.dp))
             .border(BorderStroke(3.dp, Sealctl.colors.accent), RoundedCornerShape(12.dp))
@@ -212,9 +227,11 @@ private fun Camera(onCode: (String) -> Unit) {
                         ContextCompat.getMainExecutor(context).execute { onCode(text) }
                     }
                 }
+                if (disposed[0]) return@addListener
                 runCatching {
                     provider.unbindAll()
                     provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                    bound[0] = provider
                 }
             }, ContextCompat.getMainExecutor(ctx))
             view

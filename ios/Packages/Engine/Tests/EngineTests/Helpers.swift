@@ -8,6 +8,8 @@ import Vault
 
 let testRelay = ProcessInfo.processInfo.environment["SEALCTL_TEST_RELAY"]
 let machineBin = ProcessInfo.processInfo.environment["FAKE_MACHINE_BIN"]
+/// The real sealctl CLI, run in a temporary HOME like sealctl's scripts/pair-test.sh.
+let cliBin = ProcessInfo.processInfo.environment["SEALCTL_BIN"]
 
 /// Records notifications instead of showing them.
 @MainActor
@@ -56,6 +58,8 @@ final class FakeMachine: @unchecked Sendable {
 
     final class Run: @unchecked Sendable {
         let process: Process
+        /// Kept open while the process runs: under `script`, an early end of input reads as ^D.
+        var input: FileHandle?
         private let lock = NSLock()
         private var buffer = Data()
 
@@ -72,8 +76,23 @@ final class FakeMachine: @unchecked Sendable {
 
         func wait() -> (Int32, String) {
             process.waitUntilExit()
+            try? input?.close()
             Thread.sleep(forTimeInterval: 0.1)
             return (process.terminationStatus, output)
+        }
+
+        /// The first match of a regular expression's group 1 in the output, waiting for it.
+        func find(_ pattern: String, timeout: Double = 30) async throws -> String {
+            let re = try NSRegularExpression(pattern: pattern)
+            let end = Date().addingTimeInterval(timeout)
+            while Date() < end {
+                let out = output
+                if let m = re.firstMatch(in: out, range: NSRange(out.startIndex..., in: out)),
+                   let r = Range(m.range(at: 1), in: out) { return String(out[r]) }
+                if !process.isRunning { break }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            throw CancellationError()
         }
 
         /// The number the machine shows for the number match.
@@ -109,6 +128,50 @@ final class FakeMachine: @unchecked Sendable {
         await withCheckedContinuation { c in
             DispatchQueue.global().async { c.resume(returning: r.wait()) }
         }
+    }
+}
+
+/// The real `sealctl` in a temporary HOME (never the user's): no services, no agent, no SSH
+/// agent, as sealctl's scripts/pair-test.sh runs it.
+final class CLIMachine: @unchecked Sendable {
+    let home: URL = {
+        let u = URL(fileURLWithPath: "/tmp").appendingPathComponent("sealctl-cli-\(UUID().uuidString.prefix(8))/home")
+        try? FileManager.default.createDirectory(at: u, withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
+        return u
+    }()
+
+    /// `tty`: under a pseudo-terminal (`script`), for commands that need a person at a terminal.
+    func start(_ args: [String], stdin: String? = nil, env extra: [String: String] = [:], tty: Bool = false) throws -> FakeMachine.Run {
+        precondition(!home.path.hasPrefix(NSHomeDirectory()), "the CLI never runs in the user's HOME")
+        let p = Process()
+        if tty {
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/script")
+            p.arguments = ["-q", "/dev/null", cliBin!] + args
+        } else {
+            p.executableURL = URL(fileURLWithPath: cliBin!)
+            p.arguments = args
+        }
+        p.currentDirectoryURL = home
+        var env: [String: String] = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": home.path, "SEALCTL_RELAY": testRelay!,
+                                     "SEALCTL_NO_SERVICE": "1", "SEALCTL_AGENT": "0", "LANG": "en_US.UTF-8"]
+        for (k, v) in extra { env[k] = v }
+        p.environment = env
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = out
+        let input = Pipe()
+        p.standardInput = input
+        let run = FakeMachine.Run(process: p, out: out)
+        try p.run()
+        if let stdin { input.fileHandleForWriting.write(Data(stdin.utf8)) }
+        if tty { run.input = input.fileHandleForWriting } else { try? input.fileHandleForWriting.close() }
+        return run
+    }
+
+    func cleanup() {
+        _ = try? start(["daemon", "--stop"]).wait()
+        try? FileManager.default.removeItem(at: home.deletingLastPathComponent())
     }
 }
 #endif

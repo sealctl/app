@@ -64,7 +64,7 @@ final class CLIEndToEndTests: SealctlTestCase {
 
         // unseal of one secret (level 2): the number when the phone can't tell it is near.
         if Env.fakeRelay { FakeRelay.near(false) }
-        let one = Harness.cli("c1", ["unseal", "secret", "test/one"], stdin: "y\n")
+        let one = Harness.cli("c1", ["unseal", "secret", "test/one"], stdin: "y\n", tty: true)
         if text("Which number does").waitForExistence(timeout: 60) {
             let n = one.find("pick (\\d+)", timeout: 10)!
             tap("number \(n)")
@@ -77,7 +77,7 @@ final class CLIEndToEndTests: SealctlTestCase {
         XCTAssertEqual(code, 0, out)
 
         // unseal --all (level 3): the number, the plan, the delay; cancelled here first.
-        var all = Harness.cli("c1", ["unseal", "--all"], stdin: "unseal\n")
+        var all = Harness.cli("c1", ["unseal", "--all"], stdin: "unseal\n", tty: true)
         see("Which number does", 90)
         tap("number \(all.find("pick (\\d+)", timeout: 10)!)")
         see("Hand back everything on \(name)?")
@@ -91,7 +91,7 @@ final class CLIEndToEndTests: SealctlTestCase {
 
         // Again, and let the (shortened) hour run: the computer hands everything back, sends
         // its report and unpairs itself.
-        all = Harness.cli("c1", ["unseal", "--all"], stdin: "unseal\n")
+        all = Harness.cli("c1", ["unseal", "--all"], stdin: "unseal\n", tty: true)
         see("Which number does", 90)
         tap("number \(all.find("pick (\\d+)", timeout: 10)!)")
         tap("Confirm with Face ID")

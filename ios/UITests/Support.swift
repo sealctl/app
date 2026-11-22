@@ -99,8 +99,8 @@ enum Harness {
         return Job(id: HTTP.call("POST", "\(Env.harness)/job", spec)["id"] as? String ?? "")
     }
 
-    static func cli(_ home: String, _ args: [String], stdin: String? = nil, env: [String: String] = [:]) -> Job {
-        var spec: [String: Any] = ["cmd": "cli", "home": home, "args": args, "env": env]
+    static func cli(_ home: String, _ args: [String], stdin: String? = nil, env: [String: String] = [:], tty: Bool = false) -> Job {
+        var spec: [String: Any] = ["cmd": "cli", "home": home, "args": args, "env": env, "tty": tty]
         if let stdin { spec["stdin"] = stdin }
         return Job(id: HTTP.call("POST", "\(Env.harness)/job", spec)["id"] as? String ?? "")
     }

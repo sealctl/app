@@ -168,10 +168,10 @@ fun LeaveScreen(activity: MainActivity) {
         }
         else -> Page(null, onBack = null, bottom = {
             PrimaryButton("Done", {
-                scope.launch {
+                Ui.goodbye.value = true
+                Graph.engine.scope.launch {
                     go(0, emptyList())
                     erase(alsoBackup = true)
-                    Ui.goodbye.value = true
                 }
             })
         }) {
@@ -191,8 +191,8 @@ private fun EachComputer(onContinue: () -> Unit, onSkip: (String) -> Unit, onBac
     val delayed = local.delayed
     var skipping by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) { while (true) { engine.refreshMachines(); engine.refreshDelayed(); delay(5_000) } }
-    val machines = state.machines.filter { m -> !m.deleted || paired?.contains(m.key) == true }
-        .filter { m -> paired == null || paired!!.contains(m.key) || state.reports.any { it.machine == m.key } }
+    // Every machine paired when leaving began; one that unpaired itself shows as handed back.
+    val machines = state.machines.filter { !it.deleted }
     val rows = machines.map { m ->
         val handed = paired != null && !paired!!.contains(m.key)
         val skipped = m.key in local.leaveSkipped

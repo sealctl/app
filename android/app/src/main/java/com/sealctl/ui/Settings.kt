@@ -470,8 +470,15 @@ fun EraseScreen(activity: MainActivity) {
     }
 }
 
-/** Erase (SPEC.md 11.19): push device, keys and files, database; back to Welcome. */
+/**
+ * Erase (SPEC.md 11.19): push device, keys and files, database; back to Welcome. Runs in the
+ * engine's scope: the screen that asked for it leaves the composition half way.
+ */
 suspend fun erase(alsoBackup: Boolean) {
+    Graph.engine.scope.launch { eraseNow(alsoBackup) }.join()
+}
+
+private suspend fun eraseNow(alsoBackup: Boolean) {
     val engine = Graph.engine
     runCatching { engine.relay.deletePush(engine.deviceId()) }
     if (alsoBackup) Graph.blockStore.delete()
@@ -481,8 +488,8 @@ suspend fun erase(alsoBackup: Boolean) {
     com.sealctl.app.safe { engine.store.erase() }
     engine.refreshState()
     engine.waiting.value = emptyList()
-    Ui.reset()
     engine.computePhase()
+    Ui.reset()
 }
 
 @Suppress("unused")

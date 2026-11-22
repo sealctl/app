@@ -49,9 +49,14 @@ extension AppEngine {
         await apply(.setNickname(key: key, nickname: n?.isEmpty == false ? String(n!.prefix(40)) : nil))
     }
 
+    /// A relay time below zero reads as zero.
+    nonisolated static func seen(_ m: RelayMachine) -> MachineSeen {
+        MachineSeen(key: m.machine, lastSeen: m.lastSeen.map { UInt64(clamping: $0) })
+    }
+
     public func refreshMachines() async {
         guard await phoneKeys() != nil, let list = try? await relay.machines() else { return }
-        await apply(.machinesListed(seen: list.map { MachineSeen(key: $0.machine, lastSeen: $0.lastSeen.map { UInt64($0) }) }))
+        await apply(.machinesListed(seen: list.map(Self.seen)))
         let keys = Set(list.map(\.machine))
         relayMachines = keys
         // A machine that unpaired itself (`sealctl unseal --all`, `sealctl unpair`) leaves the
@@ -177,14 +182,17 @@ extension AppEngine {
     }
 
     /// The phone crossed a place's edge; on exit, lock every machine whose day began there.
-    public func onPlaceTransition(_ ids: [String], entered: Bool) async {
-        if entered {
+    /// `entered` is nil when the monitor no longer knows (unknown or unmonitored): the place
+    /// stops counting as current, but that is not an exit, so nothing is locked or posted.
+    public func onPlaceTransition(_ ids: [String], entered: Bool?) async {
+        if entered == true {
             currentPlace = ids.first
             writeSnapshot()
             return
         }
         if let c = currentPlace, ids.contains(c) { currentPlace = nil }
         writeSnapshot()
+        guard entered == false else { return }
         for id in ids {
             guard let place = state.places.first(where: { $0.id == id }) else { continue }
             var locked: [Machine] = []

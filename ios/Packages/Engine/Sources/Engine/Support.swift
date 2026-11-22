@@ -44,7 +44,7 @@ public protocol PlacesProvider: AnyObject {
     var undetermined: Bool { get }
     func requestWhenInUse() async
     func requestAlways() async
-    func monitor(_ fences: [Fence], onTransition: @escaping @Sendable ([String], Bool) async -> Void) async
+    func monitor(_ fences: [Fence], onTransition: @escaping @Sendable ([String], Bool?) async -> Void) async
     func sample() async -> Fix?
 }
 

@@ -682,7 +682,7 @@ name = "fake-machine"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
+ "base64 0.23.1",
  "clap",
  "fake-relay",
  "futures-util",
@@ -702,7 +702,7 @@ name = "fake-relay"
 version = "0.1.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "clap",
  "ed25519-dalek",
  "fake-machine",

@@ -1,0 +1,12 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "CANCELLED_BODY" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "A pending sensitive action was cancelled." } } } },
+    "CANCELLED_TITLE" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Cancelled" } } } },
+    "DELAYED_BODY" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Something sensitive was approved on your phone and starts in an hour. Open sealctl to see it or cancel it." } } } },
+    "DELAYED_TITLE" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Approved on your phone" } } } },
+    "REQUEST_BODY" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "A machine is asking for a key. Open to see the request." } } } },
+    "REQUEST_TITLE" : { "extractionState" : "manual", "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Waiting for your phone" } } } }
+  },
+  "version" : "1.0"
+}

@@ -1,0 +1,163 @@
+# XcodeGen project (SPEC.md 4): `xcodegen generate` in ios/ makes sealctl.xcodeproj, which is
+# not committed. Build the Rust library first: scripts/build-core-ios.sh.
+name: sealctl
+options:
+  bundleIdPrefix: com.sealctl
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    TARGETED_DEVICE_FAMILY: "1"
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    DEAD_CODE_STRIPPING: YES
+    # No Apple developer team: simulator builds are signed to run locally.
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    DEVELOPMENT_TEAM: ""
+    SWIFT_EMIT_LOC_STRINGS: YES
+packages:
+  SealCore:
+    path: Packages/SealCore
+  Vault:
+    path: Packages/Vault
+  Relay:
+    path: Packages/Relay
+  Places:
+    path: Packages/Places
+  Engine:
+    path: Packages/Engine
+  DesignSystem:
+    path: Packages/DesignSystem
+targets:
+  sealctl:
+    type: application
+    platform: iOS
+    sources:
+      - path: App/Sources
+      - path: App/Resources
+    dependencies:
+      - package: SealCore
+      - package: Vault
+      - package: Relay
+      - package: Places
+      - package: Engine
+        product: Engine
+      - package: Engine
+        product: EngineKit
+      - package: DesignSystem
+      - target: NotifyExtension
+        embed: true
+    entitlements:
+      path: App/sealctl.entitlements
+      properties:
+        aps-environment: development
+        com.apple.developer.usernotifications.time-sensitive: true
+        com.apple.security.application-groups: [group.com.sealctl.app]
+        keychain-access-groups: ["$(AppIdentifierPrefix)com.sealctl.shared"]
+        com.apple.developer.associated-domains: ["applinks:sealctl.com"]
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: sealctl
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen:
+          UIColorName: ""
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIRequiresFullScreen: true
+        ITSAppUsesNonExemptEncryption: false
+        NSCameraUsageDescription: The camera scans the pairing code that sealctl pair shows on your computer.
+        NSLocationWhenInUseUsageDescription: sealctl learns the places where you approve, so it can answer by itself at your desk. Locations stay on this phone.
+        NSLocationAlwaysAndWhenInUseUsageDescription: sealctl notices when you leave a trusted place and locks the machines you opened there. Locations stay on this phone.
+        NSFaceIDUsageDescription: Face ID protects showing and changing your 24 words.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.sealctl.pair
+            CFBundleURLSchemes: [sealctl]
+        SealctlRelayURL: $(SEALCTL_RELAY_URL)
+        SealctlTestDelaySecs: $(SEALCTL_TEST_DELAY_SECS)
+        SealctlKeychainGroup: $(AppIdentifierPrefix)com.sealctl.shared
+        SealctlAppGroup: group.com.sealctl.app
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sealctl.app
+        PRODUCT_NAME: sealctl
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS: NO
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+  NotifyExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: NotifyExtension
+    dependencies:
+      - package: SealCore
+      - package: Vault
+      - package: Relay
+      - package: Engine
+        product: EngineKit
+    entitlements:
+      path: NotifyExtension/NotifyExtension.entitlements
+      properties:
+        com.apple.security.application-groups: [group.com.sealctl.app]
+        keychain-access-groups: ["$(AppIdentifierPrefix)com.sealctl.shared"]
+    info:
+      path: NotifyExtension/Info.plist
+      properties:
+        CFBundleDisplayName: sealctl
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+        SealctlKeychainGroup: $(AppIdentifierPrefix)com.sealctl.shared
+        SealctlAppGroup: group.com.sealctl.app
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sealctl.app.notify
+        PRODUCT_NAME: NotifyExtension
+        APPLICATION_EXTENSION_API_ONLY: YES
+  sealctlUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: sealctl
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sealctl.app.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: sealctl
+        SWIFT_VERSION: "5.0"
+        SWIFT_STRICT_CONCURRENCY: minimal
+schemes:
+  sealctl:
+    build:
+      targets:
+        sealctl: all
+        sealctlUITests: [test]
+    test:
+      config: Debug
+      gatherCoverageData: false
+      targets:
+        - package: SealCore/SealCoreTests
+        - package: Vault/VaultTests
+        - package: Relay/RelayTests
+        - package: Engine/EngineTests
+  sealctlUITests:
+    build:
+      targets:
+        sealctl: all
+        sealctlUITests: [test]
+    test:
+      config: Debug
+      targets:
+        - sealctlUITests

@@ -85,6 +85,8 @@ fun SensitiveScreen(activity: MainActivity, requestId: String) {
     var step by remember(requestId) { mutableStateOf(if (w?.verdict?.needsNumber == true) SStep.Number else SStep.Plan) }
     var error by remember { mutableStateOf<String?>(null) }
     var cardChecked by remember { mutableStateOf(false) }
+    // The number match and the plan are kept out of screenshots and recents (SPEC.md 11.21).
+    SecureScreen()
     if (w == null && step != SStep.Delay && step != SStep.Done && step != SStep.WrongNumber) {
         Page(null) { Title(Texts.stoppedWaiting("The machine")); SecondaryButton("Close", { Ui.pop() }) }
         return

@@ -86,7 +86,7 @@ fun MachineMono(text: String, max: Int = Texts.MAX_LINE, size: Int = 15, color: 
     Mono(if (whole) full else short, Modifier.clickable(enabled = short != full) { whole = !whole }, size = size, color = color)
 }
 
-/** Marks a screen that shows words: FLAG_SECURE while it is up (SPEC.md 11.21). */
+/** Marks a screen that shows words or an approval: FLAG_SECURE while it is up (SPEC.md 11.21). */
 @Composable
 fun SecureScreen() {
     DisposableEffect(Unit) {

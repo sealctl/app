@@ -1311,6 +1311,7 @@ Applies to onboarding step 5, Show words, and every typed-words screen.
 - iOS: when the scene becomes inactive, a full cover with the mark hides the app switcher snapshot.
 - iOS: after `userDidTakeScreenshotNotification`, show "The screenshot doesn't show your words."
 - Android: `FLAG_SECURE` on the activity while any of these screens is shown; `setRecentsScreenshotEnabled(false)` on Android 13+.
+- Android: the same while the approval card (11.7, whose sheet window also sets `SecureFlagPolicy.SecureOn`) or the level 2 and 3 screens (11.23: the number match and the plan) are shown, so the match number and the names and paths being approved stay out of screenshots and recents.
 - No copy, share, look-up or text selection on the words. Accessibility can read them (12).
 - The words view clears from memory when the screen closes; the `Words` object is released.
 

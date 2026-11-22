@@ -9,7 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 The sealctl phone app for iPhone and Android: it holds the root made from your 24 words and
 approves your computers' requests for keys. API keys, SSH and git signing keys, encrypted volumes
 and backups, opened only when your phone approves. One tap per use; your AI agents never see the
-key. Built on `sealctl-core` 0.7.0 with UniFFI 0.32.2.
+key. Built on `sealctl-core` 0.7.0 (sealctl commit `0882074`) with UniFFI 0.32.2.
 
 ### Added
 

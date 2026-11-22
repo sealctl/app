@@ -375,6 +375,7 @@ fun MachineDetailScreen(activity: MainActivity, key: String) {
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { while (true) { delay(1000); now = System.currentTimeMillis() } }
     var confirmUnpair by remember { mutableStateOf(false) }
+    var releaseError by remember { mutableStateOf<String?>(null) }
     var nickname by remember(m?.nickname) { mutableStateOf(m?.nickname ?: "") }
     if (m == null) { Page(null) { Muted("This machine is no longer paired.") }; return }
     val v = MachineView.of(m, engine, now)
@@ -388,9 +389,16 @@ fun MachineDetailScreen(activity: MainActivity, key: String) {
             Text(Texts.held(engine.displayName(m), hold.until.toLong()), color = Sealctl.colors.waiting)
             TextButton({
                 scope.launch {
-                    if (biometricGate(activity, "Confirm releasing ${engine.displayName(m)}.") == GateResult.Passed) engine.releaseHold(key)
+                    releaseError = when (biometricGate(activity, "Confirm releasing ${engine.displayName(m)}.")) {
+                        GateResult.Passed -> { engine.releaseHold(key); null }
+                        GateResult.Cancelled -> null
+                        GateResult.NoBiometrics -> Texts.NO_BIOMETRICS
+                        GateResult.LockedOut -> Texts.LOCKED_OUT
+                        else -> "Couldn't confirm it's you."
+                    }
                 }
             }) { Text("Release now") }
+            ErrorText(releaseError)
         }
         if (v.state == com.sealctl.designsystem.MachineState.Open) PrimaryButton("Lock now", { scope.launch { if (engine.lock(m)) Ui.toast("Locked ${engine.displayName(m)}.") } })
         OutlinedTextField(nickname, { nickname = it.take(40) }, label = { Text("Nickname") }, singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -597,12 +605,23 @@ suspend fun deleteRelayData(lockFirst: Boolean): String {
 fun EraseScreen(activity: MainActivity) {
     val scope = rememberCoroutineScope()
     var alsoBackup by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
     Page(null, bottom = {
+        ErrorText(error)
         SecondaryButton("Delete relay data and unpair first", { Ui.pop(); Ui.push(Route.DeleteRelay) })
         PrimaryButton("Remove", {
             scope.launch {
-                when (com.sealctl.vault.Biometric.words(activity, "Remove sealctl from this phone", "Use your fingerprint, face or screen lock", "Cancel",
-                    runCatching { Graph.engine.vault.wordsDecryptCipher() }.getOrElse { Graph.engine.vault.wordsEncryptCipher() })) {
+                val vault = Graph.engine.vault
+                // On API 28 and 29 the words key needs a fingerprint; with none enrolled it can't be made.
+                val cipher = try {
+                    runCatching { vault.wordsDecryptCipher() }.getOrElse { vault.wordsEncryptCipher() }
+                } catch (e: com.sealctl.vault.NoBiometricsException) {
+                    error = NEEDS_FINGERPRINT; return@launch
+                } catch (e: Exception) {
+                    error = "Couldn't confirm it's you."; return@launch
+                }
+                error = null
+                when (com.sealctl.vault.Biometric.words(activity, "Remove sealctl from this phone", "Use your fingerprint, face or screen lock", "Cancel", cipher)) {
                     is com.sealctl.vault.AuthResult.Success -> erase(alsoBackup)
                     else -> {}
                 }

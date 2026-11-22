@@ -68,7 +68,7 @@ import java.util.Locale
 import kotlinx.coroutines.launch
 
 /** Android 9 and 10 keep the words behind a fingerprint only (SPEC.md 7.3). */
-private const val NEEDS_FINGERPRINT = "On this version of Android, sealctl keeps your words behind a fingerprint. Add a fingerprint in your phone's settings, then try again."
+const val NEEDS_FINGERPRINT = "On this version of Android, sealctl keeps your words behind a fingerprint. Add a fingerprint in your phone's settings, then try again."
 
 private enum class Step { Welcome, About, Card, Ready, Words, Check, Backups, Notifications, Places, PlacesAlways, Pair, Restore, RestoreConfirm, Restoring, OldPhone, ChangeNow, BackupFound }
 

@@ -86,6 +86,8 @@ suspend fun biometricGate(activity: FragmentActivity, reason: String): GateResul
     }
 }
 
+private enum class CardFor { Plan, Changed, Instead }
+
 private enum class SStep { Number, WrongNumber, Plan, CardWords, Done, Delay, NotNear, Held, NoBiometrics }
 
 /** Levels 2 and 3 (SPEC.md 11.23): full screen, never a sheet, never from a notification button. */
@@ -98,6 +100,10 @@ fun SensitiveScreen(activity: MainActivity, requestId: String) {
     var step by remember(requestId) { mutableStateOf(if (w?.verdict?.needsNumber == true) SStep.Number else SStep.Plan) }
     var error by remember { mutableStateOf<String?>(null) }
     var cardChecked by remember { mutableStateOf(false) }
+    // Why the card is asked for: the plan needs it, the enrolment changed, or level 2 takes
+    // the card instead of a biometric this phone can't give (no strong biometric, locked out).
+    var cardFor by remember { mutableStateOf(CardFor.Plan) }
+    var cardInstead by remember { mutableStateOf(false) }
     // The number match and the plan are kept out of screenshots and recents (SPEC.md 11.21).
     SecureScreen()
     if (w == null && step != SStep.Delay && step != SStep.Done && step != SStep.WrongNumber) {
@@ -123,19 +129,19 @@ fun SensitiveScreen(activity: MainActivity, requestId: String) {
         }
         SStep.Plan -> PlanView(w!!, name, level3, error, onConfirm = {
             scope.launch {
-                if (w.verdict.needsCardWords && !cardChecked) { step = SStep.CardWords; return@launch }
-                if (w.verdict.needsBiometrics) {
+                if (w.verdict.needsCardWords && !cardChecked) { cardFor = CardFor.Plan; step = SStep.CardWords; return@launch }
+                if (w.verdict.needsBiometrics && !(cardInstead && !level3)) {
                     when (val g = biometricGate(activity, "Confirm handing back $name.")) {
                         GateResult.Passed -> {}
                         GateResult.Cancelled -> return@launch
                         GateResult.LockedOut -> {
                             if (level3) { engine.refuse(w, RefuseReason.NO_BIOMETRICS); error = Texts.LOCKED_OUT; return@launch }
-                            step = SStep.CardWords; return@launch
+                            cardFor = CardFor.Instead; step = SStep.CardWords; return@launch
                         }
-                        GateResult.Changed -> { step = SStep.CardWords; return@launch }
+                        GateResult.Changed -> { cardFor = CardFor.Changed; step = SStep.CardWords; return@launch }
                         GateResult.NoBiometrics -> {
                             if (level3) { engine.refuse(w, RefuseReason.NO_BIOMETRICS); error = Texts.NO_BIOMETRICS; return@launch }
-                            step = SStep.CardWords; return@launch
+                            cardFor = CardFor.Instead; step = SStep.CardWords; return@launch
                         }
                         is GateResult.Failed -> { error = g.message; return@launch }
                     }
@@ -145,8 +151,17 @@ fun SensitiveScreen(activity: MainActivity, requestId: String) {
             }
         }, onDeny = { deny() })
         SStep.CardWords -> CardWords(activity, positions = 2, groups = 2, title = "Use your card", onPassed = {
-            cardChecked = true
-            if (w?.verdict?.needsBiometrics == true) engine.vault.resetGate()
+            when (cardFor) {
+                CardFor.Plan -> {
+                    cardChecked = true
+                    // The core asks for both after an enrolment change: the gate is made again.
+                    if (w?.verdict?.needsBiometrics == true) engine.vault.resetGate()
+                }
+                // The card meets the check; the gate is made again from the next biometric.
+                CardFor.Changed -> engine.vault.resetGate()
+                // Level 2 only: the card stands in for the biometric on the next Confirm.
+                CardFor.Instead -> cardInstead = true
+            }
             step = SStep.Plan
         }, onCancel = { step = SStep.Plan })
         SStep.Delay -> {

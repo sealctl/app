@@ -221,8 +221,8 @@ private struct EachComputerView: View {
             if let s = skipping {
                 BodyText("Skip \(e.state.machines.first { $0.key == s }?.name ?? "")? Use it when the computer is lost or already wiped. Anything it holds then opens only with your card.")
                 HStack(spacing: 20) {
-                    Button("Skip") { onSkip(s); skipping = nil }
-                    Button("Cancel") { skipping = nil }
+                    TextButton("Skip") { onSkip(s); skipping = nil }
+                    TextButton("Cancel") { skipping = nil }
                 }
             }
         } bottom: {

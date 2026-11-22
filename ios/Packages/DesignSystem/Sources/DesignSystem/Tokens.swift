@@ -7,15 +7,15 @@ import AppKit
 
 /// Brand tokens (SPEC.md 11.1, `brand/`): light and dark follow the system.
 public enum Palette {
-    public static let paper = Color(light: 0xFBF7F2, dark: 0x0E121A)
-    public static let surface = Color(light: 0xFFFFFF, dark: 0x151A24)
-    public static let surface2 = Color(light: 0xF5EEE6, dark: 0x1B2130)
+    public static let paper = Color(light: 0xFFFFFF, dark: 0x0E121A)
+    public static let surface = Color(light: 0xF6F7F9, dark: 0x151A24)
+    public static let surface2 = Color(light: 0xEEF0F4, dark: 0x1B2130)
     public static let ink = Color(light: 0x1A2133, dark: 0xEEF0F5)
     public static let ink2 = Color(light: 0x3E4659, dark: 0xC8CDD9)
-    public static let muted = Color(light: 0x6B7183, dark: 0x949BAD)
-    public static let border = Color(light: 0xECE2D8, dark: 0x242B3A)
-    public static let accent = Color(light: 0xB4232C, dark: 0xF0675C)
-    public static let accentSoft = Color(light: 0xF2DEDA, dark: 0x3B2327)
+    public static let muted = Color(light: 0x5F6677, dark: 0x949BAD)
+    public static let border = Color(light: 0xE3E6EC, dark: 0x242B3A)
+    public static let accent = Color(light: 0xB4232C, dark: 0xFF5C63)
+    public static let accentSoft = Color(light: 0xF8E3E5, dark: 0x3B2327)
     public static let onAccent = Color(light: 0xFFFFFF, dark: 0x12151C)
     /// Status colours are separate from the accent; every status also has its word.
     public static let open = Color(light: 0x157F3C, dark: 0x4CC47C)

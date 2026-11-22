@@ -676,7 +676,7 @@ Wording in this section is exact. Text in quotes is shown as written. `dev@mbp.e
 
 ### 11.1 Visual style
 
-- Colours from the brand tokens: paper `#fbf7f2` / `#0e121a`, surface `#ffffff` / `#151a24`, ink `#1a2133` / `#eef0f5`, muted `#6b7183` / `#949bad`, accent sealing wax `#b4232c` / `#f0675c`, text on accent `#ffffff` / `#12151c`. Light and dark follow the system.
+- Colours from the brand tokens (cool neutrals, one crimson accent): paper `#ffffff` / `#0e121a`, surface `#f6f7f9` / `#151a24`, surface-2 `#eef0f4` / `#1b2130`, ink `#1a2133` / `#eef0f5`, muted `#5f6677` / `#949bad`, border `#e3e6ec` / `#242b3a`, accent sealing wax `#b4232c` / `#ff5c63`, accent soft `#f8e3e5` / `#3b2327`, text on accent `#ffffff` / `#12151c`. Light and dark follow the system. Android's launch window is paper.
 - Status colours are separate from the accent: Open uses green `#157f3c` / `#4cc47c`; Waiting uses amber `#b45309` / `#f0a54a`; Locked uses muted ink. Every status also has its word; colour is never the only signal.
 - Text in the system sans (SF Pro, Roboto). Machine names, key names, commands, paths, tags, the words fingerprint and the wordmark in the system monospace (SF Mono, `FontFamily.Monospace`). No bundled fonts.
 - Cards have 12-point corners and soft shadows. The primary button is filled with the accent; secondary buttons are outlined; Deny is a plain text button.

@@ -1,8 +1,8 @@
 # sealctl app
 
 The sealctl phone app: it holds the root made from your 24 words and answers key requests from
-your computers. This repository has the Android app (Kotlin, Jetpack Compose) and the Rust crate
-both apps share. The iPhone app follows. [`SPEC.md`](SPEC.md) is the build spec.
+your computers. This repository has the iPhone app (Swift, SwiftUI), the Android app (Kotlin,
+Jetpack Compose) and the Rust crate both apps share. [`SPEC.md`](SPEC.md) is the build spec.
 
 License: AGPL-3.0. The protocol core, `sealctl-core`, is MIT and lives in
 [sealctl/sealctl](https://github.com/sealctl/sealctl).
@@ -14,7 +14,8 @@ License: AGPL-3.0. The protocol core, `sealctl-core`, is MIT and lives in
 | `shared/` | `sealctl-app` (Rust): state, merge, levels of asking (`decide`), days, places, lifetimes, card checks, the SQLite store |
 | `tools/fake-relay/` | In-memory Relay API with `/test/` controls, for tests |
 | `tools/fake-machine/` | A command-line machine: pairs and sends every request kind with `sealctl-core` |
-| `scripts/` | `build-core-android.sh` (the `.so` files and Kotlin bindings), `check-core.sh` |
+| `scripts/` | `build-core-ios.sh` (XCFramework and Swift bindings), `build-core-android.sh` (the `.so` files and Kotlin bindings), `check-core.sh` |
+| `ios/` | XcodeGen project (`project.yml`): the app, the Notification Service Extension, UI tests; packages `SealCore`, `Vault`, `Relay`, `Places`, `Engine`, `DesignSystem` |
 | `android/` | Gradle project: `app`, `core`, `vault`, `relay`, `places`, `notify`, `designsystem` |
 | `brand/` | Icon, marks and tokens from the brand kit |
 
@@ -38,6 +39,45 @@ Build settings go in `android/local.properties`, which is not committed:
 
 Push needs the Firebase app configuration at `android/app/google-services.json`, written at
 build time and never committed (SPEC.md 17.2). Without it the app builds with push turned off.
+
+## iPhone
+
+Xcode 26 or later, XcodeGen (`brew install xcodegen`), and the Rust toolchain above.
+
+```sh
+scripts/build-core-ios.sh              # SealctlFFI.xcframework (iPhone, simulator, macOS) + Swift bindings
+cd ios && xcodegen generate            # sealctl.xcodeproj (not committed)
+xcodebuild test -project sealctl.xcodeproj -scheme sealctl -destination 'platform=iOS Simulator,name=iPhone 17'
+```
+
+The packages' unit tests also run on a Mac without the simulator (`ios/scripts/swift-test.sh
+<Package>`); the Relay and Engine tests then talk to the fake relay and fake machine:
+
+```sh
+cargo build --release -p fake-relay -p fake-machine
+target/release/fake-relay &
+SEALCTL_TEST_RELAY=http://127.0.0.1:8787 FAKE_MACHINE_BIN=$PWD/target/release/fake-machine ios/scripts/swift-test.sh Engine
+```
+
+The UI tests (scheme `sealctlUITests`) drive the app on a simulator with Face ID enrolled. They
+need the fake relay and `ios/scripts/harness.py`, which runs the fake machine (and, with
+`SEALCTL_BIN`, the real `sealctl` CLI in a temporary HOME) for them and sends pushes with
+`xcrun simctl push`. `.github/workflows/ios.yml` runs all of it.
+
+Build settings go in `ios/Config/Local.xcconfig`, which is not committed:
+
+| Setting | Default | Use |
+| --- | --- | --- |
+| `SEALCTL_RELAY_URL` | `https://relay.sealctl.com` | The relay this build talks to (write `https:/$()/host`) |
+| `SEALCTL_TEST_DELAY_SECS` | `0` | Debug builds only: shortens the level 3 delay for tests |
+
+Debug builds also take `SEALCTL_RELAY` and `SEALCTL_TEST_DELAY` from the launch environment and
+`-resetForTests` as a launch argument (used by the UI tests). There is no biometric bypass in any
+build: the UI tests match Face ID through the simulator's own BiometricKit notifications.
+
+Without an Apple developer account the app runs on the simulator only: no device builds, no
+APNs (pushes are delivered with `xcrun simctl push`), no iCloud Keychain sync, no universal links
+(the app also opens `sealctl://p#<payload>`).
 
 ## Test against the fake relay
 

@@ -72,7 +72,28 @@ final class SettingsTests: SealctlTestCase {
         see("protocol 1")
         tap("Erase sealctl from this phone")
         see("This removes your words, machines, places and history from this phone.")
+        app.switches["Also remove the copy in iCloud Keychain"].coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
         tap("Erase")
         faceID(then: "Your phone holds the keys.", 30)
+    }
+
+    /// 11.4 "Backup found": Erase keeps the iCloud Keychain copy unless asked; Welcome then
+    /// offers it first. (On an unsigned simulator the item stays on this device: no sync.)
+    func testEraseKeepsTheICloudCopyAndRestoresFromIt() throws {
+        onboardNewWords()
+        tab("Settings")
+        app.swipeUp()
+        tap("Erase sealctl from this phone")
+        tap("Erase")
+        faceID(then: "sealctl", 30)
+        if !shows("Your words are in iCloud Keychain", 10) {
+            throw XCTSkip("the simulator's keychain kept no synchronizable item")
+        }
+        tap(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Restore '")).firstMatch.label)
+        faceID(then: "Found your backup", 30)
+        tap("Continue")
+        see("Where is your old phone?")
+        tap("I still have it, or it was reset")
+        finishOnboarding(restored: true)
     }
 }

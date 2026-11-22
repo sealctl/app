@@ -16,3 +16,10 @@ holds the core yet). UniFFI 0.32.2.
   biometrics, one-hour delay with cancel, hand-back report), machines, activity, inventory,
   answers, places, settings, push registration and test push, relay state sync, Delete my relay
   data, Erase, Leave sealctl.
+- iPhone app (Swift 6, SwiftUI, Observation; XcodeGen): the same flows as Android, with the
+  keychain items of SPEC.md 7.2, Face ID or the passcode for the words, the `.biometryCurrentSet`
+  gate for levels 2 and 3, words drawn in a secure layer and hidden while recorded, the
+  Notification Service Extension, the app group snapshot and inbox, notification categories
+  with unlock-first actions, CLMonitor places. Packages SealCore, Vault, Relay, Places, Engine,
+  DesignSystem; `scripts/build-core-ios.sh`. Simulator only for now (no Apple developer account):
+  no APNs, iCloud Keychain sync or universal links yet.

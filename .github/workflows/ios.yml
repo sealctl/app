@@ -75,11 +75,15 @@ jobs:
 
       - name: Build for testing
         run: |
-          set -o pipefail
-          xcodebuild build-for-testing -project ios/sealctl.xcodeproj -scheme sealctlUITests \
-            -destination "id=$SIM_UDID" -derivedDataPath "$RUNNER_TEMP/dd" | tail -40
-          xcodebuild build-for-testing -project ios/sealctl.xcodeproj -scheme sealctl \
-            -destination "id=$SIM_UDID" -derivedDataPath "$RUNNER_TEMP/dd" | tail -40
+          for scheme in sealctlUITests sealctl; do
+            if ! xcodebuild build-for-testing -project ios/sealctl.xcodeproj -scheme $scheme \
+                -destination "id=$SIM_UDID" -derivedDataPath "$RUNNER_TEMP/dd" > "$RUNNER_TEMP/build-$scheme.log" 2>&1; then
+              grep -E "error:|error -|FAILED|failed" "$RUNNER_TEMP/build-$scheme.log" | sort -u | head -150
+              tail -60 "$RUNNER_TEMP/build-$scheme.log"
+              exit 1
+            fi
+            grep -E "warning: .*\.swift" "$RUNNER_TEMP/build-$scheme.log" | sort -u | head -40 || true
+          done
 
       - name: Fake relay, fake machine and the sealctl CLI
         run: |
@@ -153,3 +157,4 @@ jobs:
             ${{ runner.temp }}/ui.xcresult
             ${{ runner.temp }}/fake-relay.log
             ${{ runner.temp }}/harness.log
+            ${{ runner.temp }}/build-*.log

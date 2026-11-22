@@ -107,9 +107,16 @@ impl Relay {
         let mut tries = 0;
         loop {
             let (status, json) = self.call_once(signer, method, path, body).await?;
-            let short = json.get("scope").and_then(Value::as_str).is_some_and(|s| s != "phone");
+            let short = json
+                .get("scope")
+                .and_then(Value::as_str)
+                .is_some_and(|s| s != "phone");
             if status == 429 && short && tries < 3 {
-                let wait = json.get("retryAfter").and_then(Value::as_u64).unwrap_or(60).min(90);
+                let wait = json
+                    .get("retryAfter")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(60)
+                    .min(90);
                 eprintln!("rate limited ({}), waiting {wait} s", json["scope"]);
                 tokio::time::sleep(std::time::Duration::from_secs(wait + 1)).await;
                 tries += 1;
@@ -175,7 +182,11 @@ impl Relay {
         let mut tries = 0;
         loop {
             match self.socket_once(signer, path).await {
-                Err(e) if tries < 3 && e.to_string().contains("429") && !e.to_string().contains("\"phone\"") => {
+                Err(e)
+                    if tries < 3
+                        && e.to_string().contains("429")
+                        && !e.to_string().contains("\"phone\"") =>
+                {
                     eprintln!("socket rate limited, waiting 61 s");
                     tokio::time::sleep(std::time::Duration::from_secs(61)).await;
                     tries += 1;

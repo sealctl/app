@@ -35,6 +35,7 @@ import com.sealctl.app.Waiting
 import com.sealctl.core.Place as PlaceKind
 import com.sealctl.core.RefuseReason
 import com.sealctl.core.RequestKind
+import com.sealctl.core.app.Biometrics
 import com.sealctl.designsystem.Body
 import com.sealctl.designsystem.Muted
 import com.sealctl.designsystem.PlainButton
@@ -46,6 +47,7 @@ import com.sealctl.designsystem.monoStyle
 import com.sealctl.vault.AuthResult
 import com.sealctl.vault.Biometric
 import com.sealctl.vault.KeysInvalidatedException
+import com.sealctl.vault.NoBiometricsException
 import com.sealctl.vault.Vault
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -56,12 +58,23 @@ sealed class GateResult {
     data object Cancelled : GateResult()
     data object LockedOut : GateResult()
     data object Changed : GateResult()
+    /** No strong biometric on this phone: level 2 uses the card, level 3 is refused (9.6). */
+    data object NoBiometrics : GateResult()
     data class Failed(val message: String) : GateResult()
 }
 
 suspend fun biometricGate(activity: FragmentActivity, reason: String): GateResult {
+    if (Biometric.availability(activity) != Biometrics.AVAILABLE) return GateResult.NoBiometrics
     val vault = Graph.engine.vault
-    val gate = try { vault.gate() } catch (e: KeysInvalidatedException) { return GateResult.Changed }
+    val gate = try {
+        vault.gate()
+    } catch (e: KeysInvalidatedException) {
+        return GateResult.Changed
+    } catch (e: NoBiometricsException) {
+        return GateResult.NoBiometrics
+    } catch (e: java.security.GeneralSecurityException) {
+        return GateResult.Failed(e.javaClass.simpleName)
+    }
     return when (val r = Biometric.strong(activity, reason, "Cancel", gate.cipher)) {
         is AuthResult.Success -> {
             val c = r.cipher ?: return GateResult.Failed("no cipher")
@@ -120,6 +133,10 @@ fun SensitiveScreen(activity: MainActivity, requestId: String) {
                             step = SStep.CardWords; return@launch
                         }
                         GateResult.Changed -> { step = SStep.CardWords; return@launch }
+                        GateResult.NoBiometrics -> {
+                            if (level3) { engine.refuse(w, RefuseReason.NO_BIOMETRICS); error = Texts.NO_BIOMETRICS; return@launch }
+                            step = SStep.CardWords; return@launch
+                        }
                         is GateResult.Failed -> { error = g.message; return@launch }
                     }
                 }
@@ -275,15 +292,21 @@ fun ReportScreen(id: String) {
     }
 }
 
+/** Wrong checks on one opening of the words before they close and new positions are picked. */
+private const val CARD_TRIES = 3
+
 /**
  * Typed words from the card (level 2 fallback, yearly check, Leave sealctl). The words are
- * opened behind the words prompt and checked inside the core; nothing typed is kept.
+ * opened behind the words prompt and checked inside the core; nothing typed is kept. A check
+ * says only whether all the words match, never which one is wrong, and after [CARD_TRIES]
+ * wrong checks the words close and the next opening asks for other positions.
  */
 @Composable
 fun CardWords(activity: FragmentActivity, positions: Int, groups: Int, title: String, body: String? = null, onPassed: () -> Unit, onCancel: () -> Unit) {
     val scope = rememberCoroutineScope()
     var opened by remember { mutableStateOf(Graph.words.hasSession()) }
-    val pos = remember { Graph.words.positions(positions, groups) }
+    var pos by remember { mutableStateOf(Graph.words.positions(positions, groups)) }
+    var wrong by remember { mutableIntStateOf(0) }
     val typed = remember { mutableListOf<String>().apply { repeat(positions) { add("") } } }
     var focus by remember { mutableIntStateOf(0) }
     var prefix by remember { mutableStateOf("") }
@@ -312,8 +335,17 @@ fun CardWords(activity: FragmentActivity, positions: Int, groups: Int, title: St
             if (focus < positions - 1) focus++
         })
         PrimaryButton("Check", {
-            val wrong = pos.indices.firstOrNull { !Graph.words.matches(pos[it], typed[it]) }
-            if (wrong == null) { Graph.words.release(); onPassed() } else message = "That's not word ${pos[wrong]} on these words."
+            // Every position is checked, and the answer is all or nothing.
+            val ok = pos.indices.map { Graph.words.matches(pos[it], typed[it]) }.all { it }
+            if (ok) { Graph.words.release(); onPassed(); return@PrimaryButton }
+            wrong++
+            if (wrong < CARD_TRIES) { message = "These words don't match your card. Check each one."; return@PrimaryButton }
+            Graph.words.release()
+            for (i in typed.indices) typed[i] = ""
+            focus = 0; prefix = ""; wrong = 0; tick++
+            pos = Graph.words.positions(positions, groups)
+            opened = false
+            message = "These words don't match your card. Open your words again: you'll be asked for other ones."
         }, enabled = typed.all { it.isNotEmpty() })
     }) {
         Title(title)

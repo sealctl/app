@@ -37,27 +37,46 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Xcode and Rust
         run: |
           xcodebuild -version
           rustup show active-toolchain || rustup toolchain install
           rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin
-          brew list xcodegen >/dev/null 2>&1 || brew install xcodegen
 
-      - uses: Swatinem/rust-cache@v2
+      # XcodeGen from its GitHub release, pinned by version and checksum (not whatever Homebrew
+      # has); 2.46.0 is the version the runner's Homebrew installed before.
+      - name: XcodeGen
+        env:
+          XCODEGEN_VERSION: "2.46.0"
+          XCODEGEN_SHA256: 4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/xcodegen.zip" \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/$XCODEGEN_VERSION/xcodegen.zip"
+          echo "$XCODEGEN_SHA256  $RUNNER_TEMP/xcodegen.zip" | shasum -a 256 -c -
+          unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/xcodegen/bin/xcodegen" --version
+
+      # Caches written by pull request runs are scoped to that pull request's ref; runs on main
+      # only restore caches written on main, so a pull request cannot poison them.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Cached XCFramework
         id: xcf
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ios/Packages/SealCore/SealctlFFI.xcframework
           key: xcf-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', 'shared/**', 'scripts/build-core-ios.sh') }}
 
       - name: Core XCFramework and Swift bindings
+        env:
+          XCF_CACHE_HIT: ${{ steps.xcf.outputs.cache-hit }}
         run: |
-          if [ "${{ steps.xcf.outputs.cache-hit }}" = true ]; then BINDINGS_ONLY=1 scripts/build-core-ios.sh; else scripts/build-core-ios.sh; fi
+          if [ "$XCF_CACHE_HIT" = true ]; then BINDINGS_ONLY=1 scripts/build-core-ios.sh; else scripts/build-core-ios.sh; fi
           git diff --exit-code -- ios/Packages/SealCore/Sources
 
       - name: Simulator
@@ -129,16 +148,17 @@ jobs:
 
       - name: UI tests (fake relay, fake machine, sealctl CLI)
         env:
+          ONLY: ${{ inputs.only }}
           TEST_RUNNER_SEALCTL_RELAY: ${{ env.FAKE_RELAY }}
           TEST_RUNNER_SEALCTL_TEST_DELAY: "20"
         run: |
           set -o pipefail
           SEALCTL_RELAY="$FAKE_RELAY" nohup python3 ios/scripts/harness.py 8790 > "$RUNNER_TEMP/harness.log" 2>&1 &
           sleep 1
-          only=""
-          [ -n "${{ inputs.only }}" ] && only="-only-testing:${{ inputs.only }}"
+          only=()
+          [ -n "$ONLY" ] && only=("-only-testing:$ONLY")
           xcodebuild test-without-building -project ios/sealctl.xcodeproj -scheme sealctlUITests \
-            -destination "id=$SIM_UDID" -derivedDataPath "$RUNNER_TEMP/dd" $only \
+            -destination "id=$SIM_UDID" -derivedDataPath "$RUNNER_TEMP/dd" "${only[@]}" \
             -resultBundlePath "$RUNNER_TEMP/ui.xcresult" | grep -E "Test Case|error|failed|passed|skipped|\*\*" | tail -200
           pkill -f harness.py || true
 
@@ -160,7 +180,7 @@ jobs:
 
       - name: Logs and results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-results
           retention-days: 7

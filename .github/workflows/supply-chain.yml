@@ -1,0 +1,69 @@
+name: Supply chain
+
+# The Gradle wrapper is the genuine one, Gradle artifacts match android/gradle/verification-metadata.xml
+# on Linux too, `cargo deny` (advisories, licences, sources: deny.toml) and `cargo vet`
+# (supply-chain/). Weekly as well, so a new advisory against a locked crate shows up without a push.
+
+on:
+  push:
+    branches: [main]
+    paths: ["Cargo.toml", "Cargo.lock", "**/Cargo.toml", "deny.toml", "supply-chain/**", "rust-toolchain.toml", "android/**", ".github/workflows/supply-chain.yml"]
+  pull_request:
+    paths: ["Cargo.toml", "Cargo.lock", "**/Cargo.toml", "deny.toml", "supply-chain/**", "rust-toolchain.toml", "android/**", ".github/workflows/supply-chain.yml"]
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supply-chain-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  gradle-wrapper:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: gradle/actions/wrapper-validation@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+
+  gradle-verification:
+    needs: gradle-wrapper
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Every artifact Gradle downloads is checked against verification-metadata.xml; the
+      # wrapper checks the distribution against distributionSha256Sum. No Gradle cache: nothing
+      # downloaded here is reused by another run. No native libraries: they do not change
+      # what Gradle resolves.
+      - name: Build with dependency verification
+        working-directory: android
+        run: ./gradlew --no-daemon --stacktrace assembleDebug
+
+  cargo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
+        # Only versions in install-action's manifest, which carries their SHA-256; no fallback
+        # to an unchecked download.
+        with:
+          tool: cargo-deny@0.20.2,cargo-vet@0.10.3
+          fallback: none
+      - name: cargo deny
+        run: cargo deny --locked check
+      # Informational until every crate has an audit or an exemption reviewed by a person: a new
+      # crate version fails here and `cargo vet suggest` says what to look at.
+      - name: cargo vet
+        continue-on-error: true
+        run: cargo vet --locked || { cargo vet suggest; exit 1; }

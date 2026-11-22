@@ -19,7 +19,8 @@ uniffi = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-rusqlite = { version = "0.32", features = ["bundled"] }
+# fallible_uint: u64 parameters as in rusqlite 0.32 (an error above i64::MAX).
+rusqlite = { version = "0.41", features = ["bundled", "fallible_uint"] }
 
 [dev-dependencies]
 proptest = "1"

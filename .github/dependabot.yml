@@ -1,0 +1,67 @@
+# Version updates wait out a cooldown, so a release that is pulled or found malicious in its
+# first days never reaches a pull request. Security updates are not delayed.
+#
+# Gradle: Dependabot does not update android/gradle/verification-metadata.xml. After its pull
+# request changes a version, regenerate the checksums and review the diff before merging:
+#   cd android && ./gradlew --write-verification-metadata sha256 help assembleDebug assembleRelease \
+#     assembleDebugAndroidTest testDebugUnitTest lintDebug
+#
+# Swift: the iOS packages have no remote dependencies (local path packages and a locally built
+# XCFramework), so there is nothing for Dependabot to update. Add `swift` when one appears.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    # One workspace: shared/, tools/fake-relay, tools/fake-machine, tools/uniffi-bindgen.
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 5
+    ignore:
+      # A git dependency whose commit is moved by hand with the sealctl repo (README).
+      - dependency-name: sealctl-core
+      # Must match the UniFFI version sealctl-core uses (SPEC.md 5.2).
+      - dependency-name: "uniffi*"
+    groups:
+      cargo-minor-and-patch:
+        applies-to: version-updates
+        update-types: [minor, patch]
+
+  - package-ecosystem: gradle
+    directory: /android
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 5
+    groups:
+      android-gradle-plugin-and-kotlin:
+        applies-to: version-updates
+        patterns: ["com.android.*", "org.jetbrains.kotlin*"]
+      androidx:
+        applies-to: version-updates
+        patterns: ["androidx.*"]
+        update-types: [minor, patch]
+      google-and-firebase:
+        applies-to: version-updates
+        patterns: ["com.google.*"]
+        update-types: [minor, patch]
+      gradle-other-minor-and-patch:
+        applies-to: version-updates
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        applies-to: version-updates
+        patterns: ["*"]

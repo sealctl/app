@@ -29,7 +29,8 @@ import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-ROOT = tempfile.mkdtemp(prefix="sealctl-harness-")
+# Short paths: the CLI's daemon keeps unix sockets under HOME (104-byte limit).
+ROOT = tempfile.mkdtemp(prefix="sch-", dir="/tmp")
 JOBS = {}
 LOCK = threading.Lock()
 NEXT = [0]

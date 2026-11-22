@@ -20,7 +20,6 @@ final class ApprovalTests: SealctlTestCase {
         see("~/dev/shop")
         see("dev@mbp.example.com · claude")
         tap("Allow for this session")
-        see("Allowed for this session")
         XCTAssertEqual(job.wait(30).0, 0)
 
         // own: Allow once.

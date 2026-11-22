@@ -10,9 +10,6 @@ license = "AGPL-3.0-only"
 repository = "https://github.com/sealctl/app"
 
 [workspace.dependencies]
-# Pre-release exception to SPEC.md 5.2: sealctl has no release tag with sealctl-core yet,
-# so the core is taken from the `phone` branch and pinned by commit in Cargo.lock.
-# Switch to `tag = "v0.7.0"` once that release exists.
 sealctl-core = { git = "https://github.com/sealctl/sealctl", branch = "phone" }
 uniffi = { version = "=0.32.2", default-features = false }
 serde = { version = "1", features = ["derive"] }

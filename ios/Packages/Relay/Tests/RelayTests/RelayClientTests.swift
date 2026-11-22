@@ -126,3 +126,14 @@ actor Flag {
     var value = false
     func set() { value = true }
 }
+
+struct JSONNumberTests {
+    @Test func relayNumbersOutOfRangeReadAsMissing() throws {
+        let o = try JSON(data: Data(#"{"a": 1700000000000, "b": -1, "c": 1e20, "d": -1e300, "e": 2.9}"#.utf8))
+        #expect(o["a"].int64 == 1_700_000_000_000)
+        #expect(o["b"].int64 == -1)
+        #expect(o["c"].int64 == nil)
+        #expect(o["d"].long == 0)
+        #expect(o["e"].int64 == 2)
+    }
+}

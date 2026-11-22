@@ -53,7 +53,12 @@ public enum JSON: Sendable, Equatable {
     public var string: String? { if case .string(let s) = self { return s }; return nil }
     public var bool: Bool? { if case .bool(let b) = self { return b }; return nil }
     public var double: Double? { if case .number(let n) = self { return n }; return nil }
-    public var int64: Int64? { double.map { Int64($0) } }
+    /// Whole numbers JSON carries exactly (±2^53); nil for anything else, so a relay's number
+    /// can't trap a conversion or the arithmetic on it.
+    public var int64: Int64? {
+        guard let d = double, d.isFinite, abs(d) <= 9_007_199_254_740_991 else { return nil }
+        return Int64(d.rounded(.towardZero))
+    }
     public var array: [JSON] { if case .array(let a) = self { return a }; return [] }
     public var isNull: Bool { self == .null }
     public var str: String { string ?? "" }

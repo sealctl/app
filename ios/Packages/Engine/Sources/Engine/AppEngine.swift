@@ -103,11 +103,12 @@ public final class AppEngine {
         writeSnapshot()
     }
 
-    public func apply(_ event: Event, upload: Bool = false) async {
+    /// `rescheduleUpload: false` inside an upload, which must not cancel itself.
+    public func apply(_ event: Event, upload: Bool = false, rescheduleUpload: Bool = true) async {
         if let s = try? await db.run({ try $0.apply(event: event) }) { state = s }
         if let l = try? await db.run({ try $0.local() }) { local = l }
         writeSnapshot()
-        scheduleUpload(after: upload ? 0 : 10)
+        if rescheduleUpload { scheduleUpload(after: upload ? 0 : 10) }
     }
 
     public func applyLocal(_ event: LocalEvent) async {
@@ -117,6 +118,8 @@ public final class AppEngine {
 
     /// The extension's snapshot, after every change (6.4).
     func writeSnapshot() {
+        // A trusted place removed here or by a merge sends no exit event: it stops counting now.
+        if let c = currentPlace, !state.places.contains(where: { $0.id == c && !$0.deleted }) { currentPlace = nil }
         guard phase == .ready || { if case .onboarding = phase { return true }; return false }() else { return }
         files.writeSnapshot(ExtensionSnapshot(state: state, local: local, currentPlace: currentPlace,
                                               placesOn: places?.hasForeground ?? false, relay: config.relayURL))

@@ -97,6 +97,12 @@ public struct ExtensionHandler: Sendable {
             return Notes.passive(Texts.answeredByItself(name, place: placeName), userInfo: ["answered": r.id])
         case .planKeys:
             guard let plan = snap.plan(r.machine), let root = await vault.readRoot() else { break }
+            // A delayed plan cancelled from a computer is in the snapshot only after the app ran:
+            // ask the relay, and leave the request to the app when it is cancelled or unknown.
+            if let delayId = plan.delayId {
+                guard let delayed = try? await relay.listDelayed(),
+                      !delayed.contains(where: { $0.id == delayId && $0.state == "cancelled" }) else { break }
+            }
             let approval = PlanApproval(machine: plan.machine, hash: plan.planHash, notBefore: plan.notBefore,
                                         keys: plan.keys.map { KeyRef(purpose: $0.purpose, id: $0.id) })
             guard let sealed = try? sealPlanKeysReply(root: root, keys: keys, request: req, approval: approval),
@@ -106,8 +112,9 @@ public struct ExtensionHandler: Sendable {
             return Notes.passive(Texts.answeredByItself(name, place: placeName), userInfo: ["answered": r.id])
         case .refused:
             let err = verdict.refuse ?? .unsupported
-            if let sealed = try? sealReply(root: nil, keys: keys, request: req, decision: .refuse(err: err)) {
-                _ = try? await relay.reply(id: r.id, sealed: sealed, userTapped: false)
+            // Recorded only once posted; otherwise the app sees the request again and answers it.
+            if let sealed = try? sealReply(root: nil, keys: keys, request: req, decision: .refuse(err: err)),
+               (try? await relay.reply(id: r.id, sealed: sealed, userTapped: false)) != nil {
                 files.writeInbox(InboxItem(id: r.id, machine: r.machine, sealed: r.sealed, outcome: "denied", allowed: false,
                                            placeId: nil, time: now))
             }

@@ -24,14 +24,18 @@ extension AppEngine {
         default: return false
         }
         for _ in 0..<3 {
+            // Turned off while this upload waited on a conflict: the blob is being cleared.
+            guard state.settings.relayBackup else { return false }
             guard let plain = try? await db.run({ try $0.stateForUpload() }),
                   let blob = await withRoot({ try stateSeal(root: $0, plaintext: plain) }) else { return false }
             do {
                 let rev = try await relay.putState(rev: Int64(local.stateRev), blob: blob)
-                await applyLocal(.synced(rev: UInt64(rev), uploaded: true))
+                await applyLocal(.synced(rev: UInt64(clamping: rev), uploaded: true))
+                relayOk()
                 return true
             } catch RelayError.conflict {
-                if !(await download()) { return false }
+                // Merge and try again here: rescheduling would cancel this upload's own task.
+                if !(await download(rescheduleUpload: false)) { return false }
             } catch {
                 relayFailed(error)
                 return false
@@ -42,15 +46,15 @@ extension AppEngine {
 
     /// Downloads and merges the relay state.
     @discardableResult
-    public func download() async -> Bool {
+    public func download(rescheduleUpload: Bool = true) async -> Bool {
         guard await phoneKeys() != nil else { return false }
         do {
             let (rev, blob) = try await relay.getState()
             if let blob {
                 guard let remote = await withRoot({ try decodeState(bytes: stateOpen(root: $0, blob: blob)) }) else { return false }
-                await apply(.mergeRemote(remote: remote))
+                await apply(.mergeRemote(remote: remote), rescheduleUpload: rescheduleUpload)
             }
-            await applyLocal(.synced(rev: UInt64(rev), uploaded: false))
+            await applyLocal(.synced(rev: UInt64(clamping: rev), uploaded: false))
             return true
         } catch {
             relayFailed(error)
@@ -58,11 +62,46 @@ extension AppEngine {
         }
     }
 
-    public func setRelayBackup(_ on: Bool) async {
+    /// Off also replaces the blob on the relay with an empty state (6.5). When the relay could
+    /// not be cleared the backup stays on, as it still is, and the person is told.
+    @discardableResult
+    public func setRelayBackup(_ on: Bool) async -> Bool {
         var s = state.settings
         s.relayBackup = on
         await apply(.setSettings(settings: s), upload: on)
-        if !on { _ = try? await relay.putState(rev: Int64(local.stateRev), blob: nil) }
+        guard !on else { return true }
+        uploadTask?.cancel()
+        if await clearRelayState() { return true }
+        s.relayBackup = true
+        await apply(.setSettings(settings: s))
+        show(Texts.relayBackupKept)
+        return false
+    }
+
+    /// `PUT` of a sealed empty state over the stored blob; nothing to do when there is none.
+    func clearRelayState() async -> Bool {
+        guard await phoneKeys() != nil,
+              let empty = await withRoot({ try stateSeal(root: $0, plaintext: encodeState(state: Self.emptyState)) }) else {
+            return false
+        }
+        do {
+            let stored = try await relay.getState()
+            guard stored.blob != nil else { return true }
+            var rev = stored.rev
+            for _ in 0..<3 {
+                do {
+                    rev = try await relay.putState(rev: rev, blob: empty)
+                    await applyLocal(.synced(rev: UInt64(clamping: rev), uploaded: true))
+                    relayOk()
+                    return true
+                } catch RelayError.conflict(let current) {
+                    rev = current
+                }
+            }
+        } catch {
+            relayFailed(error)
+        }
+        return false
     }
 
     public func setKeychainBackup(_ on: Bool) async -> Bool {

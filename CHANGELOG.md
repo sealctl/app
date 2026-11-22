@@ -1,25 +1,33 @@
 # Changelog
 
-## Unreleased (0.1.0)
+All notable changes to this project are documented here.
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
+[Semantic Versioning](https://semver.org/).
 
-Built on `sealctl-core` 0.7.0 from the `sealctl` `phone` branch, commit
-`ac3f1e92151ee62ce91617244df5ca1f6d2287a0` (pre-release exception to SPEC.md 5.2: no release tag
-holds the core yet). UniFFI 0.32.2.
+## 0.1.0
 
-- `sealctl-app` Rust crate: state model and encoding, merge with tombstones, `decide()` for the
-  levels of asking and confirmation levels, day records, place learning, lifetimes, monthly
-  summaries, card checks, SQLite store.
+The sealctl phone app for iPhone and Android: it holds the root made from your 24 words and
+approves your computers' requests for keys. API keys, SSH and git signing keys, encrypted volumes
+and backups, opened only when your phone approves. One tap per use; your AI agents never see the
+key. Built on `sealctl-core` 0.7.0 with UniFFI 0.32.2.
+
+### Added
+
+- Onboarding: 24 words shown behind the device lock and hidden from screenshots and screen
+  recording, then a card check; restore from typed words, or on Android from Block Store.
+- Pairing a computer by scanning its QR code or typing its code, behind biometrics.
+- The approval card and notifications with unlock-first actions; remembered answers per agent
+  and repository; places that set how long a session stays open.
+- Confirmation levels 2 and 3 for sensitive requests: number match, the signed plan, strong
+  biometrics, a two-hour delay away from a trusted place with cancel from the phone or any paired
+  computer, and the hand-back report.
+- Machines, activity, inventory, answers, places and settings screens; push registration and a
+  test push; relay state sync; Delete my relay data, Erase and Leave sealctl.
+- iPhone: SwiftUI app with the keychain items of SPEC.md 7.2, Face ID or the passcode for the
+  words, a `.biometryCurrentSet` gate for levels 2 and 3, a Notification Service Extension and
+  CLMonitor places.
+- Android: Jetpack Compose app with Android Keystore keys, `FLAG_SECURE` on the words and FCM
+  push.
+- `sealctl-app` Rust crate shared by both apps: state model and merge, `decide()` for the levels
+  of asking, day records, place learning, lifetimes, monthly summaries, card checks, SQLite store.
 - `fake-relay` and `fake-machine` test tools.
-- Android app: onboarding (words behind the prompt, FLAG_SECURE, card check), restore from typed
-  words and Block Store, pairing by QR code or typed code with the biometric gate, the approval
-  card and notifications with unlock-first actions, levels 2 and 3 (number match, plan, strong
-  biometrics, one-hour delay with cancel, hand-back report), machines, activity, inventory,
-  answers, places, settings, push registration and test push, relay state sync, Delete my relay
-  data, Erase, Leave sealctl.
-- iPhone app (Swift 6, SwiftUI, Observation; XcodeGen): the same flows as Android, with the
-  keychain items of SPEC.md 7.2, Face ID or the passcode for the words, the `.biometryCurrentSet`
-  gate for levels 2 and 3, words drawn in a secure layer and hidden while recorded, the
-  Notification Service Extension, the app group snapshot and inbox, notification categories
-  with unlock-first actions, CLMonitor places. Packages SealCore, Vault, Relay, Places, Engine,
-  DesignSystem; `scripts/build-core-ios.sh`. Simulator only for now (no Apple developer account):
-  no APNs, iCloud Keychain sync or universal links yet.

@@ -87,6 +87,10 @@ struct EngineFlowTests {
         (code, out) = await m.waitAsync(r)
         #expect(code == 0, "\(out)")
         #expect(engine.state.answers.filter { !$0.deleted }.count == 1)
+        // The answer covers the named key; the key it comes in needs an Open session, as for
+        // `keys` (SPEC 9.3), so the machine reports one first.
+        #expect(try m.run(["status", "--state", "open", "--left", "3600"]).0 == 0)
+        await engine.refreshStatus()
         r = try m.start(agentArgs)
         for _ in 0..<50 where r.process.isRunning {
             await engine.catchUp()

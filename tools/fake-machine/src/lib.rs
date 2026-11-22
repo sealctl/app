@@ -95,8 +95,31 @@ impl Relay {
         (now_ms() as i64 / 1000 + self.skew).max(0) as u64
     }
 
-    /// A signed call. Returns the status and the JSON body (`Null` when empty).
+    /// A signed call. Short-term `429` limits (`network`, `key`) are waited out up to three
+    /// times, as a real machine would. Returns the status and the JSON body.
     pub async fn call(
+        &self,
+        signer: &Signer<'_>,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+    ) -> Result<(u16, Value)> {
+        let mut tries = 0;
+        loop {
+            let (status, json) = self.call_once(signer, method, path, body).await?;
+            let short = json.get("scope").and_then(Value::as_str).is_some_and(|s| s != "phone");
+            if status == 429 && short && tries < 3 {
+                let wait = json.get("retryAfter").and_then(Value::as_u64).unwrap_or(60).min(90);
+                eprintln!("rate limited ({}), waiting {wait} s", json["scope"]);
+                tokio::time::sleep(std::time::Duration::from_secs(wait + 1)).await;
+                tries += 1;
+                continue;
+            }
+            return Ok((status, json));
+        }
+    }
+
+    async fn call_once(
         &self,
         signer: &Signer<'_>,
         method: &str,
@@ -146,8 +169,23 @@ impl Relay {
         Ok((status, res.json().await.unwrap_or(Value::Null)))
     }
 
-    /// Opens a signed WebSocket (`/wait`, `/socket`, a machine socket).
+    /// Opens a signed WebSocket (`/wait`, `/socket`, a machine socket), waiting out a
+    /// short-term `429` up to three times.
     pub async fn socket(&self, signer: &Signer<'_>, path: &str) -> Result<Socket> {
+        let mut tries = 0;
+        loop {
+            match self.socket_once(signer, path).await {
+                Err(e) if tries < 3 && e.to_string().contains("429") && !e.to_string().contains("\"phone\"") => {
+                    eprintln!("socket rate limited, waiting 61 s");
+                    tokio::time::sleep(std::time::Duration::from_secs(61)).await;
+                    tries += 1;
+                }
+                r => return r,
+            }
+        }
+    }
+
+    async fn socket_once(&self, signer: &Signer<'_>, path: &str) -> Result<Socket> {
         let h = signer.headers("GET", path, self.time(), b"");
         let url = format!("{}{}", self.base.replacen("http", "ws", 1), path);
         let mut req = url.into_client_request()?;

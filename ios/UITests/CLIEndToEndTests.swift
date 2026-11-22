@@ -5,7 +5,7 @@ import XCTest
 /// with and without own approval, an agent's first use, `unseal` of one secret (level 2) and
 /// `unseal --all` (level 3) with the number, the delay, a cancel, and the report.
 final class CLIEndToEndTests: SealctlTestCase {
-    let name = "pairtest@ci.example.com"
+    let machineName = "pairtest@ci.example.com"
 
     override func setUpWithError() throws {
         try super.setUpWithError()
@@ -25,13 +25,13 @@ final class CLIEndToEndTests: SealctlTestCase {
     }
 
     func pairCLI() {
-        let job = Harness.cli("c1", ["pair", "--name", name])
+        let job = Harness.cli("c1", ["pair", "--name", machineName])
         guard let link = job.find("(https://sealctl\\.com/p#\\S+)", timeout: 60) else {
             XCTFail("no pairing link: \(job.output)")
             return
         }
         typePairingCode(link)
-        confirmPairing(name)
+        confirmPairing(machineName)
         let (code, out) = job.wait(60)
         XCTAssertEqual(code, 0, out)
         XCTAssertTrue(out.contains("Paired"), out)
@@ -40,10 +40,10 @@ final class CLIEndToEndTests: SealctlTestCase {
     func testRealCLIEndToEnd() {
         if Env.fakeRelay { restoreVectorWords() } else { onboardNewWords() }
         pairCLI()
-        see(name, 10)
+        see(machineName, 10)
 
         // open (level 1, One tap): the session opens.
-        var (code, out) = run(["open"], card: "Open \(name)?", button: "Allow for this session")
+        var (code, out) = run(["open"], card: "Open \(machineName)?", button: "Allow for this session")
         XCTAssertEqual(code, 0, out)
 
         // A secret in the store; then an own-approval secret, asked at every use.
@@ -80,7 +80,7 @@ final class CLIEndToEndTests: SealctlTestCase {
         var all = Harness.cli("c1", ["unseal", "--all"], stdin: "unseal\n", tty: true)
         see("Which number does", 90)
         tap("number \(all.find("pick (\\d+)", timeout: 10)!)")
-        see("Hand back everything on \(name)?")
+        see("Hand back everything on \(machineName)?")
         tap("Confirm with Face ID")
         faceID(then: "Starts at", 30)
         tap("Cancel")
@@ -100,6 +100,6 @@ final class CLIEndToEndTests: SealctlTestCase {
         XCTAssertEqual(code, 0, out)
         tap("Close", 30)
         tab("Activity")
-        see("\(name) handed everything back", 60)
+        see("\(machineName) handed everything back", 60)
     }
 }

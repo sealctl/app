@@ -124,8 +124,10 @@ fun ApprovalCard(w: Waiting, more: Int) {
                 }
             }
             if (more > 0) Muted(Texts.moreWaiting(more))
+            val st by engine.state.collectAsState()
+            val here by engine.currentPlace.collectAsState()
             if (w.verdict.answersByItselfHere) {
-                val place = engine.state.value.places.firstOrNull { it.id == engine.currentPlace.value }?.name
+                val place = st.places.firstOrNull { it.id == here }?.name
                 if (place != null) Muted(Texts.answersHere(place))
             }
         }

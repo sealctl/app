@@ -111,5 +111,3 @@ fun ctx() = LocalContext.current
 
 val ContentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp)
 
-@Suppress("unused")
-private fun unused(i: ImageVector) = Modifier.size(1.dp)

@@ -202,7 +202,7 @@ fun ActivityList(machine: String?) {
     val month = Texts.isoDate(System.currentTimeMillis()).take(7)
     val summary = state.summaries.firstOrNull { it.month == month }
     SurfaceCard {
-        Text(java.time.YearMonth.parse(month).month.getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.getDefault()),
+        Text(java.time.YearMonth.parse(month).month.getDisplayName(java.time.format.TextStyle.FULL, androidx.compose.ui.platform.LocalConfiguration.current.locales[0]),
             fontWeight = FontWeight.SemiBold, color = Sealctl.colors.ink, fontSize = 18.sp)
         Text("${summary?.keysUsed ?: 0} keys used on ${summary?.machines?.size ?: 0} machines", color = Sealctl.colors.ink2)
         Text("${summary?.requestsDeclined ?: 0} requests declined", color = Sealctl.colors.ink2)

@@ -87,7 +87,7 @@ fun Wordmark(modifier: Modifier = Modifier, size: Int = 28) {
 @Composable
 fun Mono(text: String, modifier: Modifier = Modifier, size: Int = 15, color: Color = Sealctl.colors.ink, weight: FontWeight = FontWeight.Normal) {
     // Names, commands and paths are never translated and always read left to right (SPEC.md 13).
-    Text("⁦$text⁩", style = monoStyle(size, weight), color = color, modifier = modifier)
+    Text(Char(0x2066) + text + Char(0x2069), style = monoStyle(size, weight), color = color, modifier = modifier)
 }
 
 @Composable

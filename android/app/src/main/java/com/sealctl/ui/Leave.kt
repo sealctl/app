@@ -227,5 +227,3 @@ private fun EachComputer(onContinue: () -> Unit, onSkip: (String) -> Unit, onBac
     }
 }
 
-@Suppress("unused")
-private fun keepModifier() = Modifier

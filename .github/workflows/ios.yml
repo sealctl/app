@@ -45,9 +45,16 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Cached XCFramework
+        id: xcf
+        uses: actions/cache@v4
+        with:
+          path: ios/Packages/SealCore/SealctlFFI.xcframework
+          key: xcf-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml', 'shared/**', 'scripts/build-core-ios.sh') }}
+
       - name: Core XCFramework and Swift bindings
         run: |
-          scripts/build-core-ios.sh
+          if [ "${{ steps.xcf.outputs.cache-hit }}" = true ]; then BINDINGS_ONLY=1 scripts/build-core-ios.sh; else scripts/build-core-ios.sh; fi
           git diff --exit-code -- ios/Packages/SealCore/Sources
 
       - name: Simulator

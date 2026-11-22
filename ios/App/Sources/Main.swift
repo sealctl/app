@@ -308,6 +308,7 @@ struct InventoryList: View {
                             Text("· words").foregroundStyle(Palette.ink2)
                             MonoText(i.words, style: .subheadline)
                         }
+                        .accessibilityElement(children: .combine)
                         if !i.path.isEmpty {
                             MonoText([i.path, i.size > 0 ? "\(i.size / 1000) KB" : nil].compactMap { $0 }.joined(separator: " · "),
                                      style: .footnote, color: Palette.ink2)

@@ -68,7 +68,7 @@ Every change to the app is checked against this list. Reviewers reject a change 
 5. **Locations stay on the phone.** No maps, no reverse geocoding, no location in any request to any server. Places reach the relay only inside the encrypted state blob.
 6. **No account, no analytics, no ads, no trackers, no crash-reporting SDK.** Platform crash reports (App Store Connect, Play Console) are the only diagnostics.
 7. **No logs of secrets or context.** Key names, paths, commands, repository names and machine names are logged only with private redaction (`OSLog` `.private`; no `Log` calls in Android release builds).
-8. **None of the asking rules is a setting.** Levels of asking, confirmation levels, allowances, lifetimes and the one-hour delay are fixed. The user can turn off backups, places and notifications, nothing else that changes when the phone asks.
+8. **None of the asking rules is a setting.** Levels of asking, confirmation levels, allowances, lifetimes and the two-hour delay are fixed. The user can turn off backups, places and notifications, nothing else that changes when the phone asks.
 9. **Same words everywhere:** Locked, Open, Waiting, One tap, Places, Answers, Inventory, words, card.
 
 ## 3. Platforms
@@ -357,7 +357,7 @@ Errors the app handles everywhere:
 | Unpair, replace a duplicate | `DELETE /v1/phones/{phone}/machines/{machine}` |
 | App in the foreground | `GET /v1/phones/{phone}/socket` (WebSocket) |
 | After a push, on foreground, after the socket reconnects | `GET /v1/phones/{phone}/requests` |
-| Every answer | `POST /v1/phones/{phone}/requests/{id}/reply`; with `"delay": 3600` for a level 3 approval away from a trusted place (9.6) |
+| Every answer | `POST /v1/phones/{phone}/requests/{id}/reply`; with `"delay": 7200` for a level 3 approval away from a trusted place (9.6) |
 | Delayed actions (11.23) | `POST /v1/phones/{phone}/delayed` for an action on the phone; `GET /v1/phones/{phone}/delayed` on foreground and after a `delayed` or `cancelled` push or socket note; `POST .../delayed/{id}/cancel`; `POST .../delayed/{id}/finish` |
 | Sync | `GET` and `PUT /v1/phones/{phone}/state` |
 | Change of words (11.14) | `POST /v1/phones/{old}/licence/move` with `{"to", "proof"}`, signed by the old key; `proof` is the new key's Ed25519 signature over `sealctl-licence-move-v1\n<old>\n<new>`. Unpaid phones move too. The app shows nothing about it, whatever it answers (`movedTo`, `licence`, `daysUsed`) |
@@ -483,7 +483,7 @@ Every approval also has a confirmation level (protocol, "Confirmation levels"). 
 | --- | --- | --- | --- |
 | 1 Routine | `open`, `keys`, `agent`, `own` | | As 9.3: Automatic or One tap; the allowance by place (9.4) |
 | 2 Sensitive | `rewrap`; `keys` for `sealctl seal`; `unseal` of one or several objects | Pairing a machine (11.5) | Biometrics every time, no passcode; no allowance, nothing remembered; the exact objects listed; proximity |
-| 3 Leaving | `unseal --all`, or any plan with a `pairing` item | Leave sealctl (11.22), Show words (11.18), Delete my relay data (11.19) | Level 2, plus: the number match (requests); the plan, signed; the one-hour delay away from a trusted place; the card check (Leave sealctl); a report |
+| 3 Leaving | `unseal --all`, or any plan with a `pairing` item | Leave sealctl (11.22), Show words (11.18), Delete my relay data (11.19) | Level 2, plus: the number match (requests); the plan, signed; the two-hour delay away from a trusted place; the card check (Leave sealctl); a report |
 
 Not level 3: showing the words during onboarding (no machine is paired yet) and the new words during a change of words (11.14), which keep Face ID or the passcode.
 
@@ -515,7 +515,7 @@ Near: no number is asked at level 2. Not near with `match`: the number screen co
 
 **Plan.** An `unseal` request carries the plan; parts are collected by `PlanAssembler` and answered at once (protocol). The phone shows every item, signs the plan hash (`Plan` decision) and hands out keys only for items in it. Later `unseal` requests for the same plan are answered without showing anything, up to 30 minutes after the not-before time, and only for keys the plan names.
 
-**Delay.** A level 3 approval when the phone is not inside a trusted place (place kind `other` or `none`) takes effect one hour later; inside a trusted place, at once. For a request, the reply's not-before time is one hour on and the reply is posted with `"delay": 3600`. For an action on the phone, the app registers a delayed action (`POST .../delayed`) and finishes it after the hour, with biometrics again and only after the relay answers `finish` with `200`. The relay announces it on every paired machine and every install; the app also sends each paired machine a sealed `notice` (`seal_machine_message`). Either side can cancel until it finishes.
+**Delay.** A level 3 approval when the phone is not inside a trusted place (place kind `other` or `none`) takes effect two hours later; inside a trusted place, at once. For a request, the reply's not-before time is two hours on and the reply is posted with `"delay": 7200`. For an action on the phone, the app registers a delayed action (`POST .../delayed`) and finishes it after the two hours, with biometrics again and only after the relay answers `finish` with `200`. The relay announces it on every paired machine and every install; the app also sends each paired machine a sealed `notice` (`seal_machine_message`). Either side can cancel until it finishes.
 
 **Report.** After a level 3 action the phone shows what happened and tells every other paired machine (`notice` with `state: "done"`): for `unseal`, from the machine's `report` with `handback`; for actions on the phone, the app's own record.
 
@@ -544,7 +544,7 @@ The app's string catalog defines the two keys, so iOS shows them in the phone's 
 | `REQUEST_TITLE` | "Waiting for your phone" |
 | `REQUEST_BODY` | "A machine is asking for a key. Open to see the request." |
 | `DELAYED_TITLE` | "Approved on your phone" |
-| `DELAYED_BODY` | "Something sensitive was approved on your phone and starts in an hour. Open sealctl to see it or cancel it." |
+| `DELAYED_BODY` | "Something sensitive was approved on your phone and starts in two hours. Open sealctl to see it or cancel it." |
 | `CANCELLED_TITLE` | "Cancelled" |
 | `CANCELLED_BODY` | "A pending sensitive action was cancelled." |
 
@@ -1230,14 +1230,14 @@ The app sends a lock, then `DELETE .../machines/{machine}`.
 > Version 1.0.0 (412) · core 0.7.0 · protocol 1
 > Source code · Licences · Privacy policy · Terms · Report a security issue
 
-- [Show words] is level 3 (11.23): biometrics, and away from a trusted place a one-hour delay announced on every machine. It then shows the 24 words in the protected view (11.21) and tells every machine it did.
+- [Show words] is level 3 (11.23): biometrics, and away from a trusted place a two-hour delay announced on every machine. It then shows the 24 words in the protected view (11.21) and tells every machine it did.
 - Turning iCloud Keychain off: "Turn off the iCloud Keychain copy? A new iPhone will need your card to restore." It deletes the synced item, which iCloud also deletes from your other devices.
 - Turning the relay backup off: "Turn off the relay backup? A new phone will restore your words but not your machines' names, places, answers or inventory." Machines stay paired.
 - "Source code" opens `https://github.com/sealctl/app`. "Licences" lists AGPL-3.0 for the app, MIT for `sealctl-core`, and every third-party licence (generated at build time). "Report a security issue" opens mail to `security@sealctl.com`.
 
 ### 11.19 Delete relay data and erase this phone
 
-**Delete my relay data.** Level 3 (11.23): biometrics at [Delete], then, away from a trusted place, the one-hour delay before the call is made.
+**Delete my relay data.** Level 3 (11.23): biometrics at [Delete], then, away from a trusted place, the two-hour delay before the call is made.
 
 > **Delete your data on the relay?**
 > This unpairs your 3 machines and deletes what the relay keeps for these words: your encrypted phone backup, your machines' records and every phone's notification address. It can't be undone. The privacy policy lists what stays.
@@ -1327,7 +1327,7 @@ Android says "in your Google backup".
 > [Skip a computer]
 > [Continue]
 
-- `sealctl unseal --all` asks with an `unseal` request at level 3 (11.23): the number on its screen, its plan, biometrics, and away from a trusted place a one-hour delay. The row follows it: "Waiting for `sealctl unseal --all`", "Starts at 11:00", "Handing back", "Handed back · 9 objects" [Report].
+- `sealctl unseal --all` asks with an `unseal` request at level 3 (11.23): the number on its screen, its plan, biometrics, and away from a trusted place a two-hour delay. The row follows it: "Waiting for `sealctl unseal --all`", "Starts at 11:00", "Handing back", "Handed back · 9 objects" [Report].
 - A machine shows "Handed back" once it has unpaired itself, which `unseal --all` does as its last relay step, so it disappears from `GET /v1/phones/{phone}/machines`. The phone does not unpair a machine in this flow.
 - [Skip a computer] lists the machines still waiting: "Skip dev@mbp.example.com? Use it when the computer is lost or already wiped. Anything it holds then opens only with your card." [Skip] [Cancel]. A skipped machine is unpaired by the phone at step 3.
 - [Continue] is enabled when every machine is handed back or skipped. With none paired, this step is skipped.
@@ -1336,7 +1336,7 @@ Android says "in your Google backup".
 
 > **Delete your data and the last copy of your words?**
 > Next, this phone deletes your data on the relay and removes your words from iCloud Keychain.
-> At Desk: this happens as soon as you confirm. (Away from your trusted places: "This starts one hour after you confirm. Your phone and your computers can cancel it until then.")
+> At Desk: this happens as soon as you confirm. (Away from your trusted places: "This starts two hours after you confirm. Your phone and your computers can cancel it until then.")
 > [Confirm with Face ID]
 > [Cancel]
 
@@ -1412,7 +1412,7 @@ The screens for levels 2 and 3 (9.6). They are full-screen, never a sheet, and n
 > [Confirm with Face ID]
 > Deny
 
-- Away from a trusted place the line reads: "Away from your trusted places: this starts one hour after you confirm. Your phone and your computers can cancel it until then." Without location permission it says the same without "trusted places": "This starts one hour after you confirm…"
+- Away from a trusted place the line reads: "Away from your trusted places: this starts two hours after you confirm. Your phone and your computers can cancel it until then." Without location permission it says the same without "trusted places": "This starts two hours after you confirm…"
 - Level 2 titles: "Hand back volume safe from dev@mbp.example.com?", "Let sealctl seal take over volume safe on dev@mbp.example.com?", "Move dev@mbp.example.com to words 4kPz?" (rewrap: "12 objects. Each takes seconds."). Level 2 has no delay line.
 - Item names come from the machine and are shown in monospace, one per line, never joined into a sentence.
 - [Confirm with Face ID] reads "Confirm with Touch ID" or, on Android, "Confirm with fingerprint or face". It runs the prompt of 9.6.
@@ -1421,7 +1421,7 @@ The screens for levels 2 and 3 (9.6). They are full-screen, never a sheet, and n
 
 > **Leaving sealctl on dev@mbp.example.com**
 > Starts at 11:00 · 59 min left
-> You approved this away from your trusted places, so it waits an hour. Every paired computer has been told. If this wasn't you, cancel it.
+> You approved this away from your trusted places, so it waits two hours. Every paired computer has been told. If this wasn't you, cancel it.
 > [Cancel]
 
 - The same screen serves the actions on the phone: "Showing your words", "Deleting your relay data", "Leaving sealctl".

@@ -180,7 +180,7 @@ struct PlacesView: View {
                     Text(p.name).fontWeight(.semibold).foregroundStyle(Palette.ink)
                     MutedText("trusted since \(Texts.isoDate(Int64(p.created)))" + (e.currentPlace == p.id ? " · You're here" : ""))
                     if p.manual && Int64(p.created) + 86_400_000 > nowMs() {
-                        MutedText("Skips the one-hour wait from \(Texts.time(Int64(p.created) + 86_400_000)) tomorrow")
+                        MutedText("Skips the two-hour wait from \(Texts.time(Int64(p.created) + 86_400_000)) tomorrow")
                     }
                     if removing == p.id {
                         BodyText("Remove \(p.name)? Machines opened here stay Open until their allowance ends.")
@@ -223,7 +223,7 @@ struct TrustHereView: View {
             SurfaceCard {
                 TitleText("Trust this place?")
                 BodyText("From now on here: reopening your machines needs no tap while your phone is unlocked and near them, sessions can stay open up to 4 hours, and leaving locks the machines you opened here.")
-                BodyText("Showing your words and leaving sealctl skip the one-hour wait here from \(Texts.time(nowMs() + 86_400_000)) tomorrow, so someone holding your unlocked phone can't trust a place to skip it.")
+                BodyText("Showing your words and leaving sealctl skip the two-hour wait here from \(Texts.time(nowMs() + 86_400_000)) tomorrow, so someone holding your unlocked phone can't trust a place to skip it.")
                 MutedText("Accurate to \(Int(f.accuracy)) m. The location stays on this phone.")
                 TextField("Name", text: $name).textFieldStyle(.roundedBorder)
                 ErrorText(error)
@@ -464,7 +464,7 @@ struct PhoneAction<Intro: View>: View {
                     intro
                     if pending == nil {
                         BodyText(e.delayLifted() ? "At your trusted place: this happens as soon as you confirm."
-                                 : "This starts one hour after you confirm. Your phone and your computers can cancel it until then.")
+                                 : "This starts two hours after you confirm. Your phone and your computers can cancel it until then.")
                     } else {
                         BodyText("The hour is over. Confirm again to finish.")
                     }

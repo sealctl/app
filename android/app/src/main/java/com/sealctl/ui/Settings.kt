@@ -224,7 +224,7 @@ fun PlacesScreen(activity: MainActivity) {
             Text(p.name, fontWeight = FontWeight.SemiBold, color = Sealctl.colors.ink)
             Muted("trusted since ${Texts.isoDate(p.created.toLong())}" + if (current == p.id) " · You're here" else "")
             if (p.manual && p.created.toLong() + 86_400_000 > System.currentTimeMillis())
-                Muted("Skips the one-hour wait from ${Texts.time(p.created.toLong() + 86_400_000)} tomorrow")
+                Muted("Skips the two-hour wait from ${Texts.time(p.created.toLong() + 86_400_000)} tomorrow")
             if (removing == p.id) {
                 Body("Remove ${p.name}? Machines opened here stay Open until their allowance ends.")
                 Row { TextButton({ engine.apply(Event.RemovePlace(p.id), upload = true); removing = null; scope.launch { engine.monitorPlaces() } }) { Text("Remove") }; TextButton({ removing = null }) { Text("Cancel") } }
@@ -263,7 +263,7 @@ private fun TrustHere(activity: MainActivity) {
     } else SurfaceCard {
         Title("Trust this place?")
         Body("From now on here: reopening your machines needs no tap while your phone is unlocked and near them, sessions can stay open up to 4 hours, and leaving locks the machines you opened here.")
-        Body("Showing your words and leaving sealctl skip the one-hour wait here from ${Texts.time(System.currentTimeMillis() + 86_400_000)} tomorrow, so someone holding your unlocked phone can't trust a place to skip it.")
+        Body("Showing your words and leaving sealctl skip the two-hour wait here from ${Texts.time(System.currentTimeMillis() + 86_400_000)} tomorrow, so someone holding your unlocked phone can't trust a place to skip it.")
         Muted("Accurate to ${f.accuracy.toInt()} m. The location stays on this phone.")
         OutlinedTextField(name, { name = it.take(40) }, label = { Text("Name") }, modifier = Modifier.fillMaxWidth())
         PrimaryButton("Trust", {
@@ -435,7 +435,7 @@ private fun PhoneAction(activity: MainActivity, what: String, reason: String, in
     }) {
         Gap(16)
         intro()
-        if (pending == null) Body(if (engine.delayLifted()) "At your trusted place: this happens as soon as you confirm." else "This starts one hour after you confirm. Your phone and your computers can cancel it until then.")
+        if (pending == null) Body(if (engine.delayLifted()) "At your trusted place: this happens as soon as you confirm." else "This starts two hours after you confirm. Your phone and your computers can cancel it until then.")
         else Body("The hour is over. Confirm again to finish.")
     }
 }

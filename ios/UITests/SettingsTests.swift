@@ -8,7 +8,7 @@ final class SettingsTests: SealctlTestCase {
         tab("Settings")
         tap("Show words")
         see("Showing the words is a sensitive action. Every paired computer is told.")
-        see("This starts one hour after you confirm.")
+        see("This starts two hours after you confirm.")
         tap("Confirm with Face ID")
         faceID(then: "Showing your words")
         see("Starts at")

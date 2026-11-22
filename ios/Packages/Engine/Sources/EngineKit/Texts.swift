@@ -229,15 +229,15 @@ public enum Texts {
     public static func handBackAll(_ name: String) -> String { "Hand back everything on \(name)?" }
     public static let handBackAllBody = "sealctl unseal --all moves these to passwords of your own. Your files stay encrypted. Then the computer is unpaired."
     public static let atTrusted = "this starts as soon as you confirm."
-    public static let away = "Away from your trusted places: this starts one hour after you confirm. Your phone and your computers can cancel it until then."
-    public static let awayNoLocation = "This starts one hour after you confirm. Your phone and your computers can cancel it until then."
+    public static let away = "Away from your trusted places: this starts two hours after you confirm. Your phone and your computers can cancel it until then."
+    public static let awayNoLocation = "This starts two hours after you confirm. Your phone and your computers can cancel it until then."
     public static func confirm(_ biometry: String = "Face ID") -> String { "Confirm with \(biometry)" }
     public static func leaving(_ name: String) -> String { "Leaving sealctl on \(name)" }
     public static func startsAt(_ at: Int64, now: Int64) -> String {
         let mins = (max(0, at - now) + 59_999) / 60_000
         return "Starts at \(time(at)) · \(mins) min left"
     }
-    public static let delayBody = "You approved this away from your trusted places, so it waits an hour. Every paired computer has been told. If this wasn't you, cancel it."
+    public static let delayBody = "You approved this away from your trusted places, so it waits two hours. Every paired computer has been told. If this wasn't you, cancel it."
     public static let cancelledHere = "Cancelled. Nothing was handed back."
     public static func cancelledFrom(_ name: String) -> String { "Cancelled from \(name)." }
     public static func handsBackAt(_ name: String, at: Int64) -> String { "\(name) hands everything back at \(time(at))." }
@@ -278,7 +278,7 @@ public enum Texts {
     public static let requestTitle = "Waiting for your phone"
     public static let requestBody = "A machine is asking for a key. Open to see the request."
     public static let delayedTitle = "Approved on your phone"
-    public static let delayedBody = "Something sensitive was approved on your phone and starts in an hour. Open sealctl to see it or cancel it."
+    public static let delayedBody = "Something sensitive was approved on your phone and starts in two hours. Open sealctl to see it or cancel it."
     public static let cancelledTitle = "Cancelled"
     public static let cancelledBody = "A pending sensitive action was cancelled."
     public static let placeLearned = "Trust this place? You opened your machines here on 3 mornings."

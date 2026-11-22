@@ -126,7 +126,7 @@ struct LeaveView: View {
                     } else if e.delayLifted() {
                         BodyText("At \(e.currentPlaceName ?? "your trusted place"): this happens as soon as you confirm.")
                     } else {
-                        BodyText("This starts one hour after you confirm. Your phone and your computers can cancel it until then.")
+                        BodyText("This starts two hours after you confirm. Your phone and your computers can cancel it until then.")
                     }
                 } bottom: {
                     ErrorText(error)

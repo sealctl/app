@@ -635,7 +635,7 @@ class Engine(
 
     /**
      * After biometrics: answer a level 2 or 3 request. `unseal` signs the plan, with the
-     * not-before time an hour on away from a trusted place.
+     * not-before time two hours on away from a trusted place.
      */
     suspend fun confirmSensitive(w: Waiting): Boolean {
         val place = placeKind()
@@ -722,7 +722,7 @@ class Engine(
     /** Starts a level 3 action on the phone: at once at a trusted place, else after the hour. */
     suspend fun startPhoneAction(what: String): DelayedAction? {
         if (delayLifted()) return null
-        val delay = delaySecs(3600)
+        val delay = delaySecs(7200)
         val id = randomId()
         val d = relay.addDelayed(id, delay)
         val action = DelayedAction(id, what, null, d.releaseAt.toULong(), d.expires.toULong(), "waiting", null)

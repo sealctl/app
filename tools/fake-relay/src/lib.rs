@@ -620,7 +620,7 @@ fn announce(p: &Phone, note: &Value) {
 }
 
 fn valid_delay(v: &Value) -> Option<u64> {
-    v.as_u64().filter(|d| (1..=3600).contains(d))
+    v.as_u64().filter(|d| (1..=7200).contains(d))
 }
 
 fn create_delayed(

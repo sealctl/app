@@ -263,6 +263,7 @@ public enum Texts {
     public static let tooMany = "This phone has 100 machines paired, the most it can have. Unpair one first."
     public static let licenceRequired = "The relay didn't accept this machine. Run `sealctl status` on it to see why."
     public static let relayDown = "The relay isn't answering. Trying again."
+    public static let relayBackupKept = "The relay didn't delete the backup, so it stays on. Try again."
     public static func relayError(_ code: String) -> String { "The relay refused this (\(code))." }
     public static func paired(_ name: String) -> String { "Paired. \(name) can now ask this phone for keys." }
     public static let offline = "Offline. Requests reach this phone when it is back online."

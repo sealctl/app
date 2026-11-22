@@ -285,6 +285,40 @@ struct EngineUnitTests {
         #expect(!engine.words.hasSession)
     }
 
+    @Test func cancelledDelayCancelsItsPlan() async throws {
+        let (engine, _, _) = try await makeEngine()
+        try await onboard(engine)
+        let now = UInt64(nowMs())
+        func plan(_ id: String, notBefore: UInt64, delayId: String?) -> PlanApprovalRecord {
+            PlanApprovalRecord(machine: "m1", requestId: id, planHash: "h-\(id)", items: [], keys: [], notBefore: notBefore,
+                               state: delayId == nil ? "approved" : "delayed", delayId: delayId, all: true)
+        }
+        await engine.applyLocal(.putPlan(plan: plan("old", notBefore: now - 60_000, delayId: nil)))
+        await engine.applyLocal(.putPlan(plan: plan("new", notBefore: now + 7_200_000, delayId: "new")))
+        await engine.applyLocal(.putDelayed(action: DelayedAction(
+            id: "new", what: "unseal_all", machine: "m1", releaseAt: now + 7_200_000, expires: now + 8_100_000,
+            state: "waiting", cancelledBy: nil)))
+        #expect(engine.livePlan("m1")?.requestId == "new")
+
+        // Cancelled from a computer: only the delayed record changes, as a refresh records it.
+        var d = try #require(engine.local.delayed.first { $0.id == "new" })
+        d.state = "cancelled"
+        d.cancelledBy = "machine-b"
+        await engine.applyLocal(.putDelayed(action: d))
+        #expect(engine.livePlan("m1")?.requestId == "old")
+        await engine.cancelPlansOfCancelledDelays()
+        #expect(engine.local.plans.first { $0.requestId == "new" }?.state == "cancelled")
+        #expect(engine.livePlan("m1")?.requestId == "old")
+        #expect(engine.files.readSnapshot()?.plan("m1")?.requestId == "old")
+    }
+
+    @Test func removedPlaceStopsCounting() async throws {
+        let (engine, _, _) = try await makeEngine()
+        engine.currentPlace = "gone"
+        await engine.refreshState()
+        #expect(engine.currentPlace == nil)
+    }
+
     @Test func pairingCodeErrors() async throws {
         let (engine, _, _) = try await makeEngine()
         guard case .failure(let e) = engine.parseOffer("hello") else { Issue.record("parsed"); return }

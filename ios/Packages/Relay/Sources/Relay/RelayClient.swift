@@ -84,6 +84,8 @@ public struct RelayDelayed: Sendable, Equatable {
     public let releaseAt: Int64
     public let expires: Int64
     public let state: String
+    /// Who cancelled it (`phone` or a machine key) when `state` is `cancelled`.
+    public var by: String? = nil
 }
 
 public struct RelayDevice: Sendable, Equatable {
@@ -302,14 +304,15 @@ public actor RelayClient {
     public func listDelayed() async throws -> [RelayDelayed] {
         try await call("GET", "\(try await phone())/delayed")["delayed"].array.map {
             RelayDelayed(id: $0["id"].str, machine: $0["machine"].string, created: $0["created"].long,
-                         releaseAt: $0["releaseAt"].long, expires: $0["expires"].long, state: $0["state"].str)
+                         releaseAt: $0["releaseAt"].long, expires: $0["expires"].long, state: $0["state"].str,
+                         by: $0["by"].string)
         }
     }
 
-    /// Who cancelled a record (`cancelled.by`), or nil.
+    /// Who cancelled a record (`by`), or nil.
     public func cancelledBy(_ id: String) async -> String? {
         guard let o = try? await call("GET", "\(try await phone())/delayed/\(id)") else { return nil }
-        return o["cancelled"]["by"].string
+        return o["by"].string
     }
 
     public func cancelDelayed(_ id: String) async throws {

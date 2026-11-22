@@ -21,6 +21,9 @@ pub const USAGE_MAX: i64 = 50_000;
 const USAGE_MONTHS_MS: u64 = 396 * 86_400_000;
 /// Pending ids are kept 10 minutes past expiry.
 const PENDING_KEEP_MS: u64 = 10 * 60 * 1000;
+/// However early the relay says a request expires, its id is kept as long as its signed time
+/// can still be accepted after it was first seen (the body's `t` may lie up to the window ahead).
+const PENDING_MIN_KEEP_MS: u64 = 2 * sealctl_core::request::TIME_WINDOW_MS;
 /// The relay state blob limit, less room for the seal.
 pub const STATE_LIMIT: usize = 1_048_576 - 1024;
 
@@ -237,6 +240,22 @@ fn write_doc<T: serde::Serialize>(c: &Connection, key: &str, value: &T) -> Resul
     Ok(())
 }
 
+/// The doc holding [`state_hash`] of the state last handed out by `state_for_upload`.
+const UPLOAD_HASH: &str = "upload_hash";
+
+/// A hash of the stored relay state, to tell whether it changed since an upload began.
+fn state_hash(c: &Connection) -> Result<Option<u64>> {
+    use std::hash::{Hash, Hasher};
+    let json: Option<String> = c
+        .query_row("SELECT json FROM doc WHERE key = 'state'", [], |r| r.get(0))
+        .optional()?;
+    Ok(json.map(|j| {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        j.hash(&mut h);
+        h.finish()
+    }))
+}
+
 /// `updated` for a record changed now: later than its previous value.
 fn bump(prev: u64, now: u64) -> u64 {
     now.max(prev + 1)
@@ -372,7 +391,7 @@ impl Store {
         let c = lock(&self.conn)?;
         let mut s: State = read_doc(&c, "state")?;
         let now = now_ms();
-        apply_event(&mut s, event, now);
+        apply_event(&mut s, event, now)?;
         let s = normalise(s);
         write_doc(&c, "state", &s)?;
         let mut l: LocalState = read_doc(&c, "local")?;
@@ -425,7 +444,12 @@ impl Store {
                 l.state_rev = rev;
                 if uploaded {
                     l.last_upload = now;
-                    l.dirty = false;
+                    // Only when the state is still the one `state_for_upload` gave: a change
+                    // made while the upload was on its way still needs one.
+                    let uploading: Option<u64> = read_doc(&c, UPLOAD_HASH)?;
+                    if uploading.is_some() && uploading == state_hash(&c)? {
+                        l.dirty = false;
+                    }
                 } else {
                     l.last_download = now;
                 }
@@ -442,7 +466,12 @@ impl Store {
         let c = lock(&self.conn)?;
         let mut l: LocalState = read_doc(&c, "local")?;
         let now = now_ms();
-        l.pending.retain(|p| p.expires + PENDING_KEEP_MS > now);
+        l.pending.retain(|p| {
+            p.expires
+                .max(p.seen.saturating_add(PENDING_MIN_KEEP_MS))
+                .saturating_add(PENDING_KEEP_MS)
+                > now
+        });
         if let Some(p) = l.pending.iter().find(|p| p.id == id) {
             return Ok(p.outcome == "waiting" && p.machine == machine);
         }
@@ -685,6 +714,11 @@ impl Store {
         m.updated = bump(m.updated, now);
         let month = local_month(now, 0);
         let mut uses = 0;
+        // A machine resends its log until it is acknowledged, so a later status repeats the
+        // entries an earlier one carried: an entry already recorded before this status is
+        // skipped (two equal entries inside one status are both kept).
+        let before: i64 =
+            c.query_row("SELECT COALESCE(MAX(id), 0) FROM usage", [], |r| r.get(0))?;
         for e in &status.log {
             let entry = UsageEntry {
                 time: if e.time > 0 { e.time } else { now },
@@ -702,6 +736,9 @@ impl Store {
                 command: Some(e.command.clone()).filter(|c| !c.is_empty()),
                 outcome: "in_session".into(),
             };
+            if e.time > 0 && usage_recorded(&c, &entry, before)? {
+                continue;
+            }
             insert_usage(&c, &entry)?;
             uses += e.names.len().max(1) as u64;
         }
@@ -809,6 +846,7 @@ impl Store {
             l.backup_shortened = true;
             write_doc(&c, "local", &l)?;
         }
+        write_doc(&c, UPLOAD_HASH, &state_hash(&c)?)?;
         Ok(encode_state(&s))
     }
 
@@ -840,6 +878,16 @@ impl Store {
         c.execute_batch("DELETE FROM doc; DELETE FROM usage;")?;
         Ok(())
     }
+}
+
+/// Whether a usage row equal to `e` was stored with an id up to `max_id`.
+fn usage_recorded(c: &Connection, e: &UsageEntry, max_id: i64) -> Result<bool> {
+    let json = serde_json::to_string(e).map_err(|_| AppError::Decode)?;
+    Ok(c.query_row(
+        "SELECT EXISTS(SELECT 1 FROM usage WHERE time = ?1 AND machine = ?2 AND json = ?3 AND id <= ?4)",
+        params![e.time, e.machine, json, max_id],
+        |r| r.get(0),
+    )?)
 }
 
 fn insert_usage(c: &Connection, e: &UsageEntry) -> Result<()> {
@@ -879,7 +927,7 @@ pub fn machine_display_name(machine: Machine) -> String {
     display_name(&machine)
 }
 
-fn apply_event(s: &mut State, event: Event, now: u64) {
+fn apply_event(s: &mut State, event: Event, now: u64) -> Result<()> {
     match event {
         Event::PairMachine {
             mut machine,
@@ -899,40 +947,17 @@ fn apply_event(s: &mut State, event: Event, now: u64) {
                     i.machine = machine.key.clone();
                     i.updated = bump(i.updated, now);
                 }
-            } else {
-                let same: Vec<usize> = s
-                    .machines
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, m)| !m.deleted && m.name == machine.name && m.key != machine.key)
-                    .map(|(n, _)| n)
-                    .collect();
-                if !same.is_empty() {
-                    machine.tag_shown = true;
-                    for n in same {
-                        s.machines[n].tag_shown = true;
-                        s.machines[n].updated = bump(s.machines[n].updated, now);
-                    }
-                }
             }
             s.machines.retain(|m| m.key != machine.key);
             s.machines.push(machine);
+            retag(s, now);
         }
         Event::UnpairMachine { key } => {
             if let Some(m) = s.machines.iter_mut().find(|m| m.key == key) {
                 m.deleted = true;
                 m.updated = bump(m.updated, now);
             }
-            let name = s.machine(&key).map(|m| m.name.clone());
-            let _ = name;
-            // A name left alone no longer needs its tag.
-            let names: Vec<String> = s.live_machines().map(|m| m.name.clone()).collect();
-            for m in s.machines.iter_mut().filter(|m| !m.deleted && m.tag_shown) {
-                if names.iter().filter(|n| **n == m.name).count() < 2 {
-                    m.tag_shown = false;
-                    m.updated = bump(m.updated, now);
-                }
-            }
+            retag(s, now);
         }
         Event::SetNickname { key, nickname } => {
             if let Some(m) = s.machines.iter_mut().find(|m| m.key == key && !m.deleted) {
@@ -983,8 +1008,13 @@ fn apply_event(s: &mut State, event: Event, now: u64) {
             }
         }
         Event::AddPlace { mut place } => {
-            if s.live_places().count() >= places::MAX_PLACES {
-                return;
+            // At most 10 places (SPEC.md 11.9): an eleventh is refused, not dropped in silence.
+            if s.live_places().count() >= places::MAX_PLACES
+                && !s.live_places().any(|p| p.id == place.id)
+            {
+                return Err(AppError::Invalid {
+                    msg: format!("at most {} places", places::MAX_PLACES),
+                });
             }
             place.updated = bump(place.updated, now);
             if place.created == 0 {
@@ -1032,6 +1062,19 @@ fn apply_event(s: &mut State, event: Event, now: u64) {
                 m.deleted = true;
                 m.updated = bump(m.updated, now);
             }
+        }
+    }
+    Ok(())
+}
+
+/// Live machines that share a name show their tags; a name left alone shows none.
+fn retag(s: &mut State, now: u64) {
+    let names: Vec<String> = s.live_machines().map(|m| m.name.clone()).collect();
+    for m in s.machines.iter_mut().filter(|m| !m.deleted) {
+        let shared = names.iter().filter(|n| **n == m.name).count() >= 2;
+        if m.tag_shown != shared {
+            m.tag_shown = shared;
+            m.updated = bump(m.updated, now);
         }
     }
 }
@@ -1106,6 +1149,147 @@ mod tests {
     }
 
     #[test]
+    fn replacing_a_machine_keeps_same_name_tags_right() {
+        let (a, b, c, d) = (
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+            "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+            "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+        );
+        let st = store();
+        for k in [a, b] {
+            st.apply(Event::PairMachine {
+                machine: machine(k, "dev@mbp"),
+                replaces: None,
+            })
+            .unwrap();
+        }
+        // A re-paired as C, same name: C and B both show their tags.
+        let s = st
+            .apply(Event::PairMachine {
+                machine: machine(c, "dev@mbp"),
+                replaces: Some(a.into()),
+            })
+            .unwrap();
+        assert_eq!(s.live_machines().count(), 2);
+        assert!(s.live_machines().all(|m| m.tag_shown));
+        // C re-paired as D under a new name: B is alone with its name again.
+        let s = st
+            .apply(Event::PairMachine {
+                machine: machine(d, "dev@studio"),
+                replaces: Some(c.into()),
+            })
+            .unwrap();
+        assert_eq!(s.live_machines().count(), 2);
+        assert!(s.live_machines().all(|m| !m.tag_shown));
+    }
+
+    #[test]
+    fn upload_clears_dirty_only_for_the_state_it_sent() {
+        let st = store();
+        st.apply(Event::ForgetMachines).unwrap();
+        st.state_for_upload().unwrap();
+        // A change while the upload is on its way.
+        st.apply(Event::RemovePlace { id: "p".into() }).unwrap();
+        st.apply(Event::AddPlace {
+            place: TrustedPlace {
+                id: "p".into(),
+                ..TrustedPlace::default()
+            },
+        })
+        .unwrap();
+        let l = st
+            .apply_local(LocalEvent::Synced {
+                rev: 4,
+                uploaded: true,
+            })
+            .unwrap();
+        assert!(l.dirty && l.state_rev == 4);
+        st.state_for_upload().unwrap();
+        let l = st
+            .apply_local(LocalEvent::Synced {
+                rev: 5,
+                uploaded: true,
+            })
+            .unwrap();
+        assert!(!l.dirty);
+    }
+
+    #[test]
+    fn pending_ids_outlive_an_early_expiry() {
+        let st = store();
+        for (id, expires) in [("r1", 0), ("r2", 1), ("r3", u64::MAX)] {
+            assert!(st.see_request(id.into(), "m".into(), expires).unwrap());
+            st.close_request(id.into(), "answered".into()).unwrap();
+            // Seen again at once: still refused, whatever expiry the relay gave.
+            assert!(!st.see_request(id.into(), "m".into(), expires).unwrap());
+        }
+        // Kept while a signed time first seen 15 minutes ago can still be accepted.
+        let c = lock(&st.conn).unwrap();
+        let mut l: LocalState = read_doc(&c, "local").unwrap();
+        for p in &mut l.pending {
+            p.seen = now_ms() - 15 * 60 * 1000;
+        }
+        write_doc(&c, "local", &l).unwrap();
+        drop(c);
+        assert!(!st.see_request("r2".into(), "m".into(), 1).unwrap());
+    }
+
+    #[test]
+    fn resent_status_log_is_recorded_once() {
+        use sealctl_core::wire::{LogEntry, MachineStatus};
+        let st = store();
+        let key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        st.apply(Event::PairMachine {
+            machine: machine(key, "dev@mbp"),
+            replaces: None,
+        })
+        .unwrap();
+        let t = now_ms() - 60_000;
+        let entry = |n: u64, name: &str| LogEntry {
+            time: t + n,
+            command: "env".into(),
+            names: vec![name.into()],
+            ..LogEntry::default()
+        };
+        let total = |st: &Store| -> u64 {
+            st.snapshot()
+                .unwrap()
+                .summaries
+                .iter()
+                .map(|s| s.keys_used)
+                .sum()
+        };
+        // Two equal entries in one status are two uses.
+        let first = vec![entry(1, "A"), entry(2, "B"), entry(2, "B")];
+        st.apply_status(
+            key.into(),
+            MachineStatus {
+                seq: 5,
+                log: first.clone(),
+                ..MachineStatus::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(st.usage(None, None, 100).unwrap().len(), 3);
+        assert_eq!(total(&st), 3);
+        // The next status carries the same log, unacknowledged, and one new use.
+        let mut second = first;
+        second.push(entry(3, "C"));
+        st.apply_status(
+            key.into(),
+            MachineStatus {
+                seq: 6,
+                log: second,
+                ..MachineStatus::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(st.usage(None, None, 100).unwrap().len(), 4);
+        assert_eq!(total(&st), 4);
+    }
+
+    #[test]
     fn pending_ids_refuse_replays() {
         let st = store();
         let far = now_ms() + 60_000;
@@ -1137,14 +1321,15 @@ mod tests {
             .unwrap();
         assert_eq!(s.live_answers().count(), 0);
         for n in 0..12 {
-            st.apply(Event::AddPlace {
+            let r = st.apply(Event::AddPlace {
                 place: TrustedPlace {
                     id: format!("p{n}"),
                     name: format!("TrustedPlace {n}"),
                     ..TrustedPlace::default()
                 },
-            })
-            .unwrap();
+            });
+            // The eleventh place is refused, not dropped in silence.
+            assert_eq!(r.is_err(), n >= 10, "{n}");
         }
         let s = st.snapshot().unwrap();
         assert_eq!(s.live_places().count(), 10);
@@ -1205,6 +1390,7 @@ mod tests {
             .unwrap();
         assert!(l.holds.is_empty());
         st.apply(Event::ForgetMachines).unwrap();
+        st.state_for_upload().unwrap();
         let l = st
             .apply_local(LocalEvent::Synced {
                 rev: 3,

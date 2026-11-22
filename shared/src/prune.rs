@@ -1,8 +1,10 @@
 //! Lifetimes (SPEC.md 6.4): answers unused for 90 days go, machines unseen for 90 days are
 //! flagged, inventory unseen for a year is stale, tombstones older than 90 days are dropped,
-//! summaries older than 12 months are dropped.
+//! summaries older than 12 months are dropped. Machine and place tombstones are not dropped:
+//! after 90 days they shrink to their key, so a copy of the state from before the removal
+//! (another install, an old blob) cannot bring the machine or the place back.
 
-use crate::model::State;
+use crate::model::{Machine, State, TrustedPlace};
 
 /// 90 days in ms.
 pub const NINETY_DAYS_MS: u64 = 90 * 86_400_000;
@@ -34,9 +36,27 @@ pub fn prune_state(mut s: State, now: u64) -> State {
             i.updated = now;
         }
     }
-    s.machines.retain(|m| !m.deleted || m.updated >= old);
+    for m in s
+        .machines
+        .iter_mut()
+        .filter(|m| m.deleted && m.updated < old)
+    {
+        *m = Machine {
+            key: std::mem::take(&mut m.key),
+            updated: m.updated,
+            deleted: true,
+            ..Machine::default()
+        };
+    }
+    for p in s.places.iter_mut().filter(|p| p.deleted && p.updated < old) {
+        *p = TrustedPlace {
+            id: std::mem::take(&mut p.id),
+            updated: p.updated,
+            deleted: true,
+            ..TrustedPlace::default()
+        };
+    }
     s.answers.retain(|a| !a.deleted || a.updated >= old);
-    s.places.retain(|p| !p.deleted || p.updated >= old);
     s.inventory.retain(|i| !i.deleted || i.updated >= old);
     s.summaries.sort_by(|a, b| b.month.cmp(&a.month));
     s.summaries.truncate(12);
@@ -106,10 +126,58 @@ mod tests {
         let p = prune_state(s, NOW);
         assert!(p.answers[0].deleted && !p.answers[1].deleted);
         assert!(p.machines[0].flagged && !p.machines[1].flagged);
-        assert_eq!(p.machines.len(), 2);
+        // The old machine tombstone stays, shrunk to its key and deletion time.
+        assert_eq!(p.machines.len(), 3);
+        assert_eq!(
+            p.machines[2],
+            Machine {
+                key: "m3".into(),
+                deleted: true,
+                updated: NOW - 100 * D,
+                ..Machine::default()
+            }
+        );
         assert!(p.inventory[0].stale);
         assert_eq!(p.summaries.len(), 12);
         assert_eq!(p.summaries[0].month, "2025-03");
         assert_eq!(answer_days_left(NOW - 80 * D, NOW), 10);
+    }
+
+    #[test]
+    fn old_tombstones_keep_removed_records_removed() {
+        // Another install (or an old relay blob) still holds the place and the machine as
+        // they were before the user removed them.
+        let stale = State {
+            places: vec![TrustedPlace {
+                id: "p".into(),
+                name: "Old flat".into(),
+                lat: 50.0,
+                lon: 30.0,
+                radius: 150.0,
+                created: NOW - 400 * D,
+                updated: NOW - 300 * D,
+                ..TrustedPlace::default()
+            }],
+            machines: vec![Machine {
+                key: "m".into(),
+                name: "dev@laptop".into(),
+                paired_at: NOW - 400 * D,
+                updated: NOW - 300 * D,
+                ..Machine::default()
+            }],
+            ..State::default()
+        };
+        let mut removed = stale.clone();
+        removed.places[0].deleted = true;
+        removed.places[0].updated = NOW - 200 * D;
+        removed.machines[0].deleted = true;
+        removed.machines[0].updated = NOW - 200 * D;
+        let p = prune_state(removed, NOW);
+        assert_eq!(p.places[0].name, "");
+        assert_eq!(p.places[0].lat, 0.0);
+        assert_eq!(p.machines[0].name, "");
+        let m = crate::merge::merge_state(p, stale);
+        assert_eq!(m.live_places().count(), 0);
+        assert_eq!(m.live_machines().count(), 0);
     }
 }

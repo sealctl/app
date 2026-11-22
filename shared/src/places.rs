@@ -109,9 +109,12 @@ pub fn place_sample(
             id
         }
     };
+    // With every place slot taken there is nothing to offer; the candidate stays unasked, so
+    // it is offered once a place is removed.
+    let room = places.iter().filter(|p| !p.deleted).count() < MAX_PLACES;
     let ready = candidates
         .iter_mut()
-        .find(|c| c.id == id && !c.asked && !c.suppressed && c.days.len() >= DAYS_TO_OFFER)
+        .find(|c| room && c.id == id && !c.asked && !c.suppressed && c.days.len() >= DAYS_TO_OFFER)
         .map(|c| {
             c.asked = true;
             c.clone()
@@ -189,6 +192,37 @@ mod tests {
             "x".into(),
         );
         assert!(r.ready.is_none());
+    }
+
+    #[test]
+    fn no_offer_while_every_place_slot_is_taken() {
+        let full: Vec<TrustedPlace> = (0..MAX_PLACES)
+            .map(|n| TrustedPlace {
+                id: format!("p{n}"),
+                lat: 10.0 + n as f64,
+                lon: 10.0,
+                radius: PLACE_RADIUS_M,
+                ..TrustedPlace::default()
+            })
+            .collect();
+        let mut c = Vec::new();
+        for (n, t) in [T, T + DAY, T + 2 * DAY].into_iter().enumerate() {
+            let r = place_sample(c, &full, s(52.2297, 21.0122, 20.0, t), 0, format!("c{n}"));
+            assert!(r.ready.is_none());
+            c = r.candidates;
+        }
+        assert!(!c[0].asked);
+        // Offered once a place is removed.
+        let mut fewer = full;
+        fewer[0].deleted = true;
+        let r = place_sample(
+            c,
+            &fewer,
+            s(52.2297, 21.0122, 20.0, T + 3 * DAY),
+            0,
+            "x".into(),
+        );
+        assert!(r.ready.is_some());
     }
 
     #[test]

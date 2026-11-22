@@ -47,11 +47,12 @@ jobs:
           rustup show active-toolchain || rustup toolchain install
           rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin
 
-      # XcodeGen from its GitHub release, pinned by version and checksum (not Homebrew's latest).
+      # XcodeGen from its GitHub release, pinned by version and checksum (not whatever Homebrew
+      # has); 2.46.0 is the version the runner's Homebrew installed before.
       - name: XcodeGen
         env:
-          XCODEGEN_VERSION: "2.48.0"
-          XCODEGEN_SHA256: 620c9f0dc10849f94728ab5df52d225ebab8187439dd6fee1925e59e80dff892
+          XCODEGEN_VERSION: "2.46.0"
+          XCODEGEN_SHA256: 4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806
         run: |
           curl -fsSL -o "$RUNNER_TEMP/xcodegen.zip" \
             "https://github.com/yonaskolb/XcodeGen/releases/download/$XCODEGEN_VERSION/xcodegen.zip"

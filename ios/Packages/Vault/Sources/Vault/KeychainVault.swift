@@ -149,19 +149,28 @@ public actor KeychainVault: Vault {
             defer { bytes.resetBytes(in: 0..<bytes.count) }
             return bytes.count == 32 ? .passed : .failed("gate")
         }
-        if defaults.bool(forKey: Self.gateMade) { return .changed }
-        return makeGate(ctx) ? .passed : .failed("gate \(status)")
+        // An item that is there but can't be read was invalidated by an enrolment change. The
+        // flag alone can't tell: UserDefaults go with the app, the keychain item stays (7.4).
+        if defaults.bool(forKey: Self.gateMade) || exists(Self.gateItem) { return .changed }
+        return makeGate(ctx, readStatus: status)
     }
 
-    private func makeGate(_ ctx: LAContext) -> Bool {
+    /// The first gate. Only `resetGate` (after the card) or `erase` removes an old one: an item
+    /// still in the way means the enrolment changed, never a first use.
+    private func makeGate(_ ctx: LAContext, readStatus: OSStatus) -> GateResult {
         var secret = Data(count: 32)
         let ok = secret.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, 32, $0.baseAddress!) } == errSecSuccess
         defer { secret.resetBytes(in: 0..<32) }
-        guard ok else { return false }
-        delete(Self.gateItem)
-        guard (try? add(Self.gateItem, account: "gate", data: secret, protection: .control(.biometryCurrentSet))) != nil else { return false }
+        guard ok else { return .failed("gate \(readStatus)") }
+        do {
+            try add(Self.gateItem, account: "gate", data: secret, protection: .control(.biometryCurrentSet))
+        } catch VaultError.keychain(errSecDuplicateItem) {
+            return .changed
+        } catch {
+            return .failed("gate \(readStatus)")
+        }
         defaults.set(true, forKey: Self.gateMade)
-        return true
+        return .passed
     }
 
     public func resetGate() {

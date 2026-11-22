@@ -1,0 +1,10 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp" android:viewportWidth="32" android:viewportHeight="32">
+    <!-- The box-shield mark as a one-colour status-bar glyph. -->
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="2.6" android:fillColor="#00000000"
+        android:strokeLineJoin="round"
+        android:pathData="M16,3.5 L26.5,7.4 V15.2 C26.5,21.7 22,26.4 16,28.6 C10,26.4 5.5,21.7 5.5,15.2 V7.4 Z" />
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="3" android:fillColor="#00000000"
+        android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M13,11.2 L17.6,15.8 L13,20.4" />
+</vector>

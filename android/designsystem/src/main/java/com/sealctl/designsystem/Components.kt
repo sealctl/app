@@ -28,6 +28,10 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -38,6 +42,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -88,6 +93,39 @@ fun Wordmark(modifier: Modifier = Modifier, size: Int = 28) {
 fun Mono(text: String, modifier: Modifier = Modifier, size: Int = 15, color: Color = Sealctl.colors.ink, weight: FontWeight = FontWeight.Normal) {
     // Names, commands and paths are never translated and always read left to right (SPEC.md 13).
     Text(Char(0x2066) + text + Char(0x2069), style = monoStyle(size, weight), color = color, modifier = modifier)
+}
+
+/** One part of a [Line]: plain text, or code font for names, ids and paths ([code]). */
+class Part(val text: String, val mono: Boolean, val size: Int?, val weight: FontWeight?, val color: Color?)
+
+fun plain(text: String, weight: FontWeight? = null, color: Color? = null) = Part(text, false, null, weight, color)
+
+fun code(text: String, size: Int? = null, weight: FontWeight? = null, color: Color? = null) = Part(text, true, size, weight, color)
+
+/**
+ * Text with code-font parts in it, as one text: the parts share a baseline and wrap together.
+ * (A Row of separate Texts aligns their tops, so a smaller code-font part sits too high.)
+ */
+@Composable
+fun Line(vararg parts: Part, modifier: Modifier = Modifier, style: TextStyle = MaterialTheme.typography.bodyLarge, color: Color = Sealctl.colors.ink2) {
+    val mono = monoStyle().fontFamily
+    Text(
+        buildAnnotatedString {
+            for (p in parts) {
+                val span = SpanStyle(
+                    fontFamily = if (p.mono) mono else null,
+                    fontSize = p.size?.sp ?: TextUnit.Unspecified,
+                    fontWeight = p.weight,
+                    color = p.color ?: Color.Unspecified,
+                )
+                // names, commands and paths are never translated and always read left to right (SPEC.md 13)
+                withStyle(span) { append(if (p.mono) Char(0x2066) + p.text + Char(0x2069) else p.text) }
+            }
+        },
+        style = style,
+        color = color,
+        modifier = modifier,
+    )
 }
 
 @Composable

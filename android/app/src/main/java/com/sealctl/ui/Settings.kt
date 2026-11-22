@@ -126,7 +126,7 @@ fun SettingsTab() {
         ErrorText(testMessage)
         NavRow("Phones getting requests", "") { Ui.push(Route.Devices) }
         SectionLabel("Relay")
-        Row { Mono(engine.relay.host, size = 14); Muted(if (engine.banners.collectAsState().value.relayDown) " · Not answering" else " · Connected") }
+        com.sealctl.designsystem.Line(com.sealctl.designsystem.code(engine.relay.host, size = 14, color = Sealctl.colors.ink), com.sealctl.designsystem.plain(if (engine.banners.collectAsState().value.relayDown) " · Not answering" else " · Connected"), style = androidx.compose.material3.MaterialTheme.typography.bodyMedium, color = Sealctl.colors.muted)
         SecondaryButton("Delete my relay data", { Ui.push(Route.DeleteRelay) })
         SectionLabel("This phone")
         SecondaryButton("Erase sealctl from this phone", { Ui.push(Route.Erase) })
@@ -313,7 +313,7 @@ fun LostMachineScreen(key: String) {
             if (m != null && !m.deleted) TextButton({ scope.launch { engine.unpair(m) } }) { Text("Unpair") } else Muted("Unpaired")
         }
         Body("2. Change these secrets at their providers. It used them in the last 90 days:")
-        for ((k, t) in used) Row { Mono(k, size = 14); Muted(" · last used ${Texts.isoDate(t)}") }
+        for ((k, t) in used) com.sealctl.designsystem.Line(com.sealctl.designsystem.code(k, size = 14, color = Sealctl.colors.ink), com.sealctl.designsystem.plain(" · last used ${Texts.isoDate(t)}"), style = androidx.compose.material3.MaterialTheme.typography.bodyMedium, color = Sealctl.colors.muted)
         Body("3. Re-encrypt what it had open. On another machine that has them, run `sealctl migrate`:")
         for (i in held) Mono("${if (i.purpose == "volume") "Volume" else "Backup"} ${i.path.ifEmpty { i.id }}", size = 14)
         Body("Your words were never on that machine, so they don't need to change.")

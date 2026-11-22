@@ -166,6 +166,7 @@ class SealctlTestCase: XCTestCase {
             for attempt in 0..<3 {
                 if attempt > 0 {
                     // A missed tap: focus the field, clear it and type again.
+                    guard field.exists else { break }
                     field.tap()
                     for _ in 0..<6 where app.buttons["key delete"].isEnabled { app.buttons["key delete"].tap() }
                 }
@@ -174,8 +175,9 @@ class SealctlTestCase: XCTestCase {
                     if !key.isHittable { waitHittable(key, 3) }
                     key.tap()
                 }
-                let value = (field.value as? String) ?? ""
-                if value.hasPrefix(String(w.prefix(4))) || !field.exists { break }
+                // After the last word the screen moves on and the field is gone.
+                guard field.exists else { break }
+                if ((field.value as? String) ?? "").hasPrefix(String(w.prefix(4))) { break }
             }
         }
     }

@@ -1,0 +1,6 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Debug builds only: lets adb stand in for an FCM push. Release builds have no such entry. -->
+        <receiver android:name="com.sealctl.app.DebugPushReceiver" android:exported="true" />
+    </application>
+</manifest>

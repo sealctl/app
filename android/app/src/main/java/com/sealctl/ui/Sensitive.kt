@@ -90,7 +90,8 @@ fun SensitiveScreen(activity: MainActivity, requestId: String) {
         Page(null) { Title(Texts.stoppedWaiting("The machine")); SecondaryButton("Close", { Ui.pop() }) }
         return
     }
-    val name = w?.let { engine.displayName(it.machine) } ?: ""
+    // The name stays after the request leaves the waiting list (answered, refused).
+    val name = remember(requestId) { w?.let { engine.displayName(it.machine) } ?: "" }
     val level3 = (w?.verdict?.level?.toInt() ?: 3) >= 3
     fun deny() = scope.launch { w?.let { engine.deny(it) }; Ui.pop() }
     when (step) {

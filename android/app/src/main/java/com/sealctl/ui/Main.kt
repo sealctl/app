@@ -77,7 +77,7 @@ fun MainScreen(activity: MainActivity) {
     Box(Modifier.fillMaxSize()) {
         when (top) {
             null -> Tabs()
-            is Route.MachineDetail -> MachineDetailScreen(top.key)
+            is Route.MachineDetail -> MachineDetailScreen(activity, top.key)
             is Route.LostMachine -> LostMachineScreen(top.key)
             is Route.Pair -> PairingScreen(activity, top)
             Route.Answers -> AnswersScreen()

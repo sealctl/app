@@ -252,7 +252,7 @@ fun DevicesScreen() {
 // ---------- machine detail (11.17) ----------
 
 @Composable
-fun MachineDetailScreen(key: String) {
+fun MachineDetailScreen(activity: MainActivity, key: String) {
     val engine = Graph.engine
     val state by engine.state.collectAsState()
     val local by engine.local.collectAsState()
@@ -272,7 +272,11 @@ fun MachineDetailScreen(key: String) {
         val hold = local.holds.firstOrNull { it.machine == key && it.until.toLong() > now }
         if (hold != null) {
             Text(Texts.held(engine.displayName(m), hold.until.toLong()), color = Sealctl.colors.waiting)
-            TextButton({ engine.releaseHold(key) }) { Text("Release now") }
+            TextButton({
+                scope.launch {
+                    if (biometricGate(activity, "Confirm releasing ${engine.displayName(m)}.") == GateResult.Passed) engine.releaseHold(key)
+                }
+            }) { Text("Release now") }
         }
         if (v.state == com.sealctl.designsystem.MachineState.Open) PrimaryButton("Lock now", { scope.launch { if (engine.lock(m)) Ui.toast("Locked ${engine.displayName(m)}.") } })
         OutlinedTextField(nickname, { nickname = it.take(40) }, label = { Text("Nickname") }, singleLine = true, modifier = Modifier.fillMaxWidth())

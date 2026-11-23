@@ -623,7 +623,11 @@ impl Store {
         }
 
         let mut first_of_day = false;
-        if allowed && request.kind() == RequestKind::Open {
+        // Only a person's answer begins a day. An answer given by itself (`automatic`, or a
+        // plan's later part) needed a day that was active when it was decided; recorded after
+        // that day ended (the reply took a while to post, or the extension's answer is merged
+        // later), it must not begin a new one without a tap.
+        if allowed && request.kind() == RequestKind::Open && answer_begins_day(&outcome) {
             let active = l
                 .days
                 .iter()
@@ -907,6 +911,12 @@ impl Store {
     }
 }
 
+/// Whether an allowed `open` with this outcome can be the first approval of a day: only an
+/// answer the person gave (SPEC.md 9.3).
+fn answer_begins_day(outcome: &str) -> bool {
+    matches!(outcome, "one_tap" | "once" | "confirmed")
+}
+
 /// Whether a usage row equal to `e` was stored with an id up to `max_id`.
 fn usage_recorded(c: &Connection, e: &UsageEntry, max_id: i64) -> Result<bool> {
     let json = serde_json::to_string(e).map_err(|_| AppError::Decode)?;
@@ -1128,6 +1138,99 @@ mod tests {
             name: name.into(),
             ..Machine::default()
         }
+    }
+
+    /// 2026-11-21T00:00:00Z.
+    const MIDNIGHT: u64 = 1_795_219_200_000;
+    const H: u64 = 3_600_000;
+    const MIN: u64 = 60_000;
+
+    /// A request of `why` signed by `machine` at `t`, opened at `t`.
+    fn request_at(
+        machine: &sealctl_core::machine::MachineKeys,
+        why: &str,
+        t: u64,
+        uses: Vec<sealctl_core::wire::AgentUse>,
+    ) -> Arc<Request> {
+        use sealctl_core::request::{new_request_id, open_request_at, seal_request};
+        use sealctl_core::{PhoneKeys, PhonePublic, Root, Words};
+        thread_local! {
+            static KEYS: PhoneKeys = PhoneKeys::from_root(&Root::from_words(&Words::generate().unwrap()));
+        }
+        KEYS.with(|keys| {
+            let phone = PhonePublic::from_b64u(&keys.public_id(), &keys.box_public_key()).unwrap();
+            let id = new_request_id().unwrap();
+            let body = sealctl_core::wire::RequestBody {
+                v: 1,
+                t,
+                why: why.into(),
+                uses,
+                ..Default::default()
+            };
+            let sealed = seal_request(machine, &phone, &id, body).unwrap();
+            Arc::new(open_request_at(keys, &machine.id(), &id, &sealed.sealed, t).unwrap())
+        })
+    }
+
+    fn paired(st: &Store) -> sealctl_core::machine::MachineKeys {
+        let m = sealctl_core::machine::MachineKeys::generate().unwrap();
+        st.apply(Event::PairMachine {
+            machine: machine(&m.id(), "dev@mbp"),
+            replaces: None,
+        })
+        .unwrap();
+        m
+    }
+
+    fn day_of(st: &Store, key: &str) -> Option<DayRecord> {
+        st.local()
+            .unwrap()
+            .days
+            .into_iter()
+            .find(|d| d.machine == key)
+    }
+
+    #[test]
+    fn an_answer_given_by_itself_never_begins_a_day() {
+        let st = store();
+        let m = paired(&st);
+        // The day begins with a tap at 13:00 at the desk; it ends at 02:00.
+        st.set_now(MIDNIGHT + 13 * H);
+        let r = request_at(&m, "open", MIDNIGHT + 13 * H, Vec::new());
+        let first = st
+            .answered(r, "one_tap".into(), true, false, Some("desk".into()), 0)
+            .unwrap();
+        assert!(first.first_of_day);
+        let day = day_of(&st, &m.id()).unwrap();
+        assert_eq!(day.ends, MIDNIGHT + 26 * H);
+        // An open decided by itself at 01:59:59 is recorded once its reply was posted, after
+        // 02:00: the answer was the old day's, and begins no new one.
+        let r = request_at(&m, "open", MIDNIGHT + 26 * H - 1000, Vec::new());
+        st.set_now(MIDNIGHT + 26 * H + 2000);
+        let late = st
+            .answered(r, "automatic".into(), true, false, Some("desk".into()), 0)
+            .unwrap();
+        assert!(!late.first_of_day);
+        assert_eq!(day_of(&st, &m.id()), Some(day));
+        // So the next morning's first open at the desk still asks.
+        let morning = MIDNIGHT + 33 * H;
+        let d = day_of(&st, &m.id()).unwrap();
+        assert!(!crate::decide::day_active(&d, morning, 0));
+        // The same for a later part of an approved plan, answered without asking.
+        let r = request_at(&m, "open", MIDNIGHT + 30 * H, Vec::new());
+        st.set_now(MIDNIGHT + 30 * H);
+        let plan = st
+            .answered(r, "in_session".into(), true, false, Some("desk".into()), 0)
+            .unwrap();
+        assert!(!plan.first_of_day);
+        // A tap after 02:00 begins the day.
+        let r = request_at(&m, "open", morning, Vec::new());
+        st.set_now(morning);
+        let tap = st
+            .answered(r, "once".into(), true, false, Some("desk".into()), 0)
+            .unwrap();
+        assert!(tap.first_of_day);
+        assert_eq!(day_of(&st, &m.id()).unwrap().first_approval, morning);
     }
 
     #[test]

@@ -409,11 +409,17 @@ class Engine(
             Asking.SILENT -> silent(req, r)
             Asking.AUTOMATIC -> {
                 val d = verdict.automatic ?: return@withLock
-                if (reply(req, r, d, "automatic", allowed = true, remember = false, decidedAt = mark)) {
-                    Notify.show(
+                when (send(req, r, d, "automatic", allowed = true, remember = false, decidedAt = mark)) {
+                    Sent.POSTED -> Notify.show(
                         context, Notify.ANSWERED, "auto-${r.id}",
                         Texts.answeredByItself(displayName(machine), placeName()), null, timeoutMs = 60_000,
                     )
+                    Sent.FAILED, Sent.LOCKED -> {
+                        // Fail closed: the person answers instead of the request waiting unseen (SPEC.md 9.1).
+                        val again = runCatching { openRequest(keys, r.machine, r.id, r.sealed) }.getOrNull() ?: return@withLock
+                        ask(again, r, verdict.copy(asking = Asking.ONE_TAP, automatic = null), machine, plan, fromPush)
+                    }
+                    Sent.GONE -> {}
                 }
             }
             Asking.PLAN_KEYS -> planKeys(req, r)
@@ -425,16 +431,17 @@ class Engine(
                     Notify.show(context, Notify.SENSITIVE, "refused-${r.id}", text, null)
                 }
             }
-            Asking.ONE_TAP, Asking.IN_APP -> {
-                val w = Waiting(r, req, verdict, machine, System.currentTimeMillis(), plan = plan ?: req.plan())
-                waiting.update { list -> list.filter { it.relay.id != r.id } + w }
-                if (verdict.agentFirstUse && !local.value.agentNoteShown && verdict.kind == RequestKind.AGENT) {
-                    // The one-time note shows on the card (SPEC.md 11.11).
-                }
-                if (!foreground.value || fromPush) showNotification(w)
-                scheduleExpiry(w)
-            }
+            Asking.ONE_TAP, Asking.IN_APP -> ask(req, r, verdict, machine, plan, fromPush)
         }
+    }
+
+    /** Puts a request on the card, with a notification when the app is not on screen. */
+    private fun ask(req: Request, r: RelayRequest, verdict: Verdict, machine: Machine, plan: com.sealctl.core.RequestPlan?, fromPush: Boolean) {
+        val w = Waiting(r, req, verdict, machine, System.currentTimeMillis(), plan = plan ?: req.plan())
+        waiting.update { list -> list.filter { it.relay.id != r.id } + w }
+        // The agent's one-time note shows on the card (SPEC.md 11.11).
+        if (!foreground.value || fromPush) showNotification(w)
+        scheduleExpiry(w)
     }
 
     private fun context(r: RelayRequest, machine: Machine, plan: PlanApprovalRecord?): DecideContext {

@@ -55,9 +55,19 @@ extension AppEngine {
             await silent(req, r)
         case .automatic:
             guard let d = verdict.automatic else { return }
-            if await reply(req, r, d, outcome: "automatic", allowed: true, decidedAt: mark) {
+            switch await send(req, r, d, outcome: "automatic", allowed: true, decidedAt: mark) {
+            case .posted:
                 let place = currentPlace.flatMap { id in state.places.first { $0.id == id && !$0.deleted }?.name }
                 await notifier.post(id: "auto-\(r.id)", content: Notes.passive(Texts.answeredByItself(displayName(machine), place: place)))
+            case .failed, .locked:
+                // Fail closed: the person answers instead of the request waiting unseen (9.1).
+                guard let again = try? openRequest(keys: keys, relayMachineKey: r.machine, id: r.id, sealed: r.sealed) else { return }
+                var asked = verdict
+                asked.asking = .oneTap
+                asked.automatic = nil
+                await ask(again, r, asked, machine, plan: plan, fromPush: fromPush)
+            case .gone:
+                break
             }
         case .planKeys:
             guard let plan = ctx.plan else { return }
@@ -70,12 +80,18 @@ extension AppEngine {
                 await notifier.post(id: "refused-\(r.id)", content: Notes.active(text))
             }
         case .oneTap, .inApp:
-            let w = Waiting(relay: r, request: req, verdict: verdict, machine: machine, seenAt: nowMs(), plan: plan ?? req.plan())
-            waiting = waiting.filter { $0.relay.id != r.id } + [w]
-            if !foreground || fromPush { await showNotification(w) }
-            scheduleExpiry(w)
-            await updateBadge()
+            await ask(req, r, verdict, machine, plan: plan, fromPush: fromPush)
         }
+    }
+
+    /// Puts a request on the card, with a notification when the app is not on screen.
+    private func ask(_ req: Request, _ r: RelayRequest, _ verdict: Verdict, _ machine: Machine, plan: RequestPlan?,
+                     fromPush: Bool) async {
+        let w = Waiting(relay: r, request: req, verdict: verdict, machine: machine, seenAt: nowMs(), plan: plan ?? req.plan())
+        waiting = waiting.filter { $0.relay.id != r.id } + [w]
+        if !foreground || fromPush { await showNotification(w) }
+        scheduleExpiry(w)
+        await updateBadge()
     }
 
     func context(_ r: RelayRequest, _ machine: Machine) async -> DecideContext {

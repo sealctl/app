@@ -329,3 +329,41 @@ extension TimingTests {
     }
 }
 #endif
+
+#if os(macOS)
+extension TimingTests {
+    /// An answer the app would give by itself that the relay does not take (not `404 gone`):
+    /// the person is asked instead of the request waiting unseen until it expires (fail closed).
+    @Test func automaticReplyThatDoesNotGoAsksThePerson() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, _, m) = try await paired(relay)
+        let agentArgs = ["request", "--kind", "agent", "--agent", "claude", "--repo-id", "github.com/acme/shop",
+                         "--names", "OPENAI_API_KEY", "--use", "claude:github.com/acme/shop:OPENAI_API_KEY",
+                         "--subject", "secret:OPENAI_API_KEY", "--key", "secrets:store-1", "--cmd", "npm test"]
+        var r = try m.start(agentArgs)
+        let first = try await firstRequest(engine, r)
+        #expect(await engine.answer(first.id, .allow))
+        _ = await m.waitAsync(r)
+        // The answer covers the named key; the key it comes in needs an Open session, as for
+        // `keys` (SPEC 9.3), so the machine reports one first.
+        #expect(try m.run(["status", "--state", "open", "--left", "3600"]).0 == 0)
+        await engine.refreshStatus()
+        try await relay.control("/test/fail", #"{"path": "/reply", "status": 400, "error": "bad_sealed"}"#)
+        r = try m.start(agentArgs)
+        // Delivered once, as by the socket: no later list gives the app a second go at it.
+        var pending: RelayRequest?
+        for _ in 0..<100 where pending == nil {
+            pending = try? await engine.relay.requests().first
+            if pending == nil { try await Task.sleep(for: .milliseconds(100)) }
+        }
+        await engine.handle(try #require(pending), fromPush: false)
+        let w = try #require(engine.waiting.first { $0.id == pending?.id })
+        #expect(w.verdict.asking == .oneTap)
+        #expect(!w.expired)
+        #expect(await engine.answer(w.id, .allowOnce))
+        let (code, out) = await m.waitAsync(r)
+        #expect(code == 0, "\(out)")
+    }
+}
+#endif

@@ -482,7 +482,7 @@ Besides the keys, the reply tells the machine the place kind, which sets its all
 
 ### 9.5 Replays and forged requests
 
-- Request ids are kept for 10 minutes; a second request with the same id is ignored.
+- Request ids are kept for 10 minutes; a second request with the same id is ignored. An id is kept at least as long as its signed body can still be opened (the core accepts a signed time up to 10 minutes either side of the phone's clock), counted from when it was first seen and again from when it was answered, expired or ignored, plus 10 minutes.
 - A request whose sealed contents name a different machine than the relay's `machine` field is ignored.
 - The relay can only lie about `near`. A lie skips a tap only for a request already signed by a paired machine, while the phone is unlocked, on Wi-Fi and inside the place where that machine's day began. At level 2 a lie can stand in for proximity; it never skips the biometric match or the list of objects.
 

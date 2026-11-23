@@ -23,7 +23,9 @@ const USAGE_MONTHS_MS: u64 = 396 * 86_400_000;
 const PENDING_KEEP_MS: u64 = 10 * 60 * 1000;
 /// A request's id is kept as long as its signed time can still be accepted after it was first
 /// seen (the body's `t` may lie up to the window ahead). The relay's `expires` does not shorten
-/// or lengthen this: a body is refused by its signed time after that anyway.
+/// or lengthen this: a body is refused by its signed time after that anyway. A request opened
+/// and answered later than it was first seen (its signed time ahead of this phone's clock) is
+/// kept from its answer: `seen` moves to the time it is closed.
 const PENDING_SIGNED_KEEP_MS: u64 = 2 * sealctl_core::request::TIME_WINDOW_MS;
 /// The relay state blob limit, less room for the seal.
 pub const STATE_LIMIT: usize = 1_048_576 - 1024;
@@ -518,7 +520,10 @@ impl Store {
         let c = lock(&self.conn)?;
         let mut l: LocalState = read_doc(&c, "local")?;
         match l.pending.iter_mut().find(|p| p.id == id) {
-            Some(p) => p.outcome = outcome,
+            Some(p) => {
+                p.outcome = outcome;
+                p.seen = p.seen.max(now);
+            }
             None => l.pending.push(PendingEntry {
                 id,
                 outcome,
@@ -562,6 +567,7 @@ impl Store {
                 "answered"
             }
             .into();
+            p.seen = p.seen.max(now);
         }
         let entry = UsageEntry {
             time: now,
@@ -1231,6 +1237,33 @@ mod tests {
             .unwrap();
         assert!(tap.first_of_day);
         assert_eq!(day_of(&st, &m.id()).unwrap().first_approval, morning);
+    }
+
+    #[test]
+    fn a_late_answer_keeps_its_id_as_long_as_its_body_can_be_opened() {
+        let w = sealctl_core::request::TIME_WINDOW_MS;
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        // Seen at 09:00 but not opened then (signed 25 minutes ahead of this phone's clock),
+        // opened and answered at 09:25.
+        st.set_now(t0);
+        assert!(st.see_request("r1".into(), "m".into(), 0).unwrap());
+        st.set_now(t0 + 25 * MIN);
+        st.close_request("r1".into(), "answered".into()).unwrap();
+        let m = paired(&st);
+        let req = request_at(&m, "open", t0 + 25 * MIN, Vec::new());
+        st.set_now(t0);
+        assert!(st.see_request(req.id(), req.machine(), 0).unwrap());
+        st.set_now(t0 + 25 * MIN);
+        st.answered(req.clone(), "one_tap".into(), true, false, None, 0)
+            .unwrap();
+        // Its body can be opened until 09:45: until then (and the 10 minutes after) the id is
+        // refused, although it was first seen more than 30 minutes ago.
+        st.set_now(t0 + 25 * MIN + 2 * w + PENDING_KEEP_MS - 1);
+        assert!(!st.see_request("r1".into(), "m".into(), 0).unwrap());
+        assert!(!st.see_request(req.id(), req.machine(), 0).unwrap());
+        st.set_now(t0 + 25 * MIN + 2 * w + PENDING_KEEP_MS);
+        assert!(st.see_request("r1".into(), "m".into(), 0).unwrap());
     }
 
     #[test]

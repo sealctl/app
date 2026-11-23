@@ -3,6 +3,7 @@ import Testing
 import EngineKit
 import Places
 import SealCore
+import UserNotifications
 import Vault
 @testable import Engine
 @testable import Relay
@@ -287,6 +288,44 @@ struct TimingTests {
         await engine.setLeave(step: 6, skipped: [])
         await engine.registerPush(token: String(repeating: "ab", count: 32))
         #expect(try await engine.relay.listPush().isEmpty)
+    }
+}
+#endif
+
+#if os(macOS)
+extension TimingTests {
+    /// The extension answers by itself, but another install with the same words answered first
+    /// (`404 gone` on its reply): the notification says the machine stopped waiting instead of
+    /// asking for a request nobody can answer any more (SPEC.md 8.7, 10.1 step 5).
+    @Test func extensionThatLosesTheReplyRaceSaysStoppedWaiting() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, _, m) = try await paired(relay)
+        let agentArgs = ["request", "--kind", "agent", "--agent", "claude", "--repo-id", "github.com/acme/shop",
+                         "--names", "OPENAI_API_KEY", "--use", "claude:github.com/acme/shop:OPENAI_API_KEY",
+                         "--subject", "secret:OPENAI_API_KEY", "--key", "secrets:store-1", "--cmd", "npm test"]
+        var r = try m.start(agentArgs)
+        let w = try await firstRequest(engine, r)
+        #expect(await engine.answer(w.id, .allow))
+        _ = await m.waitAsync(r)
+        // The answer covers the named key; the key it comes in needs an Open session, as for
+        // `keys` (SPEC 9.3), so the machine reports one first.
+        #expect(try m.run(["status", "--state", "open", "--left", "3600"]).0 == 0)
+        await engine.refreshStatus()
+        r = try m.start(agentArgs)
+        var id: String?
+        for _ in 0..<100 where id == nil {
+            id = try? await engine.relay.requests().first?.id
+            if id == nil { try await Task.sleep(for: .milliseconds(100)) }
+        }
+        try await relay.control("/test/fail", #"{"path": "/reply", "status": 404, "error": "gone"}"#)
+        let content = UNMutableNotificationContent()
+        content.userInfo = ["type": "request", "id": try #require(id)]
+        let out = await ExtensionHandler(vault: engine.vault, files: engine.files).handle(content)
+        #expect(out?.title == Texts.stoppedWaiting(engine.displayName(w.machine)))
+        #expect(out?.interruptionLevel == .passive)
+        #expect(out?.categoryIdentifier.hasPrefix("REQUEST_") != true)
+        r.process.terminate()
     }
 }
 #endif

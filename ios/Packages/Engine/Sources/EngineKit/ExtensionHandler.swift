@@ -85,13 +85,15 @@ public struct ExtensionHandler: Sendable {
             biometrics: await vault.biometrics(), plan: snap.plan(r.machine))
         let verdict = decide(request: req, ctx: ctx)
         let placeName = snap.currentPlace.flatMap { id in state.places.first { $0.id == id && !$0.deleted }?.name }
+        // Answered on another install, or expired, between the list and this reply (8.7).
+        let stopped = Notes.passive(Texts.stoppedWaiting(name), userInfo: ["answered": r.id])
 
         switch verdict.asking {
         case .automatic:
             guard let d = verdict.automatic, let root = await vault.readRoot(),
-                  let sealed = try? sealReply(root: root, keys: keys, request: req, decision: d),
-                  (try? await relay.reply(id: r.id, sealed: sealed, userTapped: false)) != nil
-            else { break }
+                  let sealed = try? sealReply(root: root, keys: keys, request: req, decision: d) else { break }
+            guard let posted = await post(relay, r.id, sealed) else { return stopped }
+            guard posted else { break }
             files.writeInbox(InboxItem(id: r.id, machine: r.machine, sealed: r.sealed, outcome: "automatic", allowed: true,
                                        placeId: snap.currentPlace, time: now))
             return Notes.passive(Texts.answeredByItself(name, place: placeName), userInfo: ["answered": r.id])
@@ -105,8 +107,9 @@ public struct ExtensionHandler: Sendable {
             }
             let approval = PlanApproval(machine: plan.machine, hash: plan.planHash, notBefore: plan.notBefore,
                                         keys: plan.keys.map { KeyRef(purpose: $0.purpose, id: $0.id) })
-            guard let sealed = try? sealPlanKeysReply(root: root, keys: keys, request: req, approval: approval),
-                  (try? await relay.reply(id: r.id, sealed: sealed, userTapped: false)) != nil else { break }
+            guard let sealed = try? sealPlanKeysReply(root: root, keys: keys, request: req, approval: approval) else { break }
+            guard let posted = await post(relay, r.id, sealed) else { return stopped }
+            guard posted else { break }
             files.writeInbox(InboxItem(id: r.id, machine: r.machine, sealed: r.sealed, outcome: "in_session", allowed: true,
                                        placeId: snap.currentPlace, time: now))
             return Notes.passive(Texts.answeredByItself(name, place: placeName), userInfo: ["answered": r.id])
@@ -127,8 +130,9 @@ public struct ExtensionHandler: Sendable {
         case .silent:
             // A report: acknowledged here, recorded by the app from the inbox at its next run.
             guard req.kind() == .report,
-                  let sealed = try? sealReportReply(keys: keys, request: req, ack: req.status()?.seq, messages: []),
-                  (try? await relay.reply(id: r.id, sealed: sealed, userTapped: false)) != nil else { break }
+                  let sealed = try? sealReportReply(keys: keys, request: req, ack: req.status()?.seq, messages: []) else { break }
+            guard let posted = await post(relay, r.id, sealed) else { return stopped }
+            guard posted else { break }
             files.writeInbox(InboxItem(id: r.id, machine: r.machine, sealed: r.sealed, outcome: "report", allowed: false,
                                        placeId: nil, time: now))
             if let h = req.handback() {
@@ -143,5 +147,17 @@ public struct ExtensionHandler: Sendable {
         let w = Waiting(relay: r, request: req, verdict: verdict, machine: machine, seenAt: now, plan: req.plan())
         Notes.fill(content, w, machineName: name, biometry: biometry)
         return content
+    }
+
+    /// Posts a reply: true when the relay took it, nil on `404 gone`, false on anything else.
+    private func post(_ relay: RelayClient, _ id: String, _ sealed: String) async -> Bool? {
+        do {
+            try await relay.reply(id: id, sealed: sealed, userTapped: false)
+            return true
+        } catch let e as RelayError where e.code == "gone" {
+            return nil
+        } catch {
+            return false
+        }
     }
 }

@@ -1,6 +1,7 @@
 //! Merging two versions of the state (SPEC.md 6.5): record by record, the later `updated`
 //! wins; deletions are tombstones. Ties are broken by the record's encoding, so the result
-//! does not depend on which side is local.
+//! does not depend on which side is local. Month summaries are counters: they merge by the
+//! larger count.
 
 use std::collections::BTreeMap;
 
@@ -45,15 +46,30 @@ where
     out.into_values().collect()
 }
 
+/// Month summaries merge by month, field by field: the larger count, every machine named by
+/// either side, the later `updated`. Counts only grow, so no install's count is lost to
+/// another whose clock ran ahead (two installs counting at once keep the larger of the two).
+fn merge_summaries(a: &[MonthSummary], b: &[MonthSummary]) -> Vec<MonthSummary> {
+    let mut out: BTreeMap<String, MonthSummary> = BTreeMap::new();
+    for s in a.iter().chain(b.iter()) {
+        let m = out.entry(s.month.clone()).or_insert_with(|| MonthSummary {
+            month: s.month.clone(),
+            ..MonthSummary::default()
+        });
+        m.keys_used = m.keys_used.max(s.keys_used);
+        m.requests_declined = m.requests_declined.max(s.requests_declined);
+        m.machines.extend(s.machines.iter().cloned());
+        m.machines.sort();
+        m.machines.dedup();
+        m.updated = m.updated.max(s.updated);
+    }
+    out.into_values().collect()
+}
+
 /// The merge of two states. Commutative and idempotent.
 #[uniffi::export]
 pub fn merge_state(local: State, remote: State) -> State {
-    let summaries = merge_list(
-        &local.summaries,
-        &remote.summaries,
-        |s: &MonthSummary| s.month.clone(),
-        |s| s.updated,
-    );
+    let summaries = merge_summaries(&local.summaries, &remote.summaries);
     State {
         machines: merge_list(
             &local.machines,
@@ -149,6 +165,32 @@ mod tests {
         assert!(!merge_state(b, a).settings.relay_backup);
     }
 
+    #[test]
+    fn month_counts_survive_a_merge_with_a_clock_ahead() {
+        let summary = |keys, declined, machine: &str, updated| MonthSummary {
+            month: "2026-11".into(),
+            keys_used: keys,
+            requests_declined: declined,
+            machines: vec![machine.into()],
+            updated,
+        };
+        // This install counted 50 keys; another, whose clock runs ahead, last counted 11.
+        let here = State {
+            summaries: vec![summary(50, 3, "m1", 100)],
+            ..State::default()
+        };
+        let there = State {
+            summaries: vec![summary(11, 1, "m2", 200)],
+            ..State::default()
+        };
+        let m = merge_state(here.clone(), there.clone());
+        assert_eq!(m, merge_state(there, here));
+        let s = &m.summaries[0];
+        assert_eq!((s.keys_used, s.requests_declined), (50, 3));
+        assert_eq!(s.machines, vec!["m1".to_owned(), "m2".to_owned()]);
+        assert_eq!(s.updated, 200);
+    }
+
     fn arb_machine() -> impl Strategy<Value = Machine> {
         ("[a-d]", "[a-z]{1,3}", 0u64..5, any::<bool>())
             .prop_map(|(k, n, u, d)| machine(&k, &n, u, d))
@@ -165,14 +207,33 @@ mod tests {
         })
     }
 
+    fn arb_summary() -> impl Strategy<Value = MonthSummary> {
+        (
+            "2026-1[012]",
+            0u64..5,
+            0u64..3,
+            proptest::collection::vec("[a-c]", 0..3),
+            0u64..4,
+        )
+            .prop_map(|(month, keys, declined, machines, updated)| MonthSummary {
+                month,
+                keys_used: keys,
+                requests_declined: declined,
+                machines,
+                updated,
+            })
+    }
+
     fn arb_state() -> impl Strategy<Value = State> {
         (
             proptest::collection::vec(arb_machine(), 0..6),
             proptest::collection::vec(arb_answer(), 0..6),
+            proptest::collection::vec(arb_summary(), 0..4),
         )
-            .prop_map(|(machines, answers)| State {
+            .prop_map(|(machines, answers, summaries)| State {
                 machines,
                 answers,
+                summaries,
                 ..State::default()
             })
     }

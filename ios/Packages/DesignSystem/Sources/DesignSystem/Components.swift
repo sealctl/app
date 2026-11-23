@@ -27,7 +27,7 @@ public struct TitleText: View {
     let text: String
     public init(_ text: String) { self.text = text }
     public var body: some View {
-        Text(text).font(.title2.weight(.semibold)).foregroundStyle(Palette.ink)
+        Text(verbatim: text).font(.title2.weight(.semibold)).foregroundStyle(Palette.ink)
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityAddTraits(.isHeader)
     }
@@ -35,9 +35,11 @@ public struct TitleText: View {
 
 public struct BodyText: View {
     let text: String
-    public init(_ text: String) { self.text = text }
+    let markdown: Bool
+    /// `markdown: false` for text that holds anything a machine sent: shown as written.
+    public init(_ text: String, markdown: Bool = true) { self.text = text; self.markdown = markdown }
     public var body: some View {
-        Text(inlineMarkdown: text).font(.body).foregroundStyle(Palette.ink2)
+        (markdown ? Text(inlineMarkdown: text) : Text(verbatim: text)).font(.body).foregroundStyle(Palette.ink2)
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -45,9 +47,10 @@ public struct BodyText: View {
 
 public struct MutedText: View {
     let text: String
-    public init(_ text: String) { self.text = text }
+    let markdown: Bool
+    public init(_ text: String, markdown: Bool = true) { self.text = text; self.markdown = markdown }
     public var body: some View {
-        Text(inlineMarkdown: text).font(.subheadline).foregroundStyle(Palette.muted)
+        (markdown ? Text(inlineMarkdown: text) : Text(verbatim: text)).font(.subheadline).foregroundStyle(Palette.muted)
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
     }

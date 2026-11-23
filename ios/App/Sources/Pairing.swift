@@ -36,7 +36,7 @@ struct PairingView: View {
             Page(onBack: { router.pop() }) {
                 Gap(24)
                 TitleText("Pair this machine?")
-                MonoText(offer.name(), style: .title3, weight: .semibold)
+                MonoText(shown(offer.name(), 0), style: .title3, weight: .semibold)
                 detailLine(offer)
                 BodyText("It will be able to ask this phone for keys. You still approve every request.")
             } bottom: {
@@ -50,10 +50,10 @@ struct PairingView: View {
                 Gap(24)
                 if sameHint {
                     TitleText("Already paired")
-                    BodyText("\(offer.name()) is already paired (same hardware, last seen \(Texts.ago(existing.lastSeen.map { Int64($0) }))). Replace it?")
+                    BodyText("\(shown(offer.name())) is already paired (same hardware, last seen \(Texts.ago(existing.lastSeen.map { Int64($0) }))). Replace it?", markdown: false)
                 } else {
                     TitleText("Same machine?")
-                    BodyText("Another machine is already called \(offer.name()) (\(existing.model ?? existing.os), paired \(Texts.isoDate(Int64(existing.pairedAt)))). Same machine?")
+                    BodyText("Another machine is already called \(shown(offer.name())) (\(shown(existing.model ?? existing.os)), paired \(Texts.isoDate(Int64(existing.pairedAt)))). Same machine?", markdown: false)
                 }
             } bottom: {
                 ErrorText(error)
@@ -92,7 +92,7 @@ struct PairingView: View {
     }
 
     private func detailLine(_ offer: PairingOffer) -> some View {
-        let parts = [offer.os().nonEmpty, offer.model()].compactMap { $0 }
+        let parts = [offer.os().nonEmpty, offer.model()].compactMap { $0 }.map { shown($0) }
         return HStack(spacing: 0) {
             Text(parts.joined(separator: " · ") + (parts.isEmpty ? "" : " · ")).foregroundStyle(Palette.muted)
             MonoText("#\(offer.tag())", style: .subheadline, color: Palette.muted)
@@ -124,7 +124,7 @@ struct PairingView: View {
                 step = .cardWords(offer, replaces)
                 return
             }
-            switch await e.vault.gate(reason: "Confirm pairing \(offer.name()).") {
+            switch await e.vault.gate(reason: "Confirm pairing \(shown(offer.name())).") {
             case .passed: await register(offer, replaces, e)
             case .cancelled: break
             case .changed, .lockedOut, .unavailable: step = .cardWords(offer, replaces)

@@ -62,7 +62,7 @@ struct SensitiveView: View {
                     Page(onBack: { router.pop() }) {
                         Gap(24)
                         TitleText("Confirmed")
-                        BodyText("\(name) goes ahead now. Its report shows here when it is done.")
+                        BodyText("\(name) goes ahead now. Its report shows here when it is done.", markdown: false)
                     } bottom: { PrimaryButton("Done") { router.pop() } }
                 }
             }
@@ -183,20 +183,20 @@ private struct PlanView: View {
                 let plan = w.plan
                 let all = plan?.all == true || level3
                 let first = plan?.items.first { $0.kind != "pairing" }
-                TitleText(all ? Texts.handBackAll(name) : "Hand back \(first?.kind ?? "") \(first?.name ?? "") from \(name)?")
+                TitleText(all ? Texts.handBackAll(name) : "Hand back \(shown(first?.kind ?? "", Texts.maxAgent)) \(shown(first?.name ?? "")) from \(name)?")
                 if all { BodyText(Texts.handBackAllBody) }
                 ForEach(Array((plan?.items ?? []).enumerated()), id: \.offset) { i, it in
                     HStack(alignment: .firstTextBaseline) {
                         Text(verbatim: "\(i + 1)").font(Fonts.mono(.subheadline)).foregroundStyle(Palette.muted).frame(width: 28, alignment: .leading)
-                        MonoText("\(planLabel(it.kind)) · \(it.name)")
+                        MonoText("\(planLabel(shown(it.kind, Texts.maxAgent))) · \(shown(it.name))")
                     }
                     .accessibilityElement(children: .combine)
                 }
             case .keys:
                 let s = w.request.ctx()?.subject
-                TitleText("Let sealctl seal take over \(s?.kind ?? "") \(s?.name ?? "") on \(name)?")
+                TitleText("Let sealctl seal take over \(shown(s?.kind ?? "", Texts.maxAgent)) \(shown(s?.name ?? "")) on \(name)?")
                 ForEach(Array(w.request.items().enumerated()), id: \.offset) { _, i in
-                    MonoText("\(i.purpose) · \(i.object?.path ?? i.id)")
+                    MonoText("\(shown(i.purpose, Texts.maxAgent)) · \(shown(i.object?.path ?? i.id, Texts.maxLine))")
                 }
             case .rewrap:
                 TitleText("Move \(name) to new words?")
@@ -297,19 +297,19 @@ struct ReportView: View {
         let r = model.engine!.state.reports.first { $0.id == id }
         Page(onBack: { router.pop() }) {
             if let r {
-                TitleText(r.what == "leave" ? "This phone left sealctl" : "\(r.machineName) handed everything back")
+                TitleText(r.what == "leave" ? "This phone left sealctl" : "\(shown(r.machineName)) handed everything back")
                 let done = r.items.filter { $0.state == "done" }.count
                 MutedText("\(done) of \(r.items.count) done · \(Texts.time(Int64(r.time)))")
                 ForEach(Array(r.items.enumerated()), id: \.offset) { _, i in
                     let color = i.state == "failed" ? Palette.waiting : i.state == "skipped" ? Palette.muted : Palette.ink
-                    MonoText("\(planLabel(i.kind)) · \(i.name) → \(i.to)", style: .subheadline, color: color)
+                    MonoText("\(planLabel(shown(i.kind, Texts.maxAgent))) · \(shown(i.name)) → \(shown(i.to, Texts.maxLine))", style: .subheadline, color: color)
                     if i.state == "failed" {
                         Text("Run `sealctl unseal --resume` on that computer.").font(.footnote).foregroundStyle(Palette.waiting)
                     }
                 }
                 if !r.run.isEmpty {
                     BodyText("Run folder on that computer:")
-                    MonoText(r.run, style: .footnote)
+                    MonoText(shown(r.run, Texts.maxLine), style: .footnote)
                 }
                 BodyText("Your other computers were told.")
             } else {

@@ -182,7 +182,7 @@ struct MachineRow: View {
                     Spacer()
                     StateLabel(v.state.kind, v.row, spoken: v.spoken)
                 }
-                let sub = [v.machine.nickname != nil ? v.machine.name : nil, v.machine.model,
+                let sub = [v.machine.nickname != nil ? shown(v.machine.name) : nil, v.machine.model.map { shown($0) },
                            "seen \(Texts.ago(v.machine.lastSeen.map { Int64($0) }, now: now))"].compactMap { $0 }
                 Text(sub.joined(separator: " · ")).font(.subheadline).foregroundStyle(Palette.muted)
                 if v.machine.flagged {
@@ -228,7 +228,7 @@ struct ActivityList: View {
             ForEach(e.state.reports.sorted { $0.time > $1.time }.prefix(5), id: \.id) { r in
                 Button { router.push(.report(r.id)) } label: {
                     SurfaceCard {
-                        Text(r.what == "leave" ? "This phone left sealctl" : "\(r.machineName) handed everything back")
+                        Text(verbatim: r.what == "leave" ? "This phone left sealctl" : "\(shown(r.machineName)) handed everything back")
                             .fontWeight(.semibold).foregroundStyle(Palette.ink)
                         MutedText("\(r.items.filter { $0.state == "done" }.count) of \(r.items.count) done · \(Texts.mediumDate(Int64(r.time)))")
                     }
@@ -278,7 +278,7 @@ struct ActivityList: View {
         case "confirmed": "Confirmed"
         default: u.outcome
         }
-        let parts = [Texts.time(Int64(u.time)), u.key.nonEmpty, u.agent, u.repo, u.command, name, outcome].compactMap { $0 }
+        let parts = [Texts.time(Int64(u.time))] + [u.key.nonEmpty, u.agent, u.repo, u.command].compactMap { $0 }.map { shown($0, Texts.maxLine) } + [name, outcome]
         return MonoText(parts.joined(separator: " · "), style: .footnote, color: Palette.ink2)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -310,7 +310,7 @@ struct InventoryList: View {
                         }
                         .accessibilityElement(children: .combine)
                         if !i.path.isEmpty {
-                            MonoText([i.path, i.size > 0 ? "\(i.size / 1000) KB" : nil].compactMap { $0 }.joined(separator: " · "),
+                            MonoText([shown(i.path, Texts.maxLine), i.size > 0 ? "\(i.size / 1000) KB" : nil].compactMap { $0 }.joined(separator: " · "),
                                      style: .footnote, color: Palette.ink2)
                         }
                         MutedText("First used \(Texts.isoDate(Int64(i.firstUse))) · last used \(Texts.ago(Int64(i.lastUse)))")

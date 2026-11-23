@@ -455,7 +455,17 @@ impl Store {
                 l.holds.push(hold);
             }
             LocalEvent::ClearHold { machine } => l.holds.retain(|h| h.machine != machine),
-            LocalEvent::PutPlan { plan } => {
+            LocalEvent::PutPlan { mut plan } => {
+                // A cancelled approval stays cancelled: a write of the same approval (same
+                // request) made before the cancel was seen does not bring it back.
+                if l.plans.iter().any(|p| {
+                    p.machine == plan.machine
+                        && p.plan_hash == plan.plan_hash
+                        && p.request_id == plan.request_id
+                        && p.state == "cancelled"
+                }) {
+                    plan.state = "cancelled".into();
+                }
                 l.plans
                     .retain(|p| !(p.machine == plan.machine && p.plan_hash == plan.plan_hash));
                 l.plans.push(plan);
@@ -463,7 +473,18 @@ impl Store {
                     p.not_before + crate::decide::PLAN_WINDOW_MS + 7 * 86_400_000 > now
                 });
             }
-            LocalEvent::PutDelayed { action } => {
+            LocalEvent::PutDelayed { mut action } => {
+                // A delayed action that ended (cancelled, finished, gone) stays ended: a write
+                // made from an older read (the relay's list fetched before a cancel note)
+                // does not make it wait again.
+                if let Some(d) = l
+                    .delayed
+                    .iter()
+                    .find(|d| d.id == action.id && delayed_ended(&d.state))
+                {
+                    action.state = d.state.clone();
+                    action.cancelled_by = d.cancelled_by.clone().or(action.cancelled_by);
+                }
                 l.delayed.retain(|d| d.id != action.id);
                 l.delayed.push(action);
             }
@@ -955,6 +976,11 @@ impl Store {
         c.execute_batch("DELETE FROM doc; DELETE FROM usage;")?;
         Ok(())
     }
+}
+
+/// A delayed action's state from which it never waits again.
+fn delayed_ended(state: &str) -> bool {
+    matches!(state, "cancelled" | "finished" | "gone" | "expired")
 }
 
 /// Whether an allowed `open` with this outcome can be the first approval of a day: only an
@@ -1462,6 +1488,54 @@ mod tests {
             })
             .unwrap();
         assert!(l.holds.is_empty());
+    }
+
+    #[test]
+    fn a_cancel_is_not_undone_by_an_older_write() {
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        st.set_now(t0);
+        let action = |state: &str, by: Option<&str>| LocalEvent::PutDelayed {
+            action: DelayedAction {
+                id: "d1".into(),
+                what: "unseal_all".into(),
+                machine: Some("m".into()),
+                release_at: t0 + 2 * H,
+                expires: t0 + 2 * H + 15 * MIN,
+                state: state.into(),
+                cancelled_by: by.map(Into::into),
+            },
+        };
+        st.apply_local(action("waiting", None)).unwrap();
+        // The cancel note arrives while the relay's list, read just before it, is on its way.
+        st.apply_local(action("cancelled", Some("m"))).unwrap();
+        let l = st.apply_local(action("waiting", None)).unwrap();
+        assert_eq!(l.delayed[0].state, "cancelled");
+        assert_eq!(l.delayed[0].cancelled_by.as_deref(), Some("m"));
+
+        let plan = |request: &str, state: &str| LocalEvent::PutPlan {
+            plan: PlanApprovalRecord {
+                machine: "m".into(),
+                request_id: request.into(),
+                plan_hash: "h".into(),
+                not_before: t0 + 2 * H,
+                state: state.into(),
+                delay_id: Some(request.into()),
+                ..PlanApprovalRecord::default()
+            },
+        };
+        st.apply_local(plan("d1", "delayed")).unwrap();
+        st.apply_local(plan("d1", "cancelled")).unwrap();
+        // A write of the same approval made before the cancel was seen.
+        let l = st.apply_local(plan("d1", "delayed")).unwrap();
+        assert_eq!(l.plans.len(), 1);
+        assert_eq!(l.plans[0].state, "cancelled");
+        // The same plan approved again by a new request is a new approval.
+        let l = st.apply_local(plan("d2", "delayed")).unwrap();
+        assert_eq!(
+            (l.plans[0].request_id.as_str(), l.plans[0].state.as_str()),
+            ("d2", "delayed")
+        );
     }
 
     #[test]

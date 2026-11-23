@@ -899,6 +899,9 @@ class Engine(
             } else if (mine.state != d.state && mine.state != "cancelled") {
                 if (d.state == "cancelled") delayedCancelled(d.id, d.by)
                 else applyLocal(LocalEvent.PutDelayed(mine.copy(state = d.state)))
+            } else if (Plans.cancelAgain(mine, d.state)) {
+                // Cancelled here while the relay did not answer: it still holds the record.
+                runCatching { relay.cancelDelayed(d.id) }
             }
         }
         // However the cancel arrived (socket, push, this list), its plan hands out no keys.
@@ -933,7 +936,11 @@ class Engine(
         delayedTick.value = System.currentTimeMillis()
     }
 
-    /** Cancel needs no biometrics: stopping is always allowed. */
+    /**
+     * Cancel needs no biometrics: stopping is always allowed. The cancel is recorded here
+     * whatever the relay answers; one the relay did not get is sent again from its list
+     * ([refreshDelayed]). Returns whether the relay took it.
+     */
     suspend fun cancelDelayed(id: String): Boolean {
         val d = local.value.delayed.firstOrNull { it.id == id }
         val failed = Plans.cancelFromPhone(relayCancel = { relay.cancelDelayed(id) }) {
@@ -943,12 +950,9 @@ class Engine(
             takeBackReady(id)
             delayedTick.value = System.currentTimeMillis()
         }
-        if (failed != null) {
-            relayFailed(failed)
-            return false
-        }
+        failed?.let { relayFailed(it) }
         scope.launch { sendNotice(d?.what ?: "unseal_all", "cancelled", d?.machine, id, d?.releaseAt?.toLong()) }
-        return true
+        return failed == null
     }
 
     /** A cancelled action on the phone: no "Ready" note at its end (SPEC.md 11.23). */

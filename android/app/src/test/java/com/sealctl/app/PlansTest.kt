@@ -71,6 +71,9 @@ class PlansTest {
         // Recorded: the plan hands out no more keys; the other plan is untouched.
         assertNull(Plans.forRequest(cancelled, listOf(d!!), "m", "h"))
         assertEquals("x", Plans.forRequest(plans.drop(1), listOf(d), "m", "h")?.planHash)
+        // Already cancelled from a computer: that record stays as it is.
+        val byComputer = delayed("d1", "cancelled").copy(cancelledBy = "m1")
+        assertNull(Plans.cancelledHere(listOf(byComputer), plans, "d1").first)
     }
 
     @Test
@@ -84,5 +87,16 @@ class PlansTest {
             assertTrue("recorded after ${answer?.message ?: "200"}", recorded)
             assertSame(answer, failed)
         }
+    }
+
+    @Test
+    fun aCancelTheRelayDidNotGetIsSentAgain() {
+        val mine = delayed("d1", "cancelled").copy(cancelledBy = "phone")
+        assertTrue(Plans.cancelAgain(mine, "waiting"))
+        assertTrue(Plans.cancelAgain(mine, "released"))
+        assertFalse(Plans.cancelAgain(mine, "cancelled"))
+        // Cancelled from a computer, or not cancelled here: nothing to send.
+        assertFalse(Plans.cancelAgain(mine.copy(cancelledBy = "m1"), "waiting"))
+        assertFalse(Plans.cancelAgain(delayed("d1", "waiting"), "waiting"))
     }
 }

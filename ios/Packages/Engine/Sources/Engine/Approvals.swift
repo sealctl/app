@@ -584,6 +584,10 @@ extension AppEngine {
                     if d.state == "cancelled" { m.cancelledBy = d.by }
                     await applyLocal(.putDelayed(action: m))
                     if d.state == "cancelled" { await notifier.remove(ids: ["ready-\(d.id)"]) }
+                } else if mine.state == "cancelled" && mine.cancelledBy == "phone"
+                            && (d.state == "waiting" || d.state == "released") {
+                    // Cancelled here while the relay did not answer: it still holds the record.
+                    _ = try? await relay.cancelDelayed(d.id)
                 }
             } else {
                 await applyLocal(.putDelayed(action: DelayedAction(
@@ -616,32 +620,37 @@ extension AppEngine {
         }
     }
 
-    /// Cancel needs no biometrics: stopping is always allowed.
+    /// Cancel needs no biometrics: stopping is always allowed. The cancel is recorded here
+    /// first, so the plan hands out no more keys whatever the relay answers: `404 gone` (the
+    /// machine already fetched the record, or it expired) or no answer at all (fail closed). A
+    /// cancel the relay did not get is sent again from its list (`refreshDelayed`). Returns
+    /// whether the relay took it.
     @discardableResult
     public func cancelDelayed(_ id: String) async -> Bool {
         let d = local.delayed.first { $0.id == id }
-        do {
-            try await relay.cancelDelayed(id)
-        } catch {
-            relayFailed(error)
-            return false
-        }
-        if var m = d {
+        if var m = d, m.state != "cancelled" {
             m.state = "cancelled"
             m.cancelledBy = "phone"
             await applyLocal(.putDelayed(action: m))
         }
-        if var p = local.plans.first(where: { $0.delayId == id }) {
+        for var p in local.plans where p.delayId == id && p.state != "cancelled" {
             p.state = "cancelled"
             await applyLocal(.putPlan(plan: p))
         }
         await notifier.remove(ids: ["ready-\(id)"])
+        delayedTick = nowMs()
+        var took = true
+        do {
+            try await relay.cancelDelayed(id)
+        } catch {
+            relayFailed(error)
+            took = false
+        }
         Task {
             await self.sendNotice(what: d?.what ?? "unseal_all", state: "cancelled", machine: d?.machine, delayId: id,
                                   at: d.map { Int64($0.releaseAt) })
         }
-        delayedTick = nowMs()
-        return true
+        return took
     }
 
     /// Starts a level 3 action on the phone: nil (go ahead now) at a trusted place, else the

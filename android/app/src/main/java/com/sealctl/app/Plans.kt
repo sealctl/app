@@ -44,24 +44,34 @@ internal object Plans {
 
     /**
      * What a cancel from this phone records (SPEC.md 11.23): the delayed record [id], cancelled
-     * by the phone, and every plan waiting on it.
+     * by the phone (unless it is already cancelled), and every plan waiting on it.
      */
     fun cancelledHere(delayed: List<DelayedAction>, plans: List<PlanApprovalRecord>, id: String): Pair<DelayedAction?, List<PlanApprovalRecord>> =
-        delayed.firstOrNull { it.id == id }?.copy(state = "cancelled", cancelledBy = "phone") to
+        delayed.firstOrNull { it.id == id && it.state != "cancelled" }?.copy(state = "cancelled", cancelledBy = "phone") to
             plans.filter { it.delayId == id && it.state != "cancelled" }.map { it.copy(state = "cancelled") }
 
     /**
-     * A cancel from this phone: [relayCancel] asks the relay, and [record] writes
-     * [cancelledHere]. Returns the relay's error, or null when the relay took the cancel.
+     * A cancel from this phone: [record] writes [cancelledHere] first, then [relayCancel] asks
+     * the relay. The plan hands out no more keys whatever the relay answers: `404 gone` (the
+     * machine already fetched the record, or it expired) or no answer at all (fail closed).
+     * Returns the relay's error, or null when the relay took the cancel.
      */
-    suspend fun cancelFromPhone(relayCancel: suspend () -> Unit, record: () -> Unit): Exception? =
-        try {
+    suspend fun cancelFromPhone(relayCancel: suspend () -> Unit, record: () -> Unit): Exception? {
+        record()
+        return try {
             relayCancel()
-            record()
             null
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             e
         }
+    }
+
+    /**
+     * A record this phone cancelled that the relay's list still shows live ([relayState]
+     * `waiting` or `released`): the relay did not get that cancel, so it is sent again.
+     */
+    fun cancelAgain(mine: DelayedAction, relayState: String): Boolean =
+        mine.state == "cancelled" && mine.cancelledBy == "phone" && (relayState == "waiting" || relayState == "released")
 }

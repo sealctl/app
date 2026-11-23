@@ -761,11 +761,10 @@ impl Store {
             s.reports.retain(|r| r.id != report.id);
             s.reports.push(report.clone());
             let mut l: LocalState = read_doc(&c, "local")?;
-            for p in l
-                .plans
-                .iter_mut()
-                .filter(|p| p.machine == machine && p.plan_hash == hb.hash)
-            {
+            // A cancelled approval stays cancelled, whatever report arrives after the cancel.
+            for p in l.plans.iter_mut().filter(|p| {
+                p.machine == machine && p.plan_hash == hb.hash && p.state != "cancelled"
+            }) {
                 p.state = "done".into();
             }
             l.dirty = true;
@@ -1254,6 +1253,16 @@ mod tests {
         t: u64,
         uses: Vec<sealctl_core::wire::AgentUse>,
     ) -> Arc<Request> {
+        request_with(machine, why, t, |b| b.uses = uses)
+    }
+
+    /// [`request_at`] with the body set up by `f`.
+    fn request_with(
+        machine: &sealctl_core::machine::MachineKeys,
+        why: &str,
+        t: u64,
+        f: impl FnOnce(&mut sealctl_core::wire::RequestBody),
+    ) -> Arc<Request> {
         use sealctl_core::request::{new_request_id, open_request_at, seal_request};
         use sealctl_core::{PhoneKeys, PhonePublic, Root, Words};
         thread_local! {
@@ -1262,13 +1271,13 @@ mod tests {
         KEYS.with(|keys| {
             let phone = PhonePublic::from_b64u(&keys.public_id(), &keys.box_public_key()).unwrap();
             let id = new_request_id().unwrap();
-            let body = sealctl_core::wire::RequestBody {
+            let mut body = sealctl_core::wire::RequestBody {
                 v: 1,
                 t,
                 why: why.into(),
-                uses,
                 ..Default::default()
             };
+            f(&mut body);
             let sealed = seal_request(machine, &phone, &id, body).unwrap();
             Arc::new(open_request_at(keys, &machine.id(), &id, &sealed.sealed, t).unwrap())
         })
@@ -1579,6 +1588,71 @@ mod tests {
         .unwrap();
         assert_eq!(st.summary("2026-11".into()).unwrap().keys_used, 3);
         assert_eq!(st.summary("2026-12".into()).unwrap().keys_used, 0);
+    }
+
+    #[test]
+    fn a_hand_back_report_does_not_reopen_a_cancelled_plan() {
+        let st = store();
+        let m = paired(&st);
+        let t0 = MIDNIGHT + 9 * H;
+        st.set_now(t0);
+        let plan = |state: &str| LocalEvent::PutPlan {
+            plan: PlanApprovalRecord {
+                machine: m.id(),
+                request_id: "d1".into(),
+                plan_hash: "h".into(),
+                not_before: t0,
+                state: state.into(),
+                ..PlanApprovalRecord::default()
+            },
+        };
+        st.apply_local(plan("approved")).unwrap();
+        st.apply_local(plan("cancelled")).unwrap();
+        // A report of a hand-back for the same plan arrives after the cancel.
+        let r = request_with(&m, "report", t0 + MIN, |b| {
+            b.handback = Some(sealctl_core::wire::Handback {
+                hash: "h".into(),
+                ..Default::default()
+            });
+        });
+        st.set_now(t0 + MIN);
+        st.apply_report(r, 0).unwrap();
+        let l = st.local().unwrap();
+        assert_eq!(l.plans[0].state, "cancelled");
+        // Within its window the plan still answers nothing by itself.
+        let mut c = crate::decide::DecideContext {
+            now: t0 + 2 * MIN,
+            utc_offset_secs: 0,
+            phone_unlocked: true,
+            near: true,
+            on_wifi: true,
+            places_on: true,
+            current_place: None,
+            current_place_settled: false,
+            day: None,
+            answers: Vec::new(),
+            session_open: false,
+            hold: None,
+            biometrics: crate::decide::Biometrics::Available,
+            plan: Some(l.plans[0].clone()),
+        };
+        let f = crate::decide::RequestFacts {
+            kind: Some(RequestKind::Unseal),
+            level: 2,
+            machine: m.id(),
+            plan_hash: Some("h".into()),
+            has_keys: true,
+            ..Default::default()
+        };
+        assert_ne!(
+            crate::decide::decide_facts(&f, &c).asking,
+            crate::decide::Asking::PlanKeys
+        );
+        c.plan.as_mut().unwrap().state = "done".into();
+        assert_eq!(
+            crate::decide::decide_facts(&f, &c).asking,
+            crate::decide::Asking::PlanKeys
+        );
     }
 
     #[test]

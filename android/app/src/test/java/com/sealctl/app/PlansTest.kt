@@ -5,8 +5,11 @@ import com.sealctl.core.app.PlanApprovalRecord
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.IOException
+import kotlinx.coroutines.test.runTest
 
 /** The plan that answers later key requests (SPEC.md 9.6, 11.23). */
 class PlansTest {
@@ -56,5 +59,30 @@ class PlansTest {
         assertEquals("h", Plans.afterRelayCheck(true, plans, listOf(delayed("d1", "released")), "m", "h")?.planHash)
         // The relay did not answer: no plan, the person decides.
         assertNull(Plans.afterRelayCheck(false, plans, listOf(delayed("d1", "released")), "m", "h"))
+    }
+
+    @Test
+    fun aCancelHereRecordsThePlanAndItsDelay() {
+        val plans = listOf(plan("h", 1000, state = "delayed", delayId = "d1"), plan("x", 500))
+        val (d, cancelled) = Plans.cancelledHere(listOf(delayed("d1", "waiting")), plans, "d1")
+        assertEquals("cancelled", d?.state)
+        assertEquals("phone", d?.cancelledBy)
+        assertEquals(listOf("h" to "cancelled"), cancelled.map { it.planHash to it.state })
+        // Recorded: the plan hands out no more keys; the other plan is untouched.
+        assertNull(Plans.forRequest(cancelled, listOf(d!!), "m", "h"))
+        assertEquals("x", Plans.forRequest(plans.drop(1), listOf(d), "m", "h")?.planHash)
+    }
+
+    @Test
+    fun aCancelHereClosesThePlanWhateverTheRelayAnswers() = runTest {
+        // The relay took it; `404 gone` (the machine fetched the record, or it expired); no answer.
+        val gone = IllegalStateException("404 gone")
+        val offline = IOException("no route to host")
+        for (answer in listOf<Exception?>(null, gone, offline)) {
+            var recorded = false
+            val failed = Plans.cancelFromPhone(relayCancel = { if (answer != null) throw answer }) { recorded = true }
+            assertTrue("recorded after ${answer?.message ?: "200"}", recorded)
+            assertSame(answer, failed)
+        }
     }
 }

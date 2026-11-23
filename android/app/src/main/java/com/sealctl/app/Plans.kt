@@ -2,6 +2,7 @@ package com.sealctl.app
 
 import com.sealctl.core.app.DelayedAction
 import com.sealctl.core.app.PlanApprovalRecord
+import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * Which approved plan answers a machine's later key requests (SPEC.md 9.6). A plan stops
@@ -40,4 +41,27 @@ internal object Plans {
         val cancelled = delayed.filter { it.state == "cancelled" }.map { it.id }.toSet()
         return plans.filter { it.state != "cancelled" && it.delayId != null && it.delayId in cancelled }
     }
+
+    /**
+     * What a cancel from this phone records (SPEC.md 11.23): the delayed record [id], cancelled
+     * by the phone, and every plan waiting on it.
+     */
+    fun cancelledHere(delayed: List<DelayedAction>, plans: List<PlanApprovalRecord>, id: String): Pair<DelayedAction?, List<PlanApprovalRecord>> =
+        delayed.firstOrNull { it.id == id }?.copy(state = "cancelled", cancelledBy = "phone") to
+            plans.filter { it.delayId == id && it.state != "cancelled" }.map { it.copy(state = "cancelled") }
+
+    /**
+     * A cancel from this phone: [relayCancel] asks the relay, and [record] writes
+     * [cancelledHere]. Returns the relay's error, or null when the relay took the cancel.
+     */
+    suspend fun cancelFromPhone(relayCancel: suspend () -> Unit, record: () -> Unit): Exception? =
+        try {
+            relayCancel()
+            record()
+            null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            e
+        }
 }

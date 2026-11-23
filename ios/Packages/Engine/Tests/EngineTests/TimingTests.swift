@@ -593,3 +593,57 @@ extension TimingTests {
     }
 }
 #endif
+
+#if os(macOS)
+extension TimingTests {
+    /// A delayed level 3 approval, confirmed away from any trusted place.
+    func delayedApproval(_ engine: AppEngine, _ m: FakeMachine) async throws -> (Waiting, FakeMachine.Run) {
+        let r = try m.start(["request", "--kind", "unseal", "--all", "--match", "--plan", "volume:safe:volume:vol-1"])
+        let w = try await firstRequest(engine, r)
+        #expect(w.verdict.level == 3)
+        #expect(w.request.checkMatch(pick: try await r.number()))
+        #expect(await engine.confirmSensitive(w))
+        #expect(engine.local.delayed.first { $0.id == w.id }?.state == "waiting")
+        #expect(engine.livePlan(w.machine.key)?.requestId == w.id)
+        return (w, r)
+    }
+
+    /// Cancel on the phone after the machine fetched the approval: the relay answers `404 gone`,
+    /// and the plan is cancelled here all the same, so it hands out no more keys (SPEC.md 11.23).
+    @Test func cancelThatTheRelayAnswersGoneStillClosesThePlan() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, _, m) = try await paired(relay)
+        let (w, r) = try await delayedApproval(engine, m)
+        // The (shortened) delay ends and the machine fetches the record, which leaves the relay.
+        let (code, out) = await m.waitAsync(r)
+        #expect(code == 0, "\(out)")
+        #expect(!(await engine.cancelDelayed(w.id)))
+        let d = try #require(engine.local.delayed.first { $0.id == w.id })
+        #expect(d.state == "cancelled")
+        #expect(d.cancelledBy == "phone")
+        #expect(engine.local.plans.first { $0.requestId == w.id }?.state == "cancelled")
+        #expect(engine.livePlan(w.machine.key) == nil)
+        #expect(engine.files.readSnapshot()?.plan(w.machine.key)?.requestId != w.id)
+    }
+
+    /// Cancel on the phone while the relay does not answer: the plan is cancelled here at once,
+    /// and the next look at the relay's list, which still holds the record, sends the cancel
+    /// again, so the machine never fetches the approval (SPEC.md 11.23).
+    @Test func cancelThatDoesNotReachTheRelayIsSentAgain() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, _, m) = try await paired(relay, testDelay: 60)
+        let (w, r) = try await delayedApproval(engine, m)
+        try await relay.control("/test/fail", #"{"path": "/cancel", "status": 503, "error": "internal"}"#)
+        #expect(!(await engine.cancelDelayed(w.id)))
+        #expect(engine.local.delayed.first { $0.id == w.id }?.state == "cancelled")
+        #expect(engine.local.plans.first { $0.requestId == w.id }?.state == "cancelled")
+        #expect(engine.livePlan(w.machine.key) == nil)
+        #expect(await engine.refreshDelayed())
+        let (code, out) = await m.waitAsync(r)
+        #expect(code == 4, "\(out)")
+        #expect(out.contains("CANCELLED by=phone"), "\(out)")
+    }
+}
+#endif

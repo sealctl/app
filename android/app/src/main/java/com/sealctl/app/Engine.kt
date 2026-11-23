@@ -936,17 +936,19 @@ class Engine(
     /** Cancel needs no biometrics: stopping is always allowed. */
     suspend fun cancelDelayed(id: String): Boolean {
         val d = local.value.delayed.firstOrNull { it.id == id }
-        return try {
-            relay.cancelDelayed(id)
-            d?.let { applyLocal(LocalEvent.PutDelayed(it.copy(state = "cancelled", cancelledBy = "phone"))) }
-            local.value.plans.firstOrNull { it.delayId == id }?.let { applyLocal(LocalEvent.PutPlan(it.copy(state = "cancelled"))) }
-            scope.launch { sendNotice(d?.what ?: "unseal_all", "cancelled", d?.machine, id, d?.releaseAt?.toLong()) }
+        val failed = Plans.cancelFromPhone(relayCancel = { relay.cancelDelayed(id) }) {
+            val (mine, plans) = Plans.cancelledHere(local.value.delayed, local.value.plans, id)
+            mine?.let { applyLocal(LocalEvent.PutDelayed(it)) }
+            for (p in plans) applyLocal(LocalEvent.PutPlan(p))
             takeBackReady(id)
             delayedTick.value = System.currentTimeMillis()
-            true
-        } catch (e: Exception) {
-            relayFailed(e as? Exception ?: Exception()); false
         }
+        if (failed != null) {
+            relayFailed(failed)
+            return false
+        }
+        scope.launch { sendNotice(d?.what ?: "unseal_all", "cancelled", d?.machine, id, d?.releaseAt?.toLong()) }
+        return true
     }
 
     /** A cancelled action on the phone: no "Ready" note at its end (SPEC.md 11.23). */

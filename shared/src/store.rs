@@ -445,7 +445,12 @@ impl Store {
                 l.days.retain(|d| d.machine != day.machine);
                 l.days.push(day);
             }
-            LocalEvent::SetHold { hold } => {
+            LocalEvent::SetHold { mut hold } => {
+                // A hold only grows: a later wrong number never ends an earlier hold sooner.
+                // Only ClearHold (Release now, with biometrics) ends it early.
+                for h in l.holds.iter().filter(|h| h.machine == hold.machine) {
+                    hold.until = hold.until.max(h.until);
+                }
                 l.holds.retain(|h| h.machine != hold.machine);
                 l.holds.push(hold);
             }
@@ -1430,6 +1435,33 @@ mod tests {
         assert!(pruned.answers[0].deleted);
         let merged = crate::merge::merge_state(pruned, held);
         assert!(merged.answers[0].deleted);
+    }
+
+    #[test]
+    fn a_later_wrong_number_never_shortens_a_hold() {
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        let hold = |until| LocalEvent::SetHold {
+            hold: Hold {
+                machine: "m".into(),
+                until,
+            },
+        };
+        st.apply_local(hold(t0 + H)).unwrap();
+        // A second wrong number recorded with an earlier end (its time read before the first
+        // was stored, or the clock was set back): the hold keeps the later end.
+        let l = st.apply_local(hold(t0 + H - 5 * MIN)).unwrap();
+        assert_eq!(l.holds.len(), 1);
+        assert_eq!(l.holds[0].until, t0 + H);
+        let l = st.apply_local(hold(t0 + 2 * H)).unwrap();
+        assert_eq!(l.holds[0].until, t0 + 2 * H);
+        // Only a release ends it early.
+        let l = st
+            .apply_local(LocalEvent::ClearHold {
+                machine: "m".into(),
+            })
+            .unwrap();
+        assert!(l.holds.is_empty());
     }
 
     #[test]

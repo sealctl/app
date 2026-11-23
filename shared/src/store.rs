@@ -287,6 +287,13 @@ fn bump(prev: u64, now: u64) -> u64 {
     now.max(prev.saturating_add(1))
 }
 
+/// `updated` for a record that replaces every copy of it held now, removed ones too: later
+/// than all of them, so it wins a merge with any of them even when their times came from a
+/// clock that ran ahead (another install).
+fn bump_over(held: impl Iterator<Item = u64>, given: u64, now: u64) -> u64 {
+    bump(held.fold(given, u64::max), now)
+}
+
 fn item_inventory(item: &RequestItem, machine: &str, now: u64, fp: &str) -> InventoryItem {
     let o = item.object.clone().unwrap_or_default();
     InventoryItem {
@@ -605,23 +612,37 @@ impl Store {
                             a.updated = bump(a.updated, now);
                         }
                         Some(_) => {}
-                        None if remember => s.answers.push(RememberedAnswer {
-                            agent: u.agent.clone(),
-                            key_name: name.clone(),
-                            repo_id: u.repository.clone(),
-                            repo_name: ctx
-                                .repo
-                                .as_ref()
-                                .filter(|r| r.id == u.repository)
-                                .map(|r| r.name.clone())
-                                .unwrap_or_else(|| {
-                                    u.repository.rsplit('/').next().unwrap_or("").to_owned()
-                                }),
-                            created: now,
-                            last_used: now,
-                            updated: now,
-                            deleted: false,
-                        }),
+                        None if remember => {
+                            let updated = bump_over(
+                                s.answers
+                                    .iter()
+                                    .filter(|a| {
+                                        a.agent == u.agent
+                                            && a.repo_id == u.repository
+                                            && &a.key_name == name
+                                    })
+                                    .map(|a| a.updated),
+                                0,
+                                now,
+                            );
+                            s.answers.push(RememberedAnswer {
+                                agent: u.agent.clone(),
+                                key_name: name.clone(),
+                                repo_id: u.repository.clone(),
+                                repo_name: ctx
+                                    .repo
+                                    .as_ref()
+                                    .filter(|r| r.id == u.repository)
+                                    .map(|r| r.name.clone())
+                                    .unwrap_or_else(|| {
+                                        u.repository.rsplit('/').next().unwrap_or("").to_owned()
+                                    }),
+                                created: now,
+                                last_used: now,
+                                updated,
+                                deleted: false,
+                            })
+                        }
                         None => {}
                     }
                 }
@@ -694,6 +715,17 @@ impl Store {
                 run: hb.run.clone(),
                 time: now,
                 updated: now,
+            };
+            let report = HandbackReport {
+                updated: bump_over(
+                    s.reports
+                        .iter()
+                        .filter(|r| r.id == report.id)
+                        .map(|r| r.updated),
+                    0,
+                    now,
+                ),
+                ..report
             };
             s.reports.retain(|r| r.id != report.id);
             s.reports.push(report.clone());
@@ -1032,12 +1064,17 @@ fn apply_event(s: &mut State, event: Event, now: u64) -> Result<()> {
             }
         }
         Event::RememberAnswer { mut answer } => {
-            s.answers.retain(|a| {
-                !(a.agent == answer.agent
+            let same = |a: &RememberedAnswer| {
+                a.agent == answer.agent
                     && a.key_name == answer.key_name
-                    && a.repo_id == answer.repo_id)
-            });
-            answer.updated = bump(answer.updated, now);
+                    && a.repo_id == answer.repo_id
+            };
+            answer.updated = bump_over(
+                s.answers.iter().filter(|a| same(a)).map(|a| a.updated),
+                answer.updated,
+                now,
+            );
+            s.answers.retain(|a| !same(a));
             answer.deleted = false;
             if answer.created == 0 {
                 answer.created = now;
@@ -1070,7 +1107,14 @@ fn apply_event(s: &mut State, event: Event, now: u64) -> Result<()> {
                     msg: format!("at most {} places", places::MAX_PLACES),
                 });
             }
-            place.updated = bump(place.updated, now);
+            place.updated = bump_over(
+                s.places
+                    .iter()
+                    .filter(|p| p.id == place.id)
+                    .map(|p| p.updated),
+                place.updated,
+                now,
+            );
             if place.created == 0 {
                 place.created = now;
             }
@@ -1104,7 +1148,14 @@ fn apply_event(s: &mut State, event: Event, now: u64) -> Result<()> {
             s.settings = settings;
         }
         Event::AddReport { mut report } => {
-            report.updated = bump(report.updated, now);
+            report.updated = bump_over(
+                s.reports
+                    .iter()
+                    .filter(|r| r.id == report.id)
+                    .map(|r| r.updated),
+                report.updated,
+                now,
+            );
             s.reports.retain(|r| r.id != report.id);
             s.reports.push(report);
         }
@@ -1307,6 +1358,78 @@ mod tests {
         let s = st.snapshot().unwrap();
         assert_eq!(s.live_answers().count(), 1);
         assert_eq!(s.live_answers().next().unwrap().last_used, later);
+    }
+
+    #[test]
+    fn re_adding_beats_a_removal_from_a_clock_ahead() {
+        use sealctl_core::wire::AgentUse;
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        let answer = || RememberedAnswer {
+            agent: "claude".into(),
+            key_name: "K".into(),
+            repo_id: "r".into(),
+            ..RememberedAnswer::default()
+        };
+        st.set_now(t0);
+        st.apply(Event::RememberAnswer { answer: answer() })
+            .unwrap();
+        // Removed on an install whose clock runs a day ahead; this phone merged that.
+        st.set_now(t0 + 24 * H);
+        let removed = st
+            .apply(Event::RemoveAnswer {
+                agent: "claude".into(),
+                key_name: "K".into(),
+                repo_id: "r".into(),
+            })
+            .unwrap();
+        // Remembered again here an hour later: it must win a merge with that removal.
+        st.set_now(t0 + H);
+        let s = st
+            .apply(Event::RememberAnswer { answer: answer() })
+            .unwrap();
+        let merged = crate::merge::merge_state(removed.clone(), s);
+        assert_eq!(merged.live_answers().count(), 1);
+        // The same when the agent's first use is allowed and remembered.
+        let st = store();
+        st.apply(Event::MergeRemote {
+            remote: removed.clone(),
+        })
+        .unwrap();
+        st.set_now(t0 + H);
+        let m = paired(&st);
+        let uses = vec![AgentUse {
+            agent: "claude".into(),
+            repository: "r".into(),
+            names: vec!["K".into()],
+        }];
+        let r = request_at(&m, "open", t0 + H, uses);
+        st.answered(r, "one_tap".into(), true, true, None, 0)
+            .unwrap();
+        let merged = crate::merge::merge_state(removed, st.snapshot().unwrap());
+        assert_eq!(merged.live_answers().count(), 1);
+    }
+
+    #[test]
+    fn a_prune_wins_over_copies_stamped_by_a_clock_ahead() {
+        let t0 = MIDNIGHT + 9 * H;
+        let ahead = t0 + 24 * H;
+        let held = State {
+            answers: vec![RememberedAnswer {
+                agent: "claude".into(),
+                key_name: "K".into(),
+                repo_id: "r".into(),
+                created: t0 - 200 * 24 * H,
+                last_used: t0 - 91 * 24 * H,
+                updated: ahead,
+                ..RememberedAnswer::default()
+            }],
+            ..State::default()
+        };
+        let pruned = crate::prune::prune_state(held.clone(), t0);
+        assert!(pruned.answers[0].deleted);
+        let merged = crate::merge::merge_state(pruned, held);
+        assert!(merged.answers[0].deleted);
     }
 
     #[test]

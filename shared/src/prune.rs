@@ -18,13 +18,20 @@ pub fn answer_live(a: &RememberedAnswer, now: u64) -> bool {
     !a.deleted && a.last_used.max(a.created) >= now.saturating_sub(NINETY_DAYS_MS)
 }
 
-/// Applies the lifetimes at `now`; changed records get `updated = now`.
+/// `updated` for a record the lifetimes change at `now`: later than its previous value, even
+/// one from a clock that ran ahead, so the change wins a merge with the copy it changed.
+fn bump(prev: u64, now: u64) -> u64 {
+    now.max(prev.saturating_add(1))
+}
+
+/// Applies the lifetimes at `now`; changed records get `updated = now` (or just after their
+/// previous `updated`, when that is later).
 pub fn prune_state(mut s: State, now: u64) -> State {
     let old = now.saturating_sub(NINETY_DAYS_MS);
     for a in s.answers.iter_mut().filter(|a| !a.deleted) {
         if !answer_live(a, now) {
             a.deleted = true;
-            a.updated = now;
+            a.updated = bump(a.updated, now);
         }
     }
     for m in s.machines.iter_mut().filter(|m| !m.deleted) {
@@ -32,7 +39,7 @@ pub fn prune_state(mut s: State, now: u64) -> State {
         let flag = seen < old;
         if flag != m.flagged {
             m.flagged = flag;
-            m.updated = now;
+            m.updated = bump(m.updated, now);
         }
     }
     let year = now.saturating_sub(YEAR_MS);
@@ -40,7 +47,7 @@ pub fn prune_state(mut s: State, now: u64) -> State {
         let stale = i.last_use.max(i.first_use) < year;
         if stale != i.stale {
             i.stale = stale;
-            i.updated = now;
+            i.updated = bump(i.updated, now);
         }
     }
     for m in s

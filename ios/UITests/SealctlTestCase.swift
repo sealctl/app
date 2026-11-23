@@ -34,6 +34,28 @@ class SealctlTestCase: XCTestCase {
         if Env.fakeRelay { FakeRelay.near(nil) }
     }
 
+    // MARK: failure messages
+
+    /// Marks a screen that shows or takes recovery words. Mirrors WORD_SCREEN in
+    /// ios/scripts/failure-attachments.py: change both together.
+    static let wordScreen = #"identifier: '(?:word-\d|choice |field-\d|key )|Which is word|Words \d+ to \d+|Type your 24 words|Show my words"#
+
+    /// The app's UI tree for a failure message, which ends up in the public job log. On a words
+    /// screen the tree is withheld; only the ids of elements that carry no word are listed.
+    func uiTree(_ limit: Int = 4000) -> String {
+        let tree = Env.scrub(String(app.debugDescription.prefix(limit)))
+        guard tree.range(of: Self.wordScreen, options: .regularExpression) != nil else { return tree }
+        let ids = tree.components(separatedBy: "identifier: '").dropFirst()
+            .compactMap { $0.components(separatedBy: "'").first }
+            .filter { !$0.isEmpty && Self.shown($0) == $0 }
+        return "[UI tree withheld: a words screen] ids: " + ids.joined(separator: ", ")
+    }
+
+    /// An element id for a failure message: a card-check choice's id holds its word.
+    static func shown(_ id: String) -> String {
+        id.range(of: #"^(?:word-|choice |field-|key )"#, options: .regularExpression) == nil ? id : "[a word element]"
+    }
+
     // MARK: finding and tapping
 
     func element(_ id: String) -> XCUIElement {
@@ -48,7 +70,7 @@ class SealctlTestCase: XCTestCase {
     func see(_ contains: String, _ timeout: TimeInterval = 15, file: StaticString = #filePath, line: UInt = #line) -> XCUIElement {
         let e = text(contains)
         if !e.waitForExistence(timeout: timeout) {
-            XCTFail("not shown: \(contains)\n\(Env.scrub(String(app.debugDescription.prefix(4000))))", file: file, line: line)
+            XCTFail("not shown: \(contains)\n\(uiTree())", file: file, line: line)
         }
         return e
     }
@@ -67,7 +89,7 @@ class SealctlTestCase: XCTestCase {
             e.tap()
             return
         }
-        XCTFail("no button: \(id)\n\(Env.scrub(String(app.debugDescription.prefix(4000))))", file: file, line: line)
+        XCTFail("no button: \(Self.shown(id))\n\(uiTree())", file: file, line: line)
     }
 
     func waitHittable(_ e: XCUIElement, _ timeout: TimeInterval = 5) {
@@ -278,7 +300,7 @@ class SealctlTestCase: XCTestCase {
             if t.exists && t.label.contains(title) { return t }
             Thread.sleep(forTimeInterval: 0.5)
         }
-        XCTFail("no card: \(title)\n\(Env.scrub(String(app.debugDescription.prefix(4000))))", file: file, line: line)
+        XCTFail("no card: \(title)\n\(uiTree())", file: file, line: line)
         return t
     }
 

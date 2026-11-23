@@ -20,6 +20,8 @@ import subprocess
 import sys
 
 # Word rows, card-check choices, typed-word fields and the word keypad, and the titles of those screens.
+# Mirrored by SealctlTestCase.wordScreen (ios/UITests), which withholds such trees from failure
+# messages: change both together.
 WORD_SCREEN = re.compile(
     r"identifier: '(?:word-\d|choice |field-\d|key )|Which is word|Words \d+ to \d+|Type your 24 words|Show my words"
 )

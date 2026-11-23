@@ -39,10 +39,12 @@ jobs:
       contents: read
       pull-requests: read # the pull request's file list (UI tests step)
     steps:
-      # The free plan runs 5 macOS jobs at a time and the UI tests take about an hour. On pull
-      # requests that change only Cargo.toml / Cargo.lock (dependency updates), the core, the
-      # packages and the unit tests still run; the UI tests run when the app, the core, the
-      # tools or this workflow change, and always on main and manual runs.
+      # The free plan runs 5 macOS jobs at a time and the UI tests take about an hour. Only
+      # Dependabot's pull requests that change nothing but Cargo.toml / Cargo.lock skip them
+      # (the core, the packages and the unit tests still run). Every other pull request runs
+      # them when the app, the core, the tools, this workflow or the Cargo files change: a
+      # sealctl-core pin bump touches only the Cargo files but swaps the core the app runs on.
+      # Always on main and manual runs.
       - name: What changed
         id: changes
         env:
@@ -50,6 +52,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
           if [ "$EVENT" != pull_request ]; then
             echo "ui=true" >> "$GITHUB_OUTPUT"
@@ -60,6 +63,7 @@ jobs:
           while IFS= read -r f; do
             case "$f" in
               ios/*|shared/*|tools/*|scripts/*|.github/workflows/ios.yml) ui=true ;;
+              Cargo.toml|Cargo.lock|*/Cargo.toml) [ "$AUTHOR" = "dependabot[bot]" ] || ui=true ;;
             esac
           done <<< "$files"
           echo "ui=$ui" >> "$GITHUB_OUTPUT"

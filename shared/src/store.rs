@@ -214,10 +214,15 @@ pub struct ReportResult {
 #[derive(uniffi::Object)]
 pub struct Store {
     conn: Mutex<Connection>,
-    /// Tests only: the clock the store reads (Unix ms); 0 reads the system clock.
+    /// Tests only: the clock the store reads (Unix ms); 0 reads the system clock. A new store
+    /// starts at [`TEST_EPOCH_MS`], so no test depends on the day it runs.
     #[cfg(test)]
     fake_now: std::sync::atomic::AtomicU64,
 }
+
+/// Tests only: where a new store's clock starts, 2026-11-20T00:00:00Z.
+#[cfg(test)]
+const TEST_EPOCH_MS: u64 = 1_795_132_800_000;
 
 impl Store {
     /// The time every change is stamped with.
@@ -405,7 +410,7 @@ impl Store {
         Ok(Arc::new(Self {
             conn: Mutex::new(conn),
             #[cfg(test)]
-            fake_now: std::sync::atomic::AtomicU64::new(0),
+            fake_now: std::sync::atomic::AtomicU64::new(TEST_EPOCH_MS),
         }))
     }
 
@@ -1739,7 +1744,7 @@ mod tests {
         // The removal was made on a device whose clock ran a day ahead.
         let c = lock(&st.conn).unwrap();
         let mut s: State = read_doc(&c, "state").unwrap();
-        s.machines[0].updated = now_ms() + 86_400_000;
+        s.machines[0].updated = TEST_EPOCH_MS + 86_400_000;
         write_doc(&c, "state", &s).unwrap();
         drop(c);
         let removed = st.snapshot().unwrap();
@@ -1830,22 +1835,10 @@ mod tests {
             assert!(!st.see_request(id.into(), "m".into(), expires).unwrap());
         }
         // Kept while a signed time first seen 15 minutes ago can still be accepted.
-        let c = lock(&st.conn).unwrap();
-        let mut l: LocalState = read_doc(&c, "local").unwrap();
-        for p in &mut l.pending {
-            p.seen = now_ms() - 15 * 60 * 1000;
-        }
-        write_doc(&c, "local", &l).unwrap();
-        drop(c);
+        st.set_now(TEST_EPOCH_MS + 15 * MIN);
         assert!(!st.see_request("r2".into(), "m".into(), 1).unwrap());
         // Dropped once that time has passed, however late the relay says they expire.
-        let c = lock(&st.conn).unwrap();
-        let mut l: LocalState = read_doc(&c, "local").unwrap();
-        for p in &mut l.pending {
-            p.seen = now_ms() - 31 * 60 * 1000;
-        }
-        write_doc(&c, "local", &l).unwrap();
-        drop(c);
+        st.set_now(TEST_EPOCH_MS + 31 * MIN);
         assert!(st.see_request("r4".into(), "m".into(), u64::MAX).unwrap());
         let c = lock(&st.conn).unwrap();
         let l: LocalState = read_doc(&c, "local").unwrap();
@@ -1863,7 +1856,7 @@ mod tests {
             replaces: None,
         })
         .unwrap();
-        let t = now_ms() - 60_000;
+        let t = TEST_EPOCH_MS - 60_000;
         let entry = |n: u64, name: &str| LogEntry {
             time: t + n,
             command: "env".into(),
@@ -1912,7 +1905,7 @@ mod tests {
     #[test]
     fn pending_ids_refuse_replays() {
         let st = store();
-        let far = now_ms() + 60_000;
+        let far = TEST_EPOCH_MS + 60_000;
         assert!(st.see_request("r1".into(), "m".into(), far).unwrap());
         assert!(st.see_request("r1".into(), "m".into(), far).unwrap());
         assert!(!st.see_request("r1".into(), "other".into(), far).unwrap());
@@ -1988,7 +1981,7 @@ mod tests {
         assert_eq!(all.len(), 5);
         assert_eq!(all[0].time, 1004);
         assert_eq!(st.usage(Some("a".into()), None, 10).unwrap().len(), 3);
-        st.prune(now_ms()).unwrap();
+        st.prune(TEST_EPOCH_MS).unwrap();
         assert!(st.usage(None, None, 10).unwrap().is_empty());
         assert_eq!(st.summary("2026-11".into()).unwrap().keys_used, 0);
     }

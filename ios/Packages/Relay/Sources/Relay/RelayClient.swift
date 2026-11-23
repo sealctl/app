@@ -103,18 +103,26 @@ public actor RelayClient {
     public nonisolated let host: String
     private let keys: @Sendable () async -> PhoneKeys?
     private let now: @Sendable () -> Int64
+    /// The relay's time, Unix ms, from `/v1/health` or a `401 clock_skew` (SPEC.md 8.1).
+    private let onRelayTime: @Sendable (Int64) -> Void
+    /// A signed call the relay accepted, with the `Sealctl-Time` it carried, in ms (SPEC.md 8.1).
+    private let onAccepted: @Sendable (Int64) -> Void
     private let session: URLSession
     public private(set) var clockOffsetSecs: Int64 = 0
     public private(set) var rateLimitedUntil: Int64 = 0
 
     public init(baseURL: String, keys: @escaping @Sendable () async -> PhoneKeys?,
-                now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }) {
+                now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) },
+                onRelayTime: @escaping @Sendable (Int64) -> Void = { _ in },
+                onAccepted: @escaping @Sendable (Int64) -> Void = { _ in }) {
         var base = baseURL
         while base.hasSuffix("/") { base.removeLast() }
         self.baseURL = base
         self.host = base.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "http://", with: "")
         self.keys = keys
         self.now = now
+        self.onRelayTime = onRelayTime
+        self.onAccepted = onAccepted
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 10
         config.timeoutIntervalForResource = 30
@@ -145,13 +153,19 @@ public actor RelayClient {
         if !userTapped && now() < rateLimitedUntil {
             throw RelayError.rateLimited(until: rateLimitedUntil, scope: nil)
         }
-        var (status, json) = try await execute(method, path, body)
+        var (status, json, signedAt) = try await execute(method, path, body)
         if status == 401 && json["error"].str == "clock_skew" {
-            if let t = json["time"].int64 { clockOffsetSecs = t - now() / 1000 }
-            (status, json) = try await execute(method, path, body)
+            if let t = json["time"].int64 {
+                clockOffsetSecs = t - now() / 1000
+                onRelayTime(t * 1000)
+            }
+            (status, json, signedAt) = try await execute(method, path, body)
             if status == 401 && json["error"].str == "clock_skew" { throw RelayError.clockSkew }
         }
-        if (200..<300).contains(status) { return json }
+        if (200..<300).contains(status) {
+            onAccepted(signedAt * 1000)
+            return json
+        }
         if status == 429 {
             let retry = json["retryAfter"].int64 ?? 60
             rateLimitedUntil = now() + retry * 1000
@@ -163,10 +177,12 @@ public actor RelayClient {
         throw RelayError.http(status: status, code: json["error"].str, body: json)
     }
 
-    private func execute(_ method: String, _ path: String, _ body: JSON?) async throws -> (Int, JSON) {
+    /// One try: the status, the body and the signed time (Unix seconds).
+    private func execute(_ method: String, _ path: String, _ body: JSON?) async throws -> (Int, JSON, Int64) {
         let bytes = body?.data() ?? Data()
+        let t = max(0, unixTime())
         let h = relayHeaders(keys: try await phoneKeys(), method: method, pathAndQuery: path,
-                             unixTime: UInt64(max(0, unixTime())), body: bytes)
+                             unixTime: UInt64(t), body: bytes)
         guard let url = URL(string: baseURL + path) else { throw RelayError.transport("bad url") }
         var req = URLRequest(url: url)
         req.httpMethod = method
@@ -187,7 +203,7 @@ public actor RelayClient {
         }
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         let json = (try? JSON(data: data)) ?? (code < 300 ? .object([:]) : ["error": .string("http_\(code)")])
-        return (code, json)
+        return (code, json, t)
     }
 
     // MARK: typed calls (SPEC.md 8.2)
@@ -200,6 +216,15 @@ public actor RelayClient {
         } catch {
             throw RelayError.transport(String(describing: type(of: error)))
         }
+    }
+
+    /// The relay's time from `/v1/health` (Unix ms), also handed to `onRelayTime`; nil when
+    /// the relay can't be reached or gives none (SPEC.md 8.1). Unsigned.
+    @discardableResult
+    public func relayTime() async -> Int64? {
+        guard let t = try? await health()["time"].int64, t > 0 else { return nil }
+        onRelayTime(t * 1000)
+        return t * 1000
     }
 
     @discardableResult

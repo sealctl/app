@@ -8,6 +8,7 @@ use sealctl_core::wire::{MachineStatus, RequestItem};
 use sealctl_core::{Request, RequestKind};
 
 use crate::cards::display_text;
+use crate::clock::{Boot, ClockNow, RelayClock};
 use crate::codec::{encode_state, shrink_to_fit};
 use crate::day::{day_end, local_month};
 use crate::error::{AppError, Result};
@@ -31,9 +32,7 @@ const PENDING_SIGNED_KEEP_MS: u64 = 2 * sealctl_core::request::TIME_WINDOW_MS;
 pub const STATE_LIMIT: usize = 1_048_576 - 1024;
 
 fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as u64)
+    crate::clock::system_ms()
 }
 
 /// A change to the relay state.
@@ -214,19 +213,25 @@ pub struct ReportResult {
 #[derive(uniffi::Object)]
 pub struct Store {
     conn: Mutex<Connection>,
-    /// Tests only: the clock the store reads (Unix ms); 0 reads the system clock. A new store
-    /// starts at [`TEST_EPOCH_MS`], so no test depends on the day it runs.
+    /// Tests only: the system clock the store reads (Unix ms); 0 reads the system clock. A new
+    /// store starts at [`TEST_EPOCH_MS`], so no test depends on the day it runs.
     #[cfg(test)]
     fake_now: std::sync::atomic::AtomicU64,
+    /// Tests only: the since-boot clock (ms) and boot id the store reads.
+    #[cfg(test)]
+    fake_boot: Mutex<Boot>,
 }
+
+/// The doc holding the relay's time last learned ([`RelayClock`]).
+const CLOCK: &str = "clock";
 
 /// Tests only: where a new store's clock starts, 2026-11-20T00:00:00Z.
 #[cfg(test)]
 const TEST_EPOCH_MS: u64 = 1_795_132_800_000;
 
 impl Store {
-    /// The time every change is stamped with.
-    fn now(&self) -> u64 {
+    /// The system clock.
+    fn system_now(&self) -> u64 {
         #[cfg(test)]
         {
             let t = self.fake_now.load(std::sync::atomic::Ordering::SeqCst);
@@ -237,10 +242,60 @@ impl Store {
         now_ms()
     }
 
-    /// Tests only: sets the store's clock.
+    /// The since-boot clock.
+    fn boot(&self) -> Boot {
+        #[cfg(test)]
+        {
+            if let Ok(b) = self.fake_boot.lock() {
+                return b.clone();
+            }
+        }
+        crate::clock::boot_now()
+    }
+
+    /// The corrected clock (SPEC.md 8.1), read with the connection already held.
+    fn clock_in(&self, c: &Connection) -> ClockNow {
+        let clock: RelayClock = read_doc(c, CLOCK).unwrap_or_default();
+        clock.now(self.system_now(), &self.boot())
+    }
+
+    /// The time every change is stamped with: the corrected clock.
+    fn now(&self, c: &Connection) -> u64 {
+        self.clock_in(c).now
+    }
+
+    /// Tests only: sets the system clock and moves the since-boot clock by as much.
     #[cfg(test)]
     fn set_now(&self, t: u64) {
+        let before = self.system_now();
         self.fake_now.store(t, std::sync::atomic::Ordering::SeqCst);
+        if let Ok(mut b) = self.fake_boot.lock() {
+            b.ms = b.ms.saturating_add_signed(t as i64 - before as i64);
+        }
+    }
+
+    /// Tests only: sets the system clock alone, as the person holding the phone can.
+    #[cfg(test)]
+    fn set_system_clock(&self, t: u64) {
+        self.fake_now.store(t, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Tests only: lets time pass on both clocks.
+    #[cfg(test)]
+    fn pass(&self, ms: u64) {
+        let t = self.system_now() + ms;
+        self.set_now(t);
+    }
+
+    /// Tests only: a reboot; the since-boot clock starts again.
+    #[cfg(test)]
+    fn reboot(&self, uptime: u64) {
+        if let Ok(mut b) = self.fake_boot.lock() {
+            *b = Boot {
+                ms: uptime,
+                id: format!("{}-next", b.id),
+            };
+        }
     }
 
     /// [`Store::answered`] given at `at`, recorded `now`.
@@ -712,6 +767,11 @@ impl Store {
             conn: Mutex::new(conn),
             #[cfg(test)]
             fake_now: std::sync::atomic::AtomicU64::new(TEST_EPOCH_MS),
+            #[cfg(test)]
+            fake_boot: Mutex::new(Boot {
+                ms: 3_600_000,
+                id: "boot-1".into(),
+            }),
         }))
     }
 
@@ -731,7 +791,7 @@ impl Store {
     pub fn apply(&self, event: Event) -> Result<State> {
         let c = lock(&self.conn)?;
         let mut s: State = read_doc(&c, "state")?;
-        let now = self.now();
+        let now = self.now(&c);
         apply_event(&mut s, event, now)?;
         let s = normalise(s);
         write_doc(&c, "state", &s)?;
@@ -745,7 +805,7 @@ impl Store {
     pub fn apply_local(&self, event: LocalEvent) -> Result<LocalState> {
         let c = lock(&self.conn)?;
         let mut l: LocalState = read_doc(&c, "local")?;
-        let now = self.now();
+        let now = self.now(&c);
         match event {
             LocalEvent::SetDay { day } => {
                 l.days.retain(|d| d.machine != day.machine);
@@ -862,7 +922,7 @@ impl Store {
     pub fn see_request(&self, id: String, machine: String, expires: u64) -> Result<bool> {
         let c = lock(&self.conn)?;
         let mut l: LocalState = read_doc(&c, "local")?;
-        let now = self.now();
+        let now = self.now(&c);
         l.pending.retain(|p| {
             p.seen
                 .saturating_add(PENDING_SIGNED_KEEP_MS)
@@ -885,7 +945,7 @@ impl Store {
 
     /// Marks a pending request `answered`, `expired` or `ignored`.
     pub fn close_request(&self, id: String, outcome: String) -> Result<()> {
-        let now = self.now();
+        let now = self.clock_now()?.now;
         let c = lock(&self.conn)?;
         let mut l: LocalState = read_doc(&c, "local")?;
         match l.pending.iter_mut().find(|p| p.id == id) {
@@ -917,7 +977,7 @@ impl Store {
         place_id: Option<String>,
         utc_offset_secs: i32,
     ) -> Result<AnsweredResult> {
-        let now = self.now();
+        let now = self.clock_now()?.now;
         self.record_answer(
             &request,
             &outcome,
@@ -944,7 +1004,7 @@ impl Store {
         utc_offset_secs: i32,
         answered_at: u64,
     ) -> Result<AnsweredResult> {
-        let now = self.now();
+        let now = self.clock_now()?.now;
         self.record_answer(
             &request,
             &outcome,
@@ -964,7 +1024,7 @@ impl Store {
         request: Arc<Request>,
         utc_offset_secs: i32,
     ) -> Result<ReportResult> {
-        let now = self.now();
+        let now = self.clock_now()?.now;
         self.record_report(&request, utc_offset_secs, now, now)
     }
 
@@ -978,7 +1038,7 @@ impl Store {
         utc_offset_secs: i32,
         received_at: u64,
     ) -> Result<ReportResult> {
-        let now = self.now();
+        let now = self.clock_now()?.now;
         self.record_report(&request, utc_offset_secs, received_at.min(now), now)
     }
 
@@ -991,7 +1051,7 @@ impl Store {
         status: MachineStatus,
         utc_offset_secs: i32,
     ) -> Result<ReportResult> {
-        let now = self.now();
+        let now = self.clock_now()?.now;
         self.record_status(machine, status, utc_offset_secs, now, now)
     }
 
@@ -1091,7 +1151,7 @@ impl Store {
     pub fn next_message_seq(&self, machine: String) -> Result<u64> {
         let c = lock(&self.conn)?;
         let mut l: LocalState = read_doc(&c, "local")?;
-        let now = self.now();
+        let now = self.now(&c);
         let v = match l.message_seq.iter_mut().find(|m| m.machine == machine) {
             Some(m) => {
                 m.value = m.value.max(now).max(m.value + 1);
@@ -1107,6 +1167,50 @@ impl Store {
         };
         write_doc(&c, "local", &l)?;
         Ok(v)
+    }
+
+    /// The corrected clock (SPEC.md 8.1): the relay's time carried on the since-boot clock
+    /// while fresh, else the later of the system clock and the last-known relay time. Every
+    /// security window is counted on it: holds, plans, the level 3 delay and places.
+    pub fn clock_now(&self) -> Result<ClockNow> {
+        let c = lock(&self.conn)?;
+        Ok(self.clock_in(&c))
+    }
+
+    /// The relay's time, Unix ms, as the relay gave it just now: the `time` of `GET
+    /// /v1/health` or of a `401 clock_skew` (seconds, times 1000).
+    pub fn relay_time(&self, relay_ms: u64) -> Result<ClockNow> {
+        let c = lock(&self.conn)?;
+        if relay_ms == 0 {
+            return Ok(self.clock_in(&c));
+        }
+        write_doc(&c, CLOCK, &RelayClock::learned(relay_ms, &self.boot()))?;
+        Ok(self.clock_in(&c))
+    }
+
+    /// The relay accepted a call signed with `signed_ms` (the `Sealctl-Time` sent, in ms):
+    /// its clock is within the 5-minute signature window of that. A clock that disagrees by
+    /// more is stale until the relay's time is learned again.
+    pub fn relay_accepted(&self, signed_ms: u64) -> Result<()> {
+        let c = lock(&self.conn)?;
+        let mut clock: RelayClock = read_doc(&c, CLOCK)?;
+        if clock.signed_accepted(signed_ms, self.system_now(), &self.boot()) {
+            write_doc(&c, CLOCK, &clock)?;
+        }
+        Ok(())
+    }
+
+    /// Whether a trusted place lifts the level 3 delay now ([`crate::decide::place_settled`]
+    /// on the corrected clock). A place added by hand never does while the clock is stale:
+    /// its 24 hours can't be counted on a clock the person may have set.
+    pub fn place_settled_now(&self, place: TrustedPlace) -> Result<bool> {
+        Ok(crate::clock::place_settled_at(place, self.clock_now()?))
+    }
+
+    /// The relay's time last learned, for the iOS extension's snapshot.
+    pub fn relay_clock(&self) -> Result<RelayClock> {
+        let c = lock(&self.conn)?;
+        read_doc(&c, CLOCK)
     }
 
     /// Erases everything (Erase sealctl from this phone).
@@ -2449,5 +2553,206 @@ mod tests {
         });
         let s = st.apply(Event::MergeRemote { remote }).unwrap();
         assert_eq!(s.live_machines().count(), 2);
+    }
+
+    // ---------- the corrected clock (SPEC.md 8.1): a clock set forward ends no wait early ----------
+
+    use crate::decide::{
+        decide_facts, Asking, Biometrics, DecideContext, RequestFacts, DELAY_SECS, HOLD_MS,
+    };
+    use sealctl_core::{RefuseReason, RequestKind};
+
+    /// The relay's time learned at `t` (health on foreground).
+    fn reach_relay(st: &Store, t: u64) {
+        st.set_now(t);
+        st.relay_time(t).unwrap();
+    }
+
+    fn unseal(level: u8) -> RequestFacts {
+        RequestFacts {
+            kind: Some(RequestKind::Unseal),
+            level,
+            has_match: true,
+            machine: "m".into(),
+            plan_hash: Some("plan-1".into()),
+            has_keys: true,
+            ..RequestFacts::default()
+        }
+    }
+
+    /// The context the apps build: `now` and the place's settling from the store's clock.
+    fn ctx_now(st: &Store, place: Option<&TrustedPlace>) -> DecideContext {
+        let l = st.local().unwrap();
+        DecideContext {
+            now: st.clock_now().unwrap().now,
+            utc_offset_secs: 0,
+            phone_unlocked: true,
+            near: true,
+            on_wifi: true,
+            places_on: true,
+            current_place: place.map(|p| p.id.clone()),
+            current_place_settled: place.is_some_and(|p| st.place_settled_now(p.clone()).unwrap()),
+            day: None,
+            answers: Vec::new(),
+            session_open: false,
+            hold: l.holds.first().cloned(),
+            biometrics: Biometrics::Available,
+            plan: l.plans.first().cloned(),
+        }
+    }
+
+    #[test]
+    fn a_clock_set_forward_does_not_end_a_hold() {
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        reach_relay(&st, t0);
+        // A wrong number: held for an hour on the corrected clock.
+        let until = st.clock_now().unwrap().now + HOLD_MS;
+        st.apply_local(LocalEvent::SetHold {
+            hold: Hold {
+                machine: "m".into(),
+                until,
+            },
+        })
+        .unwrap();
+        // Ten minutes later the phone's clock is set two hours forward.
+        st.pass(10 * MIN);
+        st.set_system_clock(t0 + 2 * H);
+        assert_eq!(st.clock_now().unwrap().now, t0 + 10 * MIN);
+        let v = decide_facts(&unseal(2), &ctx_now(&st, None));
+        assert_eq!(v.asking, Asking::Refused);
+        assert_eq!(v.refuse, Some(RefuseReason::Held));
+        // A change of the local records caps the hold on the corrected clock: still an hour.
+        let l = st.apply_local(LocalEvent::AgentNoteShown).unwrap();
+        assert_eq!(l.holds[0].until, t0 + H);
+        // A clock set back instead does not shorten a hold recorded after it.
+        st.set_system_clock(t0 - 3 * H);
+        assert_eq!(st.clock_now().unwrap().now, t0 + 10 * MIN);
+        // The hour really passes.
+        st.pass(50 * MIN);
+        let v = decide_facts(&unseal(2), &ctx_now(&st, None));
+        assert_ne!(v.asking, Asking::Refused);
+    }
+
+    fn hand_added(st: &Store) -> TrustedPlace {
+        st.apply(Event::AddPlace {
+            place: TrustedPlace {
+                id: "home".into(),
+                name: "Home".into(),
+                radius: 150.0,
+                manual: true,
+                ..TrustedPlace::default()
+            },
+        })
+        .unwrap()
+        .places
+        .into_iter()
+        .find(|p| p.id == "home")
+        .unwrap()
+    }
+
+    #[test]
+    fn a_clock_set_forward_does_not_end_a_hand_added_place_s_day() {
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        reach_relay(&st, t0);
+        // Added with the clock set two days back: stamped on the corrected clock.
+        st.set_system_clock(t0 - 48 * H);
+        let place = hand_added(&st);
+        assert_eq!(place.created, t0);
+        // An hour later the clock is set 25 hours forward: the level 3 delay still applies.
+        st.pass(H);
+        st.set_system_clock(t0 + 25 * H);
+        assert!(!st.place_settled_now(place.clone()).unwrap());
+        let v = decide_facts(&unseal(3), &ctx_now(&st, Some(&place)));
+        assert_eq!(v.delay_secs, DELAY_SECS);
+        // A day passes on the since-boot clock; the relay's time is learned again.
+        st.pass(23 * H);
+        reach_relay(&st, t0 + 24 * H);
+        assert!(st.place_settled_now(place.clone()).unwrap());
+        let v = decide_facts(&unseal(3), &ctx_now(&st, Some(&place)));
+        assert_eq!(v.delay_secs, 0);
+    }
+
+    #[test]
+    fn a_stale_clock_never_lifts_the_delay_at_a_hand_added_place() {
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        reach_relay(&st, t0);
+        let place = hand_added(&st);
+        // Unknown: a phone that never reached the relay counts on nothing it can't check.
+        let fresh = store();
+        fresh.set_now(t0);
+        let p2 = hand_added(&fresh);
+        fresh.set_now(t0 + 30 * H);
+        assert!(!fresh.clock_now().unwrap().fresh);
+        assert!(!fresh.place_settled_now(p2).unwrap());
+        // After a reboot, offline, with the clock set forward: stale, so not settled.
+        st.reboot(5 * MIN);
+        st.set_system_clock(t0 + 30 * H);
+        let now = st.clock_now().unwrap();
+        assert!(!now.fresh);
+        assert_eq!(now.now, t0 + 30 * H);
+        assert!(!st.place_settled_now(place.clone()).unwrap());
+        // A clock set back while stale: the last relay time is the floor.
+        st.set_system_clock(t0 - 5 * H);
+        assert_eq!(st.clock_now().unwrap().now, t0);
+        // A learned place is settled at once whatever the clock.
+        let learned = TrustedPlace {
+            manual: false,
+            ..place.clone()
+        };
+        assert!(st.place_settled_now(learned).unwrap());
+        // Reaching the relay a day on settles the hand-added place.
+        reach_relay(&st, t0 + 25 * H);
+        assert!(st.place_settled_now(place).unwrap());
+    }
+
+    #[test]
+    fn a_clock_set_forward_does_not_shorten_the_level_3_wait() {
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        reach_relay(&st, t0);
+        // A level 3 approval away from a trusted place: the plan hands out keys two hours on.
+        let not_before = st.clock_now().unwrap().now + u64::from(DELAY_SECS) * 1000;
+        st.apply_local(LocalEvent::PutPlan {
+            plan: PlanApprovalRecord {
+                machine: "m".into(),
+                request_id: "r1".into(),
+                plan_hash: "plan-1".into(),
+                not_before,
+                state: "delayed".into(),
+                all: true,
+                ..PlanApprovalRecord::default()
+            },
+        })
+        .unwrap();
+        // Twenty minutes on, the clock is set three hours forward: no keys yet.
+        st.pass(20 * MIN);
+        st.set_system_clock(t0 + 3 * H);
+        let v = decide_facts(&unseal(3), &ctx_now(&st, None));
+        assert_ne!(v.asking, Asking::PlanKeys);
+        // The two hours pass.
+        st.pass(100 * MIN);
+        let v = decide_facts(&unseal(3), &ctx_now(&st, None));
+        assert_eq!(v.asking, Asking::PlanKeys);
+    }
+
+    #[test]
+    fn a_signed_call_that_disagrees_makes_the_clock_stale() {
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        reach_relay(&st, t0);
+        let place = hand_added(&st);
+        st.pass(25 * H);
+        reach_relay(&st, t0 + 25 * H);
+        assert!(st.place_settled_now(place.clone()).unwrap());
+        // Within the signature window: still fresh.
+        st.relay_accepted(t0 + 25 * H + 4 * MIN).unwrap();
+        assert!(st.clock_now().unwrap().fresh);
+        // The relay accepted a time 20 minutes off: the learned time can't be right.
+        st.relay_accepted(t0 + 25 * H + 20 * MIN).unwrap();
+        assert!(!st.clock_now().unwrap().fresh);
+        assert!(!st.place_settled_now(place).unwrap());
     }
 }

@@ -322,8 +322,9 @@ private fun TrustHere(activity: MainActivity) {
             scope.launch {
                 when (biometricGate(activity, "Trust this place")) {
                     GateResult.Passed -> {
+                        // `created` 0: the store stamps it on the corrected clock (SPEC.md 8.1).
                         val place = com.sealctl.core.app.TrustedPlace(randomPlaceId(), name.ifBlank { "Place" }, f.lat, f.lon, 150.0,
-                            System.currentTimeMillis().toULong(), 0u, false, true)
+                            0u, 0u, false, true)
                         engine.apply(Event.AddPlace(place), upload = true)
                         engine.monitorPlaces()
                         fix = null

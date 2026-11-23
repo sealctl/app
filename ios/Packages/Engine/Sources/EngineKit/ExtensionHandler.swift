@@ -69,17 +69,26 @@ public struct ExtensionHandler: Sendable {
         else { return nil }
         let name = Texts.shown(machineDisplayName(machine: machine), Texts.maxName)
         let biometry = await vault.biometryName()
+        // On this phone's clock, for the request's own time (8.5).
         let now = nowMs()
+        // The corrected clock for every security window (8.1): the app's last relay time, or the
+        // relay's time asked now when that is stale.
+        var relayClock = snap.relayClock
+        if !relayClockNow(clock: relayClock).fresh, let t = await relay.relayTime() {
+            relayClock = relayClockLearned(relayMs: UInt64(max(0, t)))
+        }
+        let clock = relayClockNow(clock: relayClock)
+        let clockMs = Int64(clamping: clock.now)
         let status = machine.lastStatus
         let open = status.map { s in
-            s.session == "open" && (s.left.map { now - Int64(s.reportedAt) < Int64($0) * 1000 } ?? false)
+            s.session == "open" && (s.left.map { clockMs - Int64(s.reportedAt) < Int64($0) * 1000 } ?? false)
         } ?? false
         let ctx = DecideContext(
-            now: UInt64(now), utcOffsetSecs: Int32(TimeZone.current.secondsFromGMT()),
+            now: clock.now, utcOffsetSecs: Int32(TimeZone.current.secondsFromGMT()),
             phoneUnlocked: await vault.canReadRoot(), near: r.near, onWifi: await onWifiNow(),
             placesOn: snap.placesOn, currentPlace: snap.currentPlace,
             currentPlaceSettled: snap.currentPlace.flatMap { id in state.places.first { $0.id == id && !$0.deleted } }
-                .map { placeSettled(place: $0, now: UInt64(now)) } ?? false,
+                .map { placeSettledAt(place: $0, now: clock) } ?? false,
             day: snap.day(r.machine),
             answers: state.answers.filter { !$0.deleted }, sessionOpen: open, hold: snap.hold(r.machine),
             biometrics: await vault.biometrics(), plan: snap.plan(r.machine))
@@ -95,7 +104,7 @@ public struct ExtensionHandler: Sendable {
             guard let posted = await post(relay, r.id, sealed) else { return stopped }
             guard posted else { break }
             files.writeInbox(InboxItem(id: r.id, machine: r.machine, sealed: r.sealed, outcome: "automatic", allowed: true,
-                                       placeId: snap.currentPlace, time: now))
+                                       placeId: snap.currentPlace, time: clockMs))
             return Notes.passive(Texts.answeredByItself(name, place: placeName), userInfo: ["answered": r.id])
         case .planKeys:
             guard let plan = snap.plan(r.machine), let root = await vault.readRoot() else { break }
@@ -111,7 +120,7 @@ public struct ExtensionHandler: Sendable {
             guard let posted = await post(relay, r.id, sealed) else { return stopped }
             guard posted else { break }
             files.writeInbox(InboxItem(id: r.id, machine: r.machine, sealed: r.sealed, outcome: "in_session", allowed: true,
-                                       placeId: snap.currentPlace, time: now))
+                                       placeId: snap.currentPlace, time: clockMs))
             return Notes.passive(Texts.answeredByItself(name, place: placeName), userInfo: ["answered": r.id])
         case .refused:
             let err = verdict.refuse ?? .unsupported
@@ -119,7 +128,7 @@ public struct ExtensionHandler: Sendable {
             if let sealed = try? sealReply(root: nil, keys: keys, request: req, decision: .refuse(err: err)),
                (try? await relay.reply(id: r.id, sealed: sealed, userTapped: false)) != nil {
                 files.writeInbox(InboxItem(id: r.id, machine: r.machine, sealed: r.sealed, outcome: "denied", allowed: false,
-                                           placeId: nil, time: now))
+                                           placeId: nil, time: clockMs))
             }
             switch err {
             case .notNear: return Notes.active(Texts.notNear(name), userInfo: ["answered": r.id])
@@ -134,7 +143,7 @@ public struct ExtensionHandler: Sendable {
             guard let posted = await post(relay, r.id, sealed) else { return stopped }
             guard posted else { break }
             files.writeInbox(InboxItem(id: r.id, machine: r.machine, sealed: r.sealed, outcome: "report", allowed: false,
-                                       placeId: nil, time: now))
+                                       placeId: nil, time: clockMs))
             if let h = req.handback() {
                 let done = h.items.filter { $0.state == "done" }.count
                 let failed = h.items.filter { $0.state == "failed" }.count

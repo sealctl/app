@@ -21,6 +21,8 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 # fallible_uint: u64 parameters as in rusqlite 0.32 (an error above i64::MAX).
 rusqlite = { version = "0.43", features = ["bundled", "fallible_uint"] }
+# The since-boot clock and the boot id (clock.rs); already in the tree through sealctl-core.
+libc = "0.2"
 
 [dev-dependencies]
 proptest = "1"

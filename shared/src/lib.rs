@@ -6,6 +6,7 @@
 uniffi::setup_scaffolding!();
 
 pub mod cards;
+pub mod clock;
 pub mod codec;
 pub mod day;
 pub mod decide;

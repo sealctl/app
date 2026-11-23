@@ -258,8 +258,9 @@ struct TrustHereView: View {
                             return
                         }
                         let n = name.trimmingCharacters(in: .whitespaces)
+                        // `created` 0: the store stamps it on the corrected clock (8.1).
                         await e.apply(.addPlace(place: TrustedPlace(id: randomId(), name: n.isEmpty ? "Place" : String(n.prefix(40)),
-                                                                    lat: f.lat, lon: f.lon, radius: 150, created: UInt64(nowMs()),
+                                                                    lat: f.lat, lon: f.lon, radius: 150, created: 0,
                                                                     updated: 0, deleted: false, manual: true)), upload: true)
                         await e.monitorPlaces()
                         fix = nil

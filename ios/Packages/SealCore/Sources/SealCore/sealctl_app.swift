@@ -702,6 +702,13 @@ public protocol StoreProtocol: AnyObject, Sendable {
     func applyStatus(machine: String, status: MachineStatus, utcOffsetSecs: Int32) throws  -> ReportResult
     
     /**
+     * The corrected clock (SPEC.md 8.1): the relay's time carried on the since-boot clock
+     * while fresh, else the later of the system clock and the last-known relay time. Every
+     * security window is counted on it: holds, plans, the level 3 delay and places.
+     */
+    func clockNow() throws  -> ClockNow
+    
+    /**
      * Marks a pending request `answered`, `expired` or `ignored`.
      */
     func closeRequest(id: String, outcome: String) throws 
@@ -728,9 +735,34 @@ public protocol StoreProtocol: AnyObject, Sendable {
     func placeSample(sample: LocationSample, utcOffsetSecs: Int32) throws  -> PlaceCandidate?
     
     /**
+     * Whether a trusted place lifts the level 3 delay now ([`crate::decide::place_settled`]
+     * on the corrected clock). A place added by hand never does while the clock is stale:
+     * its 24 hours can't be counted on a clock the person may have set.
+     */
+    func placeSettledNow(place: TrustedPlace) throws  -> Bool
+    
+    /**
      * Applies the lifetimes (SPEC.md 5.4 `prune`) and trims the usage log.
      */
     func prune(now: UInt64) throws  -> State
+    
+    /**
+     * The relay accepted a call signed with `signed_ms` (the `Sealctl-Time` sent, in ms):
+     * its clock is within the 5-minute signature window of that. A clock that disagrees by
+     * more is stale until the relay's time is learned again.
+     */
+    func relayAccepted(signedMs: UInt64) throws 
+    
+    /**
+     * The relay's time last learned, for the iOS extension's snapshot.
+     */
+    func relayClock() throws  -> RelayClock
+    
+    /**
+     * The relay's time, Unix ms, as the relay gave it just now: the `time` of `GET
+     * /v1/health` or of a `401 clock_skew` (seconds, times 1000).
+     */
+    func relayTime(relayMs: UInt64) throws  -> ClockNow
     
     /**
      * Request ids seen in the last 10 minutes (SPEC.md 9.5). Returns `false` when this id was
@@ -947,6 +979,20 @@ open func applyStatus(machine: String, status: MachineStatus, utcOffsetSecs: Int
 }
     
     /**
+     * The corrected clock (SPEC.md 8.1): the relay's time carried on the since-boot clock
+     * while fresh, else the later of the system clock and the last-known relay time. Every
+     * security window is counted on it: holds, plans, the level 3 delay and places.
+     */
+open func clockNow()throws  -> ClockNow  {
+    return try  FfiConverterTypeClockNow_lift(try rustCallWithError(FfiConverterTypeAppError_lift) {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_method_store_clock_now(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+    /**
      * Marks a pending request `answered`, `expired` or `ignored`.
      */
 open func closeRequest(id: String, outcome: String)throws   {try rustCallWithError(FfiConverterTypeAppError_lift) {
@@ -1011,6 +1057,21 @@ open func placeSample(sample: LocationSample, utcOffsetSecs: Int32)throws  -> Pl
 }
     
     /**
+     * Whether a trusted place lifts the level 3 delay now ([`crate::decide::place_settled`]
+     * on the corrected clock). A place added by hand never does while the clock is stale:
+     * its 24 hours can't be counted on a clock the person may have set.
+     */
+open func placeSettledNow(place: TrustedPlace)throws  -> Bool  {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAppError_lift) {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_method_store_place_settled_now(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeTrustedPlace_lower(place),uniffiCallStatus
+    )
+})
+}
+    
+    /**
      * Applies the lifetimes (SPEC.md 5.4 `prune`) and trims the usage log.
      */
 open func prune(now: UInt64)throws  -> State  {
@@ -1019,6 +1080,46 @@ open func prune(now: UInt64)throws  -> State  {
     uniffi_sealctl_app_fn_method_store_prune(
             self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(now),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * The relay accepted a call signed with `signed_ms` (the `Sealctl-Time` sent, in ms):
+     * its clock is within the 5-minute signature window of that. A clock that disagrees by
+     * more is stale until the relay's time is learned again.
+     */
+open func relayAccepted(signedMs: UInt64)throws   {try rustCallWithError(FfiConverterTypeAppError_lift) {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_method_store_relay_accepted(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt64.lower(signedMs),uniffiCallStatus
+    )
+}
+}
+    
+    /**
+     * The relay's time last learned, for the iOS extension's snapshot.
+     */
+open func relayClock()throws  -> RelayClock  {
+    return try  FfiConverterTypeRelayClock_lift(try rustCallWithError(FfiConverterTypeAppError_lift) {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_method_store_relay_clock(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * The relay's time, Unix ms, as the relay gave it just now: the `time` of `GET
+     * /v1/health` or of a `401 clock_skew` (seconds, times 1000).
+     */
+open func relayTime(relayMs: UInt64)throws  -> ClockNow  {
+    return try  FfiConverterTypeClockNow_lift(try rustCallWithError(FfiConverterTypeAppError_lift) {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_method_store_relay_time(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt64.lower(relayMs),uniffiCallStatus
     )
 })
 }
@@ -1196,6 +1297,79 @@ public func FfiConverterTypeAnsweredResult_lift(_ buf: RustBuffer) throws -> Ans
 #endif
 public func FfiConverterTypeAnsweredResult_lower(_ value: AnsweredResult) -> RustBuffer {
     return FfiConverterTypeAnsweredResult.lower(value)
+}
+
+
+/**
+ * The corrected clock now.
+ */
+public struct ClockNow: Equatable, Hashable {
+    /**
+     * Unix ms.
+     */
+    public var now: UInt64
+    /**
+     * The relay's time, learned in this boot within the last 24 hours, with no signed call
+     * against it. When false the clock is the later of the system clock and the last-known
+     * relay time, and a place added by hand does not lift the level 3 delay.
+     */
+    public var fresh: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Unix ms.
+         */now: UInt64, 
+        /**
+         * The relay's time, learned in this boot within the last 24 hours, with no signed call
+         * against it. When false the clock is the later of the system clock and the last-known
+         * relay time, and a place added by hand does not lift the level 3 delay.
+         */fresh: Bool) {
+        self.now = now
+        self.fresh = fresh
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ClockNow: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeClockNow: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ClockNow {
+        return
+            try ClockNow(
+                now: FfiConverterUInt64.read(from: &buf), 
+                fresh: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ClockNow, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.now, into: &buf)
+        FfiConverterBool.write(value.fresh, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeClockNow_lift(_ buf: RustBuffer) throws -> ClockNow {
+    return try FfiConverterTypeClockNow.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeClockNow_lower(_ value: ClockNow) -> RustBuffer {
+    return FfiConverterTypeClockNow.lower(value)
 }
 
 
@@ -3398,6 +3572,96 @@ public func FfiConverterTypePlanItemRecord_lift(_ buf: RustBuffer) throws -> Pla
 #endif
 public func FfiConverterTypePlanItemRecord_lower(_ value: PlanItemRecord) -> RustBuffer {
     return FfiConverterTypePlanItemRecord.lower(value)
+}
+
+
+/**
+ * The last relay time the phone learned (stored as the `clock` doc; the iOS app copies it to
+ * its extension's snapshot).
+ */
+public struct RelayClock: Equatable, Hashable {
+    /**
+     * The relay's time then, Unix ms; 0 when never learned.
+     */
+    public var relay: UInt64
+    /**
+     * The since-boot clock then, ms.
+     */
+    public var boot: UInt64
+    /**
+     * The boot it was learned in ("" when the phone does not tell).
+     */
+    public var bootId: String
+    /**
+     * A signed call the relay accepted disagreed with it by more than the signature window.
+     */
+    public var distrusted: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The relay's time then, Unix ms; 0 when never learned.
+         */relay: UInt64, 
+        /**
+         * The since-boot clock then, ms.
+         */boot: UInt64, 
+        /**
+         * The boot it was learned in ("" when the phone does not tell).
+         */bootId: String, 
+        /**
+         * A signed call the relay accepted disagreed with it by more than the signature window.
+         */distrusted: Bool) {
+        self.relay = relay
+        self.boot = boot
+        self.bootId = bootId
+        self.distrusted = distrusted
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension RelayClock: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRelayClock: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RelayClock {
+        return
+            try RelayClock(
+                relay: FfiConverterUInt64.read(from: &buf), 
+                boot: FfiConverterUInt64.read(from: &buf), 
+                bootId: FfiConverterString.read(from: &buf), 
+                distrusted: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: RelayClock, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.relay, into: &buf)
+        FfiConverterUInt64.write(value.boot, into: &buf)
+        FfiConverterString.write(value.bootId, into: &buf)
+        FfiConverterBool.write(value.distrusted, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRelayClock_lift(_ buf: RustBuffer) throws -> RelayClock {
+    return try FfiConverterTypeRelayClock.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRelayClock_lower(_ value: RelayClock) -> RustBuffer {
+    return FfiConverterTypeRelayClock.lower(value)
 }
 
 
@@ -6649,6 +6913,43 @@ public func wordEntry(prefix: String) -> WordEntry  {
 })
 }
 /**
+ * Whether a trusted place lifts the level 3 delay at `now` ([`crate::decide::place_settled`]
+ * on the corrected clock). A place added by hand never does while the clock is stale: its 24
+ * hours can't be counted on a clock the person may have set.
+ */
+public func placeSettledAt(place: TrustedPlace, now: ClockNow) -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_func_place_settled_at(
+        FfiConverterTypeTrustedPlace_lower(place),
+        FfiConverterTypeClockNow_lower(now),uniffiCallStatus
+    )
+})
+}
+/**
+ * The relay's time `relay_ms` (Unix ms), learned now.
+ */
+public func relayClockLearned(relayMs: UInt64) -> RelayClock  {
+    return try!  FfiConverterTypeRelayClock_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_func_relay_clock_learned(
+        FfiConverterUInt64.lower(relayMs),uniffiCallStatus
+    )
+})
+}
+/**
+ * The clock now by `clock`, on this phone's system and since-boot clocks: for the iOS
+ * extension, which reads the app's snapshot rather than the store.
+ */
+public func relayClockNow(clock: RelayClock) -> ClockNow  {
+    return try!  FfiConverterTypeClockNow_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_func_relay_clock_now(
+        FfiConverterTypeRelayClock_lower(clock),uniffiCallStatus
+    )
+})
+}
+/**
  * Decodes what `state_open` returned. An empty plaintext is the empty state.
  */
 public func decodeState(bytes: Data)throws  -> State  {
@@ -6863,6 +7164,15 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sealctl_app_checksum_func_word_entry() != 42711) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sealctl_app_checksum_func_place_settled_at() != 45879) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sealctl_app_checksum_func_relay_clock_learned() != 31114) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sealctl_app_checksum_func_relay_clock_now() != 7729) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sealctl_app_checksum_func_decode_state() != 10933) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -6926,6 +7236,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sealctl_app_checksum_method_store_apply_status() != 19917) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sealctl_app_checksum_method_store_clock_now() != 39839) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sealctl_app_checksum_method_store_close_request() != 56401) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -6941,7 +7254,19 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sealctl_app_checksum_method_store_place_sample() != 47269) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sealctl_app_checksum_method_store_place_settled_now() != 56412) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sealctl_app_checksum_method_store_prune() != 25831) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sealctl_app_checksum_method_store_relay_accepted() != 22391) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sealctl_app_checksum_method_store_relay_clock() != 20139) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sealctl_app_checksum_method_store_relay_time() != 58623) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_method_store_see_request() != 63167) {

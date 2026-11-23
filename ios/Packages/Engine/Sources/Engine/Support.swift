@@ -18,6 +18,24 @@ public actor Database {
     public func run<T: Sendable>(_ f: @Sendable (Store) throws -> T) rethrows -> T {
         try f(store)
     }
+
+    // The corrected clock (SPEC.md 8.1), read where an answer can't wait for this executor
+    // (a screen's text, the decide context). The store guards itself: its calls are
+    // serialised by its own lock, so these need not run here.
+
+    /// The corrected clock, or the system clock when the store can't be read.
+    public nonisolated func clockNow() -> ClockNow {
+        (try? store.clockNow()) ?? ClockNow(now: UInt64(max(0, nowMs())), fresh: false)
+    }
+
+    /// The relay's time, Unix ms, as the relay gave it just now.
+    public nonisolated func relayTime(_ ms: Int64) { _ = try? store.relayTime(relayMs: UInt64(max(0, ms))) }
+
+    /// The relay accepted a call signed at `ms` (Unix ms).
+    public nonisolated func relayAccepted(_ ms: Int64) { try? store.relayAccepted(signedMs: UInt64(max(0, ms))) }
+
+    /// The relay's time last learned, for the extension's snapshot.
+    public nonisolated func relayClock() -> RelayClock? { try? store.relayClock() }
 }
 
 /// Posting and removing notifications. The app uses `UNUserNotificationCenter`; the engine's

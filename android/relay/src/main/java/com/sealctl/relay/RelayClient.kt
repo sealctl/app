@@ -67,6 +67,10 @@ class RelayClient(
     private val keys: () -> PhoneKeys?,
     private val http: OkHttpClient = defaultClient(),
     private val now: () -> Long = System::currentTimeMillis,
+    /** The relay's time, Unix ms, from `/v1/health` or a `401 clock_skew` (SPEC.md 8.1). */
+    private val onRelayTime: (Long) -> Unit = {},
+    /** A signed call the relay accepted, with the `Sealctl-Time` it carried, in ms (SPEC.md 8.1). */
+    private val onAccepted: (Long) -> Unit = {},
 ) {
     @Volatile var clockOffsetSecs: Long = 0
     @Volatile var rateLimitedUntil: Long = 0
@@ -97,13 +101,19 @@ class RelayClient(
             }
             val first = execute(method, path, body)
             val result = if (first.first == 401 && first.second.code() == "clock_skew") {
-                first.second["time"]?.jsonPrimitive?.longOrNull?.let { clockOffsetSecs = it - now() / 1000 }
+                first.second["time"]?.jsonPrimitive?.longOrNull?.let {
+                    clockOffsetSecs = it - now() / 1000
+                    onRelayTime(it * 1000)
+                }
                 val again = execute(method, path, body)
                 if (again.first == 401 && again.second.code() == "clock_skew") throw ClockSkewException(again.second)
                 again
             } else first
-            val (status, json) = result
-            if (status in 200..299) return@withContext json
+            val (status, json, signedAt) = result
+            if (status in 200..299) {
+                onAccepted(signedAt * 1000)
+                return@withContext json
+            }
             when {
                 // Only `rate_limited` (or a 429 without a relay body) opens the window; a cap such
                 // as `too_many_delayed` is an ordinary error with its own code.
@@ -117,9 +127,11 @@ class RelayClient(
             }
         }
 
-    private fun execute(method: String, path: String, body: JsonObject?): Pair<Int, JsonObject> {
+    /** One try: the status, the body and the signed time (Unix seconds). */
+    private fun execute(method: String, path: String, body: JsonObject?): Triple<Int, JsonObject, Long> {
         val bytes = body?.toString()?.toByteArray() ?: ByteArray(0)
-        val h = relayHeaders(phoneKeys(), method, path, unixTime().toULong(), bytes)
+        val t = unixTime()
+        val h = relayHeaders(phoneKeys(), method, path, t.toULong(), bytes)
         val rb = if (body != null) bytes.toRequestBody(JSON) else if (method == "GET" || method == "DELETE") null else ByteArray(0).toRequestBody(JSON)
         val req = Request.Builder()
             .url(baseUrl.trimEnd('/') + path)
@@ -133,7 +145,7 @@ class RelayClient(
             val json = runCatching { Json.parseToJsonElement(text).jsonObject }.getOrElse {
                 buildJsonObject { put("error", if (res.isSuccessful) "" else "http_${res.code}") }
             }
-            return res.code to json
+            return Triple(res.code, json, t)
         }
     }
 
@@ -146,6 +158,13 @@ class RelayClient(
             Json.parseToJsonElement(it.body.string()).jsonObject
         }
     }
+
+    /**
+     * The relay's time from `/v1/health` (Unix ms), also handed to `onRelayTime`; null when the
+     * relay can't be reached or gives none (SPEC.md 8.1). Unsigned.
+     */
+    suspend fun relayTime(): Long? = runCatching { health()["time"]?.jsonPrimitive?.longOrNull }
+        .getOrNull()?.takeIf { it > 0 }?.let { it * 1000 }?.also(onRelayTime)
 
     suspend fun addMachine(machine: String, name: String, os: String, model: String?, proof: String): JsonObject =
         call("POST", "${phone()}/machines", buildJsonObject {

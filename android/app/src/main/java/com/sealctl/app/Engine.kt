@@ -144,7 +144,11 @@ class Engine(
 ) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     @Volatile private var phoneKeysCache: PhoneKeys? = null
-    val relay = RelayClient(relayUrl, { phoneKeys() })
+    val relay = RelayClient(
+        relayUrl, { phoneKeys() },
+        onRelayTime = { t -> safe { store.relayTime(t.toULong()) } },
+        onAccepted = { t -> safe { store.relayAccepted(t.toULong()) } },
+    )
 
     val phase = MutableStateFlow<Phase>(Phase.Loading)
     val state = MutableStateFlow(safe { store.snapshot() } ?: emptyState())
@@ -242,6 +246,26 @@ class Engine(
 
     fun offset(): Int = TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 1000
 
+    // ---------- the corrected clock (SPEC.md 8.1) ----------
+
+    /**
+     * The clock every security window is counted on: holds, plans, the level 3 delay and
+     * places. The system clock only when the store can't be read.
+     */
+    fun clockNow(): Long = safe { store.clockNow().now.toLong() } ?: System.currentTimeMillis()
+
+    /** Learns the relay's time from `/v1/health`. False when the relay can't be reached. */
+    suspend fun refreshClock(): Boolean = relay.relayTime() != null
+
+    /**
+     * Before a level 3 decision at a place added by hand: a stale clock would not let the place
+     * lift the delay, so the relay's time is asked first.
+     */
+    private suspend fun freshClockAtHandAddedPlace() {
+        val place = currentPlace.value?.let { id -> state.value.places.firstOrNull { it.id == id && !it.deleted } } ?: return
+        if (place.manual && safe { store.clockNow().fresh } != true) refreshClock()
+    }
+
     // ---------- phase ----------
 
     suspend fun computePhase() {
@@ -286,6 +310,8 @@ class Engine(
         if (phase.value != Phase.Ready || relayDataDeleted || phoneKeys() == null) return
         if (!sockets.open(turn) { foreground.value = true }) return
         scope.launch {
+            // The relay's time, for every security window (SPEC.md 8.1).
+            refreshClock()
             // Cancels first: a plan whose delay was cancelled while away hands out no keys.
             refreshDelayed()
             catchUp()
@@ -400,6 +426,7 @@ class Engine(
                 return@withLock
             }
         }
+        if (req.level() >= 3u) freshClockAtHandAddedPlace()
         val mark = placeMark()
         val hash = req.plan()?.hash
         val found = Plans.forRequest(local.value.plans, local.value.delayed, r.machine, hash)
@@ -455,10 +482,11 @@ class Engine(
         val unlocked = !vault.isDeviceLocked() && vault.canReadRoot()
         val status = machine.lastStatus
         val open = status?.session == "open" && status.left?.let { left ->
-            (System.currentTimeMillis() - status.reportedAt.toLong()) / 1000 < left.toLong()
+            // `reportedAt` is stamped by the store on the corrected clock.
+            (clockNow() - status.reportedAt.toLong()) / 1000 < left.toLong()
         } ?: false
         return DecideContext(
-            now = System.currentTimeMillis().toULong(),
+            now = clockNow().toULong(),
             utcOffsetSecs = offset(),
             phoneUnlocked = unlocked,
             near = r.near,
@@ -480,10 +508,13 @@ class Engine(
 
     fun placeKind(): PlaceKind = com.sealctl.core.app.placeKind(places.hasForeground(), currentPlace.value)
 
-    /** The place the phone is inside also lifts the level 3 delay (a place added by hand: after 24 hours). */
+    /**
+     * The place the phone is inside also lifts the level 3 delay: a place added by hand after
+     * 24 hours on the corrected clock, and never while that clock is stale (SPEC.md 8.1, 9.6).
+     */
     fun placeSettled(): Boolean = currentPlace.value
         ?.let { id -> state.value.places.firstOrNull { it.id == id && !it.deleted } }
-        ?.let { com.sealctl.core.app.placeSettled(it, System.currentTimeMillis().toULong()) } ?: false
+        ?.let { safe { store.placeSettledNow(it) } } ?: false
 
     /** A level 3 action happens at once here (SPEC.md 9.6). */
     fun delayLifted(): Boolean = placeKind() == PlaceKind.TRUSTED && placeSettled()
@@ -809,7 +840,7 @@ class Engine(
     /** A wrong number: refuse with `no_match` and hold the machine for an hour. */
     suspend fun wrongNumber(w: Waiting) {
         answerCard(w) { c -> send(c.request, c.relay, Decision.Refuse(RefuseReason.NO_MATCH), "denied", allowed = false) }
-        applyLocal(LocalEvent.SetHold(Hold(w.machine.key, (System.currentTimeMillis() + 3_600_000).toULong())))
+        applyLocal(LocalEvent.SetHold(Hold(w.machine.key, (clockNow() + 3_600_000).toULong())))
         waiting.update { list -> list.filter { it.relay.id != w.relay.id } }
     }
 
@@ -846,7 +877,7 @@ class Engine(
         return when (w.verdict.kind) {
             RequestKind.UNSEAL -> {
                 val delay = Delays.atConfirm(w.verdict.delaySecs.toInt(), w.verdict.level.toInt(), lifted, testDelaySecs())
-                val notBefore = System.currentTimeMillis() + delay * 1000L
+                val notBefore = clockNow() + delay * 1000L
                 val ok = answerCard(w) { c ->
                     send(c.request, c.relay, Decision.Plan(place, notBefore.toULong()), "confirmed", allowed = true,
                         delaySecs = if (delay > 0) delay else null)
@@ -957,6 +988,7 @@ class Engine(
 
     /** Starts a level 3 action on the phone: at once at a trusted place, else after the hour. */
     suspend fun startPhoneAction(what: String): DelayedAction? {
+        freshClockAtHandAddedPlace()
         if (delayLifted()) return null
         val delay = delaySecs(Delays.LEVEL3_SECS)
         val id = randomId()

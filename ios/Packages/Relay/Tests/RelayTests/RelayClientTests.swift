@@ -74,6 +74,30 @@ struct RelayClientTests {
         _ = try await control("/test/clock", ["offset": 0])
     }
 
+    /// SPEC.md 8.1: the relay's time (health, `clock_skew`) and accepted signed times go to
+    /// the corrected clock.
+    @Test func relayTimesReachTheClock() async throws {
+        let keys = try fresh()
+        let seen = Seen()
+        _ = try await control("/test/clock", ["offset": 900])
+        defer { Task { _ = try? await control("/test/clock", ["offset": 0]) } }
+        let c = RelayClient(baseURL: testRelay!, keys: { keys },
+                            onRelayTime: { t in Task { await seen.time(t) } },
+                            onAccepted: { t in Task { await seen.accepted(t) } })
+        let t = try #require(await c.relayTime())
+        let system = Int64(Date().timeIntervalSince1970 * 1000)
+        #expect(abs(t - (system + 900_000)) < 5_000)
+        #expect(try await c.machines().isEmpty)
+        _ = try await control("/test/clock", ["offset": 0])
+        try await Task.sleep(nanoseconds: 200_000_000)
+        let times = await seen.times
+        let accepted = await seen.acceptedTimes
+        // Health, then the `clock_skew` before the retry.
+        #expect(times.count == 2)
+        #expect(accepted.count == 1)
+        #expect(abs(accepted[0] - (system + 900_000)) < 5_000)
+    }
+
     @Test func rateLimitStopsCallsButNotTappedReplies() async throws {
         let keys = try fresh()
         let c = RelayClient(baseURL: testRelay!, keys: { keys })
@@ -136,4 +160,12 @@ struct JSONNumberTests {
         #expect(o["d"].long == 0)
         #expect(o["e"].int64 == 2)
     }
+}
+
+/// What a client reported, for the clock test.
+actor Seen {
+    var times: [Int64] = []
+    var acceptedTimes: [Int64] = []
+    func time(_ t: Int64) { times.append(t) }
+    func accepted(_ t: Int64) { acceptedTimes.append(t) }
 }

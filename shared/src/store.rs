@@ -212,6 +212,29 @@ pub struct ReportResult {
 #[derive(uniffi::Object)]
 pub struct Store {
     conn: Mutex<Connection>,
+    /// Tests only: the clock the store reads (Unix ms); 0 reads the system clock.
+    #[cfg(test)]
+    fake_now: std::sync::atomic::AtomicU64,
+}
+
+impl Store {
+    /// The time every change is stamped with.
+    fn now(&self) -> u64 {
+        #[cfg(test)]
+        {
+            let t = self.fake_now.load(std::sync::atomic::Ordering::SeqCst);
+            if t != 0 {
+                return t;
+            }
+        }
+        now_ms()
+    }
+
+    /// Tests only: sets the store's clock.
+    #[cfg(test)]
+    fn set_now(&self, t: u64) {
+        self.fake_now.store(t, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 fn lock(m: &Mutex<Connection>) -> Result<std::sync::MutexGuard<'_, Connection>> {
@@ -372,6 +395,8 @@ impl Store {
         )?;
         Ok(Arc::new(Self {
             conn: Mutex::new(conn),
+            #[cfg(test)]
+            fake_now: std::sync::atomic::AtomicU64::new(0),
         }))
     }
 
@@ -391,7 +416,7 @@ impl Store {
     pub fn apply(&self, event: Event) -> Result<State> {
         let c = lock(&self.conn)?;
         let mut s: State = read_doc(&c, "state")?;
-        let now = now_ms();
+        let now = self.now();
         apply_event(&mut s, event, now)?;
         let s = normalise(s);
         write_doc(&c, "state", &s)?;
@@ -405,7 +430,7 @@ impl Store {
     pub fn apply_local(&self, event: LocalEvent) -> Result<LocalState> {
         let c = lock(&self.conn)?;
         let mut l: LocalState = read_doc(&c, "local")?;
-        let now = now_ms();
+        let now = self.now();
         match event {
             LocalEvent::SetDay { day } => {
                 l.days.retain(|d| d.machine != day.machine);
@@ -466,7 +491,7 @@ impl Store {
     pub fn see_request(&self, id: String, machine: String, expires: u64) -> Result<bool> {
         let c = lock(&self.conn)?;
         let mut l: LocalState = read_doc(&c, "local")?;
-        let now = now_ms();
+        let now = self.now();
         l.pending.retain(|p| {
             p.seen
                 .saturating_add(PENDING_SIGNED_KEEP_MS)
@@ -489,6 +514,7 @@ impl Store {
 
     /// Marks a pending request `answered`, `expired` or `ignored`.
     pub fn close_request(&self, id: String, outcome: String) -> Result<()> {
+        let now = self.now();
         let c = lock(&self.conn)?;
         let mut l: LocalState = read_doc(&c, "local")?;
         match l.pending.iter_mut().find(|p| p.id == id) {
@@ -496,8 +522,8 @@ impl Store {
             None => l.pending.push(PendingEntry {
                 id,
                 outcome,
-                expires: now_ms(),
-                seen: now_ms(),
+                expires: now,
+                seen: now,
                 ..PendingEntry::default()
             }),
         }
@@ -517,7 +543,7 @@ impl Store {
         place_id: Option<String>,
         utc_offset_secs: i32,
     ) -> Result<AnsweredResult> {
-        let now = now_ms();
+        let now = self.now();
         let c = lock(&self.conn)?;
         let mut s: State = read_doc(&c, "state")?;
         let mut l: LocalState = read_doc(&c, "local")?;
@@ -632,7 +658,7 @@ impl Store {
             },
         };
         if let Some(hb) = request.handback() {
-            let now = now_ms();
+            let now = self.now();
             let c = lock(&self.conn)?;
             let mut s: State = read_doc(&c, "state")?;
             let name = s.machine(&machine).map(display_name).unwrap_or_default();
@@ -677,7 +703,7 @@ impl Store {
     /// Records a machine status (machine channel or `report`). A `seq` already seen is ignored
     /// except for its `ack`.
     pub fn apply_status(&self, machine: String, status: MachineStatus) -> Result<ReportResult> {
-        let now = now_ms();
+        let now = self.now();
         let c = lock(&self.conn)?;
         let mut s: State = read_doc(&c, "state")?;
         let fp = s
@@ -855,7 +881,7 @@ impl Store {
     pub fn next_message_seq(&self, machine: String) -> Result<u64> {
         let c = lock(&self.conn)?;
         let mut l: LocalState = read_doc(&c, "local")?;
-        let now = now_ms();
+        let now = self.now();
         let v = match l.message_seq.iter_mut().find(|m| m.machine == machine) {
             Some(m) => {
                 m.value = m.value.max(now).max(m.value + 1);

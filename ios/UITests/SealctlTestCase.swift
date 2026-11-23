@@ -40,10 +40,11 @@ class SealctlTestCase: XCTestCase {
     /// ios/scripts/failure-attachments.py: change both together.
     static let wordScreen = #"identifier: '(?:word-\d|choice |field-\d|key )|Which is word|Words \d+ to \d+|Type your 24 words|Show my words"#
 
-    /// The app's UI tree for a failure message, which ends up in the public job log. On a words
-    /// screen the tree is withheld; only the ids of elements that carry no word are listed.
-    func uiTree(_ limit: Int = 4000) -> String {
-        let tree = Env.scrub(String(app.debugDescription.prefix(limit)))
+    /// The app's UI tree (or `of` another app's, such as springboard's) for a failure message,
+    /// which ends up in the public job log. On a words screen the tree is withheld; only the ids
+    /// of elements that carry no word are listed.
+    func uiTree(_ limit: Int = 4000, of target: XCUIApplication? = nil) -> String {
+        let tree = Env.scrub(String((target ?? app).debugDescription.prefix(limit)))
         guard tree.range(of: Self.wordScreen, options: .regularExpression) != nil else { return tree }
         let ids = tree.components(separatedBy: "identifier: '").dropFirst()
             .compactMap { $0.components(separatedBy: "'").first }

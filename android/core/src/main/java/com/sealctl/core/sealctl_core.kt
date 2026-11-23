@@ -1156,7 +1156,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_sealctl_core_checksum_func_relay_headers() and 0xFFFF) != 10374) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_sealctl_core_checksum_func_seal_old_words_reply() and 0xFFFF) != 19665) {
+    if ((lib.uniffi_sealctl_core_checksum_func_seal_old_words_reply() and 0xFFFF) != 19064) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_core_checksum_func_seal_plan_keys_reply() and 0xFFFF) != 54880) {
@@ -1174,7 +1174,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_sealctl_core_checksum_func_seal_report_reply() and 0xFFFF) != 36332) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_sealctl_core_checksum_func_seal_rewrap_reply() and 0xFFFF) != 19879) {
+    if ((lib.uniffi_sealctl_core_checksum_func_seal_rewrap_reply() and 0xFFFF) != 50631) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_core_checksum_func_open_request() and 0xFFFF) != 53283) {
@@ -1231,7 +1231,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_sealctl_core_checksum_method_phonekeys_to_bytes() and 0xFFFF) != 54641) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_sealctl_core_checksum_method_planassembler_add() and 0xFFFF) != 46672) {
+    if ((lib.uniffi_sealctl_core_checksum_method_planassembler_add() and 0xFFFF) != 26321) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_core_checksum_method_request_check_match() and 0xFFFF) != 14510) {
@@ -2597,7 +2597,9 @@ public interface PlanAssemblerInterface {
     /**
      * Adds one part. Returns the whole plan once every part is in and the hash checks out;
      * the plan is then also attached to `request`, which the final answer is sealed for.
-     * A part for another machine or plan hash starts over.
+     * A part for another machine or plan hash starts over. A later key request of an
+     * approved plan (`plan: {h}` only, no part) is not a part: it returns `None` and leaves
+     * the parts collected so far as they are.
      */
     fun `add`(`request`: Request): RequestPlan?
     
@@ -2723,7 +2725,9 @@ open class PlanAssembler: Disposable, AutoCloseable, PlanAssemblerInterface
     /**
      * Adds one part. Returns the whole plan once every part is in and the hash checks out;
      * the plan is then also attached to `request`, which the final answer is sealed for.
-     * A part for another machine or plan hash starts over.
+     * A part for another machine or plan hash starts over. A later key request of an
+     * approved plan (`plan: {h}` only, no part) is not a part: it returns `None` and leaves
+     * the parts collected so far as they are.
      */
     @Throws(CoreException::class)override fun `add`(`request`: Request): RequestPlan? {
             return FfiConverterOptionalTypeRequestPlan.lift(
@@ -7741,7 +7745,7 @@ public object FfiConverterSequenceTypeRetiredWords: FfiConverterRustBuffer<List<
 
         /**
          * Answers `old_words`: derives only the listed objects' keys under the retired words
-         * (`old`) and the current ones (`k`).
+         * (`old`) and the current ones (`k`). Level 3 needs the number pick, as for `rewrap`.
          */
     @Throws(CoreException::class) fun `sealOldWordsReply`(`oldRoot`: Root, `root`: Root, `keys`: PhoneKeys, `request`: Request): kotlin.String {
             return FfiConverterString.lift(
@@ -7852,7 +7856,8 @@ public object FfiConverterSequenceTypeRetiredWords: FfiConverterRustBuffer<List<
     
 
         /**
-         * Answers `rewrap`: the new key and the old key of every item.
+         * Answers `rewrap`: the new key and the old key of every item. A level 3 request without a
+         * right number pick is answered `no_match`, as in [`seal_reply`].
          */
     @Throws(CoreException::class) fun `sealRewrapReply`(`oldRoot`: Root, `newRoot`: Root, `keys`: PhoneKeys, `request`: Request): kotlin.String {
             return FfiConverterString.lift(

@@ -28,7 +28,10 @@ struct ApprovalSheet: View {
         guard !busy, let option = w.verdict.options.first(where: { Texts.actionId($0) == id }) else { return }
         busy = true
         Task {
-            if await e.answer(w.id, option) { haptic(option != .deny) }
+            // Leaving the app at once must not stop the answer halfway (SPEC.md 8.5).
+            var ok = false
+            await AppDelegate.inBackgroundTask { ok = await e.answer(w.id, option) }
+            if ok { haptic(option != .deny) }
             e.focusRequest = nil
             busy = false
         }

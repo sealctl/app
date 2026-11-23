@@ -121,7 +121,9 @@ struct SensitiveView: View {
             }
             let ok = await e.confirmSensitive(w)
             if !ok {
-                error = Texts.stoppedWaiting(name)
+                // Still waiting: the reply did not go and can be confirmed again.
+                let still = e.waiting.contains { $0.id == w.id && !$0.expired }
+                error = still ? Texts.answerNotSent : Texts.stoppedWaiting(name)
                 return
             }
             haptic(true)

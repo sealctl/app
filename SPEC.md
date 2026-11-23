@@ -238,7 +238,7 @@ Defined once in `sealctl-app`. "Relay" means the record is part of the encrypted
 | Day | machine, first approval time, place id or none | Local; ends at the next 02:00 local time or 14 h after the first approval, whichever is first |
 | Inventory item | purpose, id, words fingerprint, key check, machine, path or URL, size, first use, last use, stale | Relay; kept; stale after a year unseen |
 | Usage entry | time, machine, key or object, agent or "you", repository, command, outcome | Local; 13 months, at most 50,000 entries |
-| Summary | month, keys used, requests declined | Relay; 12 months |
+| Summary | month, keys used, requests declined | Relay; 12 months by the calendar (this month and the 11 before it), however many months had no use; a month after this one (counted by an install whose clock ran ahead) is dropped |
 | Words | fingerprint, written on, last check, retired cards (fingerprint, retired on) | Relay |
 | Change | old and new fingerprint, reason, started, per-machine progress, not-seen list | Relay; until finished |
 | Settings | relay backup on, keychain backup on | Relay |
@@ -256,13 +256,13 @@ The local database is one SQLite file:
 
 No secret is ever stored in the database. Places sit there protected by the OS file encryption.
 
-**iOS extension snapshot.** The app writes `nse-snapshot.bin` to the app group container after every change, atomically (write and rename). It holds what the NSE needs: machines (key, display name, tag), answers, trusted places with the current inside or outside state, days, the active-device flag. The NSE writes its own results as small files in `inbox/` (one per answered request); the app merges and deletes them at launch and on every foreground. Neither process holds a file lock while suspended.
+**iOS extension snapshot.** The app writes `nse-snapshot.bin` to the app group container after every change, atomically (write and rename). It holds what the NSE needs: machines (key, display name, tag), answers, trusted places with the current inside or outside state, days, the active-device flag. The NSE writes its own results as small files in `inbox/` (one per answered request, with the time it answered); the app merges and deletes them at launch and on every foreground. The app may run hours after the extension answered, when the request's signed time is long outside its 10-minute window, so it opens each item against the time it was answered (`open_answered_request`) and records it at that time (`answered_at`, `apply_report_at`): the use renews the answer it used, and the usage entry, its month, the inventory's last use and a report's session status count from then, not from the merge. Neither process holds a file lock while suspended.
 
 ### 6.5 Sync with the relay
 
 - The phone uploads its state to `PUT /v1/phones/{phone}/state` 10 seconds after the last change, and at once after pairing, unpairing, removing an answer or a place, and at each step of a change of words.
 - The blob is `state_seal(root, encode_state(state))` (19.1). Sealing needs the root, so it waits for the phone to be unlocked; the debounce timer simply fires again later.
-- On `409 conflict` the app downloads, merges with `merge_state` and retries, up to 3 times. Records merge one by one: the later `updated` time wins; deletions are kept as tombstones for 90 days. Machine and place tombstones then shrink to their key and deletion time and stay, so an older copy of the state (another install, an old blob) cannot bring an unpaired machine or a removed place back.
+- On `409 conflict` the app downloads, merges with `merge_state` and retries, up to 3 times. Records merge one by one: the later `updated` time wins; deletions are kept as tombstones for 90 days. A record changed or added again on this phone (re-pairing, remembering an answer again, a place, a report, a lifetime applied by `prune`) gets an `updated` later than every copy of it the phone holds, removed ones included, so it wins a merge with a copy stamped by another install whose clock ran ahead. Month summaries are counters and merge differently: month by month, the larger count of each figure and every machine either side named, so one install's count is never replaced by a smaller one from an install whose clock ran ahead. Machine and place tombstones then shrink to their key and deletion time and stay, so an older copy of the state (another install, an old blob) cannot bring an unpaired machine or a removed place back.
 - On launch, the app downloads if the last download is more than 1 hour old.
 - If the encoded state is over 1 MiB, the app drops paths from stale inventory items first, then the oldest stale items, and says so in Settings: "The relay backup is full. Old inventory entries were shortened."
 - Turning the relay backup off stops uploads and deletes the blob with `PUT` of an empty state; it does not touch pairings, which the relay needs to carry requests.
@@ -466,7 +466,8 @@ An unknown kind is shown in the app as "dev@mbp.example.com sent a request this 
 In the app means: a notification with no actions that opens the screen, because levels 2 and 3 need biometrics without the passcode, which a notification action cannot ask for (9.6).
 
 - An `open` request triggered by an agent with no answer for that key and repository is shown as one card. "Allow for this session" also records the answer. That is the only extra tap the design allows, and it is merged into the first one.
-- The first approval of the day is the first `open` allowed for that machine since its day ended (02:00 local or 14 h after the previous first approval).
+- The first approval of the day is the first `open` allowed for that machine since its day ended (02:00 local or 14 h after the previous first approval). Only an answer the person gave (One tap, Allow once) begins a day: an answer given by itself needed an active day when it was decided, and recorded after that day ended (its reply took a while to post, or the iOS extension's answer is merged later) it begins none.
+- "02:00 local" is counted both by the UTC offset at the first approval and by the phone's offset now, whichever comes first: a change of daylight saving time or a new time zone while travelling ends the day at 02:00 on the phone's clock, never later. A phone clock that reads more than 5 minutes before the day's first approval (set back) ends the day too.
 - "Near" is the relay's `near` flag on the request, trusted only when the phone is on Wi-Fi or Ethernet at that moment (`NWPathMonitor` `usesInterfaceType(.wifi)` or `.wiredEthernet`; Android `NetworkCapabilities.TRANSPORT_WIFI` or `TRANSPORT_ETHERNET`). On mobile data the flag is ignored: the carrier's shared address could match a stranger's. On a VPN the relay sees the VPN's address and the flag is false. Both fall back to One tap.
 
 ### 9.4 What the reply carries
@@ -481,7 +482,7 @@ Besides the keys, the reply tells the machine the place kind, which sets its all
 
 ### 9.5 Replays and forged requests
 
-- Request ids are kept for 10 minutes; a second request with the same id is ignored.
+- Request ids are kept for 10 minutes; a second request with the same id is ignored. An id is kept at least as long as its signed body can still be opened (the core accepts a signed time up to 10 minutes either side of the phone's clock), counted from when it was first seen and again from when it was answered, expired or ignored, plus 10 minutes.
 - A request whose sealed contents name a different machine than the relay's `machine` field is ignored.
 - The relay can only lie about `near`. A lie skips a tap only for a request already signed by a paired machine, while the phone is unlocked, on Wi-Fi and inside the place where that machine's day began. At level 2 a lie can stand in for proximity; it never skips the biometric match or the list of objects.
 
@@ -521,7 +522,7 @@ The card is the fallback because the passcode is what a thief watching over a sh
 
 Near: no number is asked at level 2. Not near with `match`: the number screen comes first. Neither: the phone answers `not_near`, and the notification says "dev@box.example.com isn't near this phone. Run the command at its terminal; this phone then asks for the number on its screen." Level 3 requests always need the number (protocol).
 
-**Number match.** The core picks the three numbers and checks the pick; the right one never reaches Swift or Kotlin (19.1). The number screen shows nothing the machine wrote (11.23). A wrong pick answers `no_match` and records a Hold: for one hour every level 2 or 3 request from that machine is answered `held` with no notification. The machine's detail shows "Sensitive requests from this machine are held until 11:42 after a wrong number." [Release now] (biometrics).
+**Number match.** The core picks the three numbers and checks the pick; the right one never reaches Swift or Kotlin (19.1). The number screen shows nothing the machine wrote (11.23). A wrong pick answers `no_match` and records a Hold: for one hour every level 2 or 3 request from that machine is answered `held` with no notification. A hold only grows: another wrong pick recorded with an earlier end (a clock set back, two cards answered at once) keeps the later end; only [Release now] ends it early. A hold never reaches more than an hour past the phone's clock: one recorded while the clock ran ahead is cut to an hour from now at the next change of the local records, so it still holds a full hour once the clock is right. The machine's detail shows "Sensitive requests from this machine are held until 11:42 after a wrong number." [Release now] (biometrics).
 
 **Plan.** An `unseal` request carries the plan; parts are collected by `PlanAssembler` and answered at once (protocol). The phone shows every item, signs the plan hash (`Plan` decision) and hands out keys only for items in it. Later `unseal` requests for the same plan are answered without showing anything, up to 30 minutes after the not-before time, and only for keys the plan names.
 
@@ -991,7 +992,7 @@ Each machine row shows one state, from the machine's last status (`GET .../statu
 
 ### 11.9 Places
 
-**Learning.** At each first approval of the day with location permission, the app takes one location sample (10.3) and passes it to `place_sample`. A sample joins a candidate when it is within 100 m of the candidate's centre and its accuracy is 100 m or better. When a candidate has samples on 3 different days, the app asks once:
+**Learning.** At each first approval of the day with location permission, the app takes one location sample (10.3) and passes it to `place_sample`. A sample joins a candidate when it is within 100 m of the candidate's centre and its accuracy is 100 m or better. When a candidate has samples on 3 different days, the app asks once (a sample's day is the local date it was taken on, by the UTC offset at that time; a later change of daylight saving time or time zone does not date it again):
 
 > **Trust this place?**
 > You opened your machines here on 3 mornings: Nov 18, 19 and 21.
@@ -1035,6 +1036,7 @@ Agent display names: `claude` "Claude Code", `codex` "Codex", `gemini` "Gemini C
 
 - Swipe or menu: [Remove]. Removing takes effect at the agent's next use, which asks again.
 - An answer unused for 80 days shows "Unused for 80 days. Removed in 10 days."
+- An answer unused for 90 days answers nothing from that moment, whether or not the daily prune has removed it yet, and whatever copy a merge brought back. A use allowed once does not renew it; "Allow for this session" (which remembers) does, and so does every use it answered by itself, the iOS extension's too (recorded at the time it was answered, 6.4).
 - Footer: "Agents ask once per key and repository. You at the keyboard are never asked inside an Open session. A file in a repository never grants anything."
 - Empty: "No answers yet. When you tap Allow on an agent's first use of a key, it's remembered here."
 
@@ -1053,7 +1055,7 @@ When the first `agent` card ever appears, the card shows one extra line under th
 > 4 requests declined
 > No key was written to disk.
 
-"Keys used" counts uses from replies and from machine reports. "Requests declined" counts Deny answers. The third line is a fixed statement of how sealctl works. No other figures, no price, no comparison.
+"Keys used" counts uses from replies and from machine reports. "Requests declined" counts Deny answers. Both count in the month by the phone's local time when the answer was given or the report reached the phone (the app passes its UTC offset to `answered`, `apply_status` and `apply_report`; an answer the iOS extension gave counts in the month it was given, 6.4), so a use near midnight on the last day of a month counts in the same month whichever way it arrived. The third line is a fixed statement of how sealctl works. No other figures, no price, no comparison.
 
 **Log** grouped by day, newest first:
 
@@ -1445,6 +1447,7 @@ The screens for levels 2 and 3 (9.6). They are full-screen, never a sheet, and n
 - For an action on the phone, at `releaseAt` a local notification says "Ready: open sealctl to finish …" (10.1). Opening it asks for biometrics, then calls `finish`; only on `200` does the action run. `409 cancelled`: "Cancelled from dev@box.example.com. Nothing happened." The finish is offered until the relay record expires, 15 minutes after `releaseAt`; after that: "This waited too long. Start again."
 - For `unseal --all`, nothing is needed from the phone when the hour ends: the computer fetches the approval from the relay.
 - Other installs with the same words show the delay too (from the relay's note) and can cancel it.
+- Notes, pushes and the relay's list can arrive in any order. Once the phone has recorded a delayed action as cancelled, finished, gone or expired, a later write from an older read (the list fetched just before a cancel note) never makes it wait again; only a known end (cancelled, with who cancelled, or finished) replaces "gone" or "expired". A cancelled plan approval stays cancelled, and a plan approval whose delayed action is cancelled is cancelled too, whichever of the two the phone recorded first (a cancel can arrive while the approval is still being posted); approving the same plan again is a new request with its own record.
 
 **Card check** (Leave sealctl, before the words backup is removed):
 

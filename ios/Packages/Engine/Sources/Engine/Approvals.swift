@@ -128,7 +128,7 @@ extension AppEngine {
             _ = try? await db.run { try $0.closeRequest(id: r.id, outcome: "answered") }
             return
         }
-        let result = try? await db.run { try $0.applyReport(request: req) }
+        let result = try? await db.run { try $0.applyReport(request: req, utcOffsetSecs: utcOffset()) }
         await refreshState()
         guard let sealed = try? sealReportReply(keys: keys, request: req, ack: result?.ack, messages: []) else { return }
         _ = await post(r, sealed, delay: nil, userTapped: false)

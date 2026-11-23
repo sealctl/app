@@ -46,32 +46,41 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         Log.note("push registration failed: \(type(of: error))")
     }
 
+    // The completion-handler forms, not the `async` ones: for an `async` delegate method the
+    // compiler's thunk calls UIKit's completion handler wherever the body last resumed, a
+    // background thread after an `await`, and UIKit asserts (a crash after a banner tap). Here
+    // every completion handler runs on the main actor.
+
     /// In the foreground the approval card is already on screen: no banner for requests.
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification)
-        async -> UNNotificationPresentationOptions {
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                            withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         let content = notification.request.content
         let type = content.userInfo["type"] as? String
         let id = content.userInfo["id"] as? String
         let isPush = notification.request.trigger is UNPushNotificationTrigger
         let category = content.categoryIdentifier
         let isRequest = type == "request" || category.hasPrefix("REQUEST") || category == Notes.relayCategory
-        if let type, isPush {
-            await MainActor.run {
-                if let e = AppDelegate.engine { Task { await e.onPush(type: type, id: id) } }
-            }
+        let done = MainCompletion(completionHandler)
+        Task { @MainActor in
+            if let type, isPush, let e = AppDelegate.engine { Task { await e.onPush(type: type, id: id) } }
+            done.call(isRequest ? [] : [.banner, .list, .sound])
         }
-        return isRequest ? [] : [.banner, .list, .sound]
     }
 
     /// A tap or an action button. Actions run in the background inside a background task;
     /// Allow actions carry `.authenticationRequired`, so a locked iPhone asks for its unlock.
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                            withCompletionHandler completionHandler: @escaping () -> Void) {
         let info = response.notification.request.content.userInfo
         let id = info["id"] as? String
         let screen = info["screen"] as? String
         let action = response.actionIdentifier
-        await AppDelegate.inBackgroundTask {
-            await AppDelegate.respond(id: id, screen: screen, action: action)
+        let done = MainCompletion { (_: Void) in completionHandler() }
+        Task { @MainActor in
+            await AppDelegate.inBackgroundTask {
+                await AppDelegate.respond(id: id, screen: screen, action: action)
+            }
+            done.call(())
         }
     }
 
@@ -109,6 +118,21 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             if screen.hasPrefix("delayed:") { router.push(.delayed(String(screen.dropFirst(8)))) }
             if screen == "place" { router.push(.places) }
         }
+    }
+}
+
+/// A UIKit completion handler carried into a main-actor task and called there only.
+private final class MainCompletion<Value>: @unchecked Sendable {
+    private let handler: (Value) -> Void
+    init(_ handler: @escaping (Value) -> Void) { self.handler = handler }
+
+    @MainActor
+    func call(_ value: Value) {
+        #if DEBUG
+        // UIKit requires the main thread here; a regression fails loudly in the UI tests.
+        dispatchPrecondition(condition: .onQueue(.main))
+        #endif
+        handler(value)
     }
 }
 

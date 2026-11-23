@@ -4,7 +4,7 @@ The app's shared library (sealctl-app and sealctl-core) is built from the Rust c
 Each is used under the licence shown. Where a crate offers a choice of licences, the one
 listed is the one we use.
 
-MIT License (MIT): 78
+MIT License (MIT): 77
 Mozilla Public License 2.0 (MPL-2.0): 6
 BSD 3-Clause "New" or "Revised" License (BSD-3-Clause): 4
 Creative Commons Zero v1.0 Universal (CC0-1.0): 3
@@ -769,8 +769,8 @@ DEALINGS IN THE SOFTWARE.
 
 === MIT License (MIT)
 
-libsqlite3-sys 0.39.1  https://github.com/rusqlite/rusqlite
-rusqlite 0.41.1  https://github.com/rusqlite/rusqlite
+libsqlite3-sys 0.40.0  https://github.com/rusqlite/rusqlite
+rusqlite 0.43.0  https://github.com/rusqlite/rusqlite
 
 Copyright (c) 2014 The rusqlite developers
 
@@ -1257,38 +1257,6 @@ DEALINGS IN THE SOFTWARE.
 block-buffer 0.12.1  https://github.com/RustCrypto/utils
 
 Copyright (c) 2018-2025 The RustCrypto Project Developers
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-
-
-=== MIT License (MIT)
-
-getrandom 0.3.4  https://github.com/rust-random/getrandom
-
-Copyright (c) 2018-2025 The rust-random Project Developers
-Copyright (c) 2014 The Rust Project Developers
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated

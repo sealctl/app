@@ -181,6 +181,11 @@ criteria = "safe-to-deploy"
 version = "4.6.9"
 criteria = "safe-to-deploy"
 
+[[exemptions.const-oid]]
+version = "0.10.3"
+criteria = "safe-to-deploy"
+notes = "0.10.3 (new crate, pulled in by sha1 0.11) fully reviewed by an AI agent (Claude) on 2026-11-23: no_std OID parser and encoder, no build script, only an optional arbitrary dependency; one unsafe block (a repr(transparent) slice-to-newtype cast); the optional OID name database holds only constants; no I/O; not a human audit."
+
 [[exemptions.core-foundation]]
 version = "0.10.1"
 criteria = "safe-to-deploy"
@@ -446,8 +451,9 @@ version = "0.2.191"
 criteria = "safe-to-deploy"
 
 [[exemptions.libsqlite3-sys]]
-version = "0.39.1"
+version = "0.40.0"
 criteria = "safe-to-deploy"
+notes = "0.39.1 -> 0.40.0 diff reviewed by an AI agent (Claude) on 2026-11-23: bundled sqlite3.c and build.rs are byte-identical (SQLite 3.54.1); the only changes are the optional sqlcipher-src build dependency (420.0.0) and regenerated SQLCipher bindings; not a human audit."
 
 [[exemptions.linux-raw-sys]]
 version = "0.12.1"
@@ -590,8 +596,9 @@ version = "0.2.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusqlite]]
-version = "0.41.1"
+version = "0.43.0"
 criteria = "safe-to-deploy"
+notes = "0.41.1 -> 0.43.0 diff reviewed by an AI agent (Claude) on 2026-11-23: no build script and no new dependencies (libsqlite3-sys 0.40); unsafe changes are correctness fixes (null callback when a hook is removed, set_clientdata reset on failure, no leak of boxed closures on invalid names, owned strings from column metadata, null-checked session diff error) plus an optional SQLCipher key/rekey wrapper; empty or comment-only SQL is now rejected with Error::Empty; not a human audit."
 
 [[exemptions.rustc-hash]]
 version = "2.1.3"
@@ -697,6 +704,11 @@ criteria = "safe-to-deploy"
 version = "0.10.7"
 criteria = "safe-to-deploy"
 
+[[exemptions.sha1]]
+version = "0.11.0"
+criteria = "safe-to-deploy"
+notes = "0.10.7 -> 0.11.0 diff reviewed by an AI agent (Claude) on 2026-11-23: no build script; digest 0.11 and cpufeatures 0.3 (the default oid feature pulls in const-oid); unsafe changes are the SIMD backends (x86 SHA-NI, new aarch64 SHA intrinsics) behind CPU feature detection, standard SHA-1 constants; not a human audit."
+
 [[exemptions.sha2]]
 version = "0.11.1"
 criteria = "safe-to-deploy"
@@ -801,6 +813,11 @@ criteria = "safe-to-deploy"
 version = "0.29.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.tokio-tungstenite]]
+version = "0.30.0"
+criteria = "safe-to-deploy"
+notes = "0.29.0 -> 0.30.0 diff reviewed by an AI agent (Claude) on 2026-11-23: no build script; only the tungstenite 0.30 dependency bump and documentation; no code or unsafe changes; not a human audit."
+
 [[exemptions.tokio-util]]
 version = "0.7.20"
 criteria = "safe-to-deploy"
@@ -852,6 +869,11 @@ criteria = "safe-to-deploy"
 [[exemptions.tungstenite]]
 version = "0.29.0"
 criteria = "safe-to-deploy"
+
+[[exemptions.tungstenite]]
+version = "0.30.0"
+criteria = "safe-to-deploy"
+notes = "0.29.0 -> 0.30.0 diff reviewed by an AI agent (Claude) on 2026-11-23: no build script, dependency bumps only (rand 0.10, sha1 0.11); stricter Sec-WebSocket-Key validation on the server side and a frame-length check in u64 before narrowing on 32-bit targets; no unsafe changes; not a human audit."
 
 [[exemptions.typenum]]
 version = "1.20.1"

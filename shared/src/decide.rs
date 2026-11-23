@@ -206,14 +206,23 @@ fn uses_answered(uses: &[(String, String, Vec<String>)], answers: &[RememberedAn
     })
 }
 
-/// The day record is current: not ended.
+/// How far the phone's clock may read before a day's first approval and the day still count:
+/// small corrections of the clock, not a clock set back.
+pub const DAY_CLOCK_BACK_MS: u64 = 5 * 60 * 1000;
+
+/// The day record is current: not ended. It ends at the first of: its recorded end (02:00 by
+/// the UTC offset at the first approval, or 14 hours), and 02:00 by the offset the phone has
+/// now, so a change of daylight saving time or of time zone never makes the day run past
+/// 02:00 on the phone's clock. A clock that reads earlier than the first approval (set back)
+/// ends it too.
 pub fn day_active(day: &DayRecord, now: u64, utc_offset_secs: i32) -> bool {
+    let by_offset_now = day_end(day.first_approval, utc_offset_secs);
     let ends = if day.ends > 0 {
-        day.ends
+        day.ends.min(by_offset_now)
     } else {
-        day_end(day.first_approval, utc_offset_secs)
+        by_offset_now
     };
-    now < ends
+    now < ends && now.saturating_add(DAY_CLOCK_BACK_MS) >= day.first_approval
 }
 
 /// Decides one opened request.
@@ -484,6 +493,58 @@ mod tests {
         }
     }
 
+    /// 2026-11-21T00:00:00Z.
+    const MIDNIGHT: u64 = 1_795_219_200_000;
+    const H: u64 = 3_600_000;
+
+    fn day_at(first_approval: u64, utc_offset_secs: i32) -> DayRecord {
+        DayRecord {
+            machine: "m".into(),
+            first_approval,
+            place_id: Some("desk".into()),
+            ends: day_end(first_approval, utc_offset_secs),
+        }
+    }
+
+    #[test]
+    fn day_ends_at_two_by_the_clock_on_the_wall_after_daylight_saving_starts() {
+        // A zone that moves its clocks from 00:00 (UTC-4) to 01:00 (UTC-3), as Santiago does.
+        // First approval at 20:00 UTC-4; the wall shows 02:00 at 05:00 UTC.
+        let day = day_at(MIDNIGHT, -4 * 3600);
+        assert!(day_active(&day, MIDNIGHT + 5 * H - 1, -3 * 3600));
+        assert!(!day_active(&day, MIDNIGHT + 5 * H + 30 * 60_000, -3 * 3600));
+        // Without the change, the day runs to 02:00 UTC-4 as before.
+        assert!(day_active(&day, MIDNIGHT + 6 * H - 1, -4 * 3600));
+        assert!(!day_active(&day, MIDNIGHT + 6 * H, -4 * 3600));
+    }
+
+    #[test]
+    fn day_ends_at_two_where_the_phone_is_now() {
+        // First approval at 19:30 in UTC-5; the phone is now in UTC+1, where it is 03:30.
+        let day = day_at(MIDNIGHT + 30 * 60_000, -5 * 3600);
+        assert!(!day_active(&day, MIDNIGHT + 2 * H + 30 * 60_000, 3600));
+        // Going west only makes the day end sooner by the old zone's 02:00 or 14 hours.
+        let day = day_at(MIDNIGHT + 9 * H, 3600);
+        assert!(day_active(&day, MIDNIGHT + 20 * H, -5 * 3600));
+        assert!(!day_active(&day, MIDNIGHT + 23 * H, -5 * 3600));
+    }
+
+    #[test]
+    fn a_clock_set_back_does_not_stretch_the_day() {
+        let day = day_at(MIDNIGHT + 9 * H, 0);
+        assert!(day_active(&day, MIDNIGHT + 9 * H, 0));
+        // The phone's clock now reads two hours before the day's first approval.
+        assert!(!day_active(&day, MIDNIGHT + 7 * H, 0));
+        let f = with_use(facts(RequestKind::Open, 1), "OPENAI_API_KEY");
+        let mut c = ctx();
+        c.day = Some(DayRecord {
+            first_approval: NOW + 2 * H,
+            ends: NOW + 14 * H,
+            ..c.day.unwrap()
+        });
+        assert_eq!(decide_facts(&f, &c).asking, Asking::OneTap);
+    }
+
     #[test]
     fn open_from_agent_without_answer_is_first_use() {
         let f = with_use(facts(RequestKind::Open, 1), "AWS_KEY");
@@ -587,13 +648,29 @@ mod tests {
 
     #[test]
     fn hand_added_places_settle_after_a_day() {
-        let learned = TrustedPlace { id: "p".into(), created: NOW, ..TrustedPlace::default() };
+        let learned = TrustedPlace {
+            id: "p".into(),
+            created: NOW,
+            ..TrustedPlace::default()
+        };
         assert!(place_settled(learned.clone(), NOW));
-        let manual = TrustedPlace { manual: true, ..learned };
+        let manual = TrustedPlace {
+            manual: true,
+            ..learned
+        };
         assert!(!place_settled(manual.clone(), NOW));
-        assert!(!place_settled(manual.clone(), NOW + MANUAL_PLACE_SETTLE_MS - 1));
+        assert!(!place_settled(
+            manual.clone(),
+            NOW + MANUAL_PLACE_SETTLE_MS - 1
+        ));
         assert!(place_settled(manual.clone(), NOW + MANUAL_PLACE_SETTLE_MS));
-        assert!(!place_settled(TrustedPlace { deleted: true, ..manual }, NOW + 2 * MANUAL_PLACE_SETTLE_MS));
+        assert!(!place_settled(
+            TrustedPlace {
+                deleted: true,
+                ..manual
+            },
+            NOW + 2 * MANUAL_PLACE_SETTLE_MS
+        ));
     }
 
     #[test]

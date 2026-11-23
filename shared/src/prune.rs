@@ -1,8 +1,8 @@
 //! Lifetimes (SPEC.md 6.4): answers unused for 90 days go, machines unseen for 90 days are
 //! flagged, inventory unseen for a year is stale, tombstones older than 90 days are dropped,
-//! summaries older than 12 months are dropped. Machine and place tombstones are not dropped:
-//! after 90 days they shrink to their key, so a copy of the state from before the removal
-//! (another install, an old blob) cannot bring the machine or the place back.
+//! summaries older than 12 months (by the calendar) are dropped. Machine and place tombstones
+//! are not dropped: after 90 days they shrink to their key, so a copy of the state from before
+//! the removal (another install, an old blob) cannot bring the machine or the place back.
 
 use crate::model::{Machine, RememberedAnswer, State, TrustedPlace};
 
@@ -72,10 +72,24 @@ pub fn prune_state(mut s: State, now: u64) -> State {
     }
     s.answers.retain(|a| !a.deleted || a.updated >= old);
     s.inventory.retain(|i| !i.deleted || i.updated >= old);
+    // Twelve months by the calendar: this month and the eleven before it. "This month" is
+    // taken 14 hours back, so no time zone's current month counts as older than it is.
+    let first_kept = first_kept_month(now);
+    s.summaries
+        .retain(|m| m.month.as_str() >= first_kept.as_str());
     s.summaries.sort_by(|a, b| b.month.cmp(&a.month));
     s.summaries.truncate(12);
     s.summaries.sort_by(|a, b| a.month.cmp(&b.month));
     s
+}
+
+/// The oldest month (`YYYY-MM`) a summary is kept for at `now`.
+fn first_kept_month(now: u64) -> String {
+    let this = crate::day::local_month(now.saturating_sub(14 * 3_600_000), 0);
+    let y: i64 = this[..4].parse().unwrap_or(0);
+    let m: i64 = this[5..].parse().unwrap_or(1);
+    let n = y * 12 + (m - 1) - 11;
+    format!("{:04}-{:02}", n.div_euclid(12), n.rem_euclid(12) + 1)
 }
 
 /// Days until an answer is removed (SPEC.md 11.10: "Unused for 80 days. Removed in 10 days.").
@@ -129,11 +143,11 @@ mod tests {
             last_use: NOW - 400 * D,
             ..InventoryItem::default()
         });
-        for m in 1..=14 {
+        // Fourteen months up to NOW's month, 2025-10 to 2026-11.
+        for n in 0..14 {
+            let (y, m) = if n < 3 { (2025, 10 + n) } else { (2026, n - 2) };
             s.summaries.push(MonthSummary {
-                month: format!("2025-{m:02}")
-                    .replace("2025-13", "2026-01")
-                    .replace("2025-14", "2026-02"),
+                month: format!("{y}-{m:02}"),
                 ..MonthSummary::default()
             });
         }
@@ -153,8 +167,27 @@ mod tests {
         );
         assert!(p.inventory[0].stale);
         assert_eq!(p.summaries.len(), 12);
-        assert_eq!(p.summaries[0].month, "2025-03");
+        assert_eq!(p.summaries[0].month, "2025-12");
         assert_eq!(answer_days_left(NOW - 80 * D, NOW), 10);
+    }
+
+    #[test]
+    fn summaries_are_kept_twelve_months_by_the_calendar() {
+        // Months with nothing in them leave gaps: 2025-01 is 22 months old at NOW (2026-11).
+        let s = State {
+            summaries: ["2025-01", "2025-02", "2025-12", "2026-10", "2026-11"]
+                .into_iter()
+                .map(|m| MonthSummary {
+                    month: m.into(),
+                    keys_used: 1,
+                    ..MonthSummary::default()
+                })
+                .collect(),
+            ..State::default()
+        };
+        let p = prune_state(s, NOW);
+        let months: Vec<&str> = p.summaries.iter().map(|s| s.month.as_str()).collect();
+        assert_eq!(months, ["2025-12", "2026-10", "2026-11"]);
     }
 
     #[test]

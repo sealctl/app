@@ -250,7 +250,10 @@ private struct CardCheck: View {
                 MutedText("Check your card · \(index + 1) of 3")
                 TitleText("Which is word \(pos)?")
                 ForEach(choices, id: \.self) { c in
-                    ChoiceButton(c) { pick(c, pos) }
+                    // The choices are words: drawn in the secure layer, out of screenshots (11.21).
+                    ChoiceButton(c, action: { pick(c, pos) }) {
+                        SecureWord(text: c, font: Fonts.mono(.title3))
+                    }
                 }
                 ErrorText(message)
             }

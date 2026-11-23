@@ -245,6 +245,8 @@ private fun WordsPages(onDone: () -> Unit) {
 
 @Composable
 private fun CardCheck(onAgain: () -> Unit, onPassed: () -> Unit) {
+    // The choices are words: FLAG_SECURE while the check is up (SPEC.md 11.21).
+    SecureScreen()
     val positions = remember { Graph.words.positions(3, 2) }
     var index by rememberSaveable { mutableIntStateOf(0) }
     var wrong by rememberSaveable { mutableIntStateOf(0) }

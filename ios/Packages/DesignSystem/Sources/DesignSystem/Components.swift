@@ -182,20 +182,34 @@ public struct TextButton: View {
     }
 }
 
-/// One answer of the 3-of-4 card check, in monospace.
-public struct ChoiceButton: View {
+/// One answer of the 3-of-4 card check, in monospace. `label` draws the answer (the app passes
+/// a word drawn in the secure layer); `title` stays the button's accessibility label.
+public struct ChoiceButton<Label: View>: View {
     let title: String
     let action: () -> Void
-    public init(_ title: String, action: @escaping () -> Void) { self.title = title; self.action = action }
+    let label: Label
+    public init(_ title: String, action: @escaping () -> Void, @ViewBuilder label: () -> Label) {
+        self.title = title
+        self.action = action
+        self.label = label()
+    }
     public var body: some View {
         Button(action: action) {
-            Text(verbatim: title).font(Fonts.mono(.title3)).foregroundStyle(Palette.ink)
+            label.font(Fonts.mono(.title3)).foregroundStyle(Palette.ink)
                 .frame(maxWidth: .infinity, minHeight: 52)
                 .background(Palette.surface, in: RoundedRectangle(cornerRadius: 12))
                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(Palette.border, lineWidth: 1.5))
+                .contentShape(RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(Text(verbatim: title))
         .accessibilityIdentifier("choice \(title)")
+    }
+}
+
+extension ChoiceButton where Label == Text {
+    public init(_ title: String, action: @escaping () -> Void) {
+        self.init(title, action: action) { Text(verbatim: title) }
     }
 }
 

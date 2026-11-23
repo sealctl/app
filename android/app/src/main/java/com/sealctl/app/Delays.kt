@@ -6,13 +6,14 @@ internal object Delays {
     const val LEVEL3_SECS = 7200
 
     /**
-     * The delay of a level 2 or 3 confirm, in seconds. [arrival] is the verdict's delay from
-     * when the request arrived, [level] its confirmation level, and [liftedNow] whether the
-     * place the phone is in at the confirm lifts the delay. [testSecs] (debug builds only, 0
-     * otherwise) shortens a delay that applies.
+     * The delay of a level 2 or 3 confirm, in seconds, decided when the person confirms: the
+     * two hours at level 3 unless the place the phone is in now lifts them ([liftedNow]), and
+     * never less than [arrival], the verdict's delay from when the request arrived (the phone
+     * may have left the place, or the place been removed, while the card was open). [testSecs]
+     * (debug builds only, 0 otherwise) shortens a delay that applies.
      */
     fun atConfirm(arrival: Int, level: Int, liftedNow: Boolean, testSecs: Int = 0): Int =
-        shortened(arrival, testSecs)
+        shortened(maxOf(arrival, if (level >= 3 && !liftedNow) LEVEL3_SECS else 0), testSecs)
 
     /** [secs], or [testSecs] instead when a delay applies and a test build asks for it. */
     fun shortened(secs: Int, testSecs: Int): Int = if (secs > 0 && testSecs > 0) testSecs else secs

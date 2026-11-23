@@ -840,10 +840,12 @@ class Engine(
      * not-before time two hours on away from a trusted place.
      */
     suspend fun confirmSensitive(w: Waiting): Boolean {
+        // One reading of the place, for both the delay and the reply.
         val place = placeKind()
+        val lifted = place == PlaceKind.TRUSTED && placeSettled()
         return when (w.verdict.kind) {
             RequestKind.UNSEAL -> {
-                val delay = Delays.atConfirm(w.verdict.delaySecs.toInt(), w.verdict.level.toInt(), delayLifted(), testDelaySecs())
+                val delay = Delays.atConfirm(w.verdict.delaySecs.toInt(), w.verdict.level.toInt(), lifted, testDelaySecs())
                 val notBefore = System.currentTimeMillis() + delay * 1000L
                 val ok = answerCard(w) { c ->
                     send(c.request, c.relay, Decision.Plan(place, notBefore.toULong()), "confirmed", allowed = true,
@@ -956,7 +958,7 @@ class Engine(
     /** Starts a level 3 action on the phone: at once at a trusted place, else after the hour. */
     suspend fun startPhoneAction(what: String): DelayedAction? {
         if (delayLifted()) return null
-        val delay = delaySecs(7200)
+        val delay = delaySecs(Delays.LEVEL3_SECS)
         val id = randomId()
         val d = relay.addDelayed(id, delay)
         val action = DelayedAction(id, what, null, d.releaseAt.toULong(), d.expires.toULong(), "waiting", null)

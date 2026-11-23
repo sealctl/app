@@ -95,23 +95,26 @@ struct AboutView: View {
     }
 }
 
-/// Licences (SPEC.md 11.19): the app's own licences, then every Rust crate in SealctlFFI with its
-/// licence text (notices/rust-crates.txt, made by scripts/notices.sh with cargo-about).
+/// Licences (SPEC.md 11.18): the app's own licences, then every Rust crate in SealctlFFI with its
+/// licence text (notices/rust-crates.txt, made by scripts/notices.sh with cargo-about). Same
+/// header and paragraph split as Android's LicencesScreen.
 struct LicencesView: View {
     @Environment(Router.self) private var router
     /// One block per paragraph, so no single Text is thousands of lines long.
     private static let blocks: [String] = {
         guard let url = Bundle.main.url(forResource: "rust-crates", withExtension: "txt"),
               let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
-        return text.components(separatedBy: "\n\n")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+        // Some licence texts have CRLF line ends; a Swift Character holds "\r\n" whole, so
+        // normalise first or \n would not match there.
+        return text.replacingOccurrences(of: "\r\n", with: "\n").split(separator: #/\n\s*\n/#)
+            .map { String($0.reversed().drop(while: \.isWhitespace).reversed()) }
+            .filter { !$0.allSatisfy(\.isWhitespace) }
     }()
     var body: some View {
         Page("Licences", onBack: { router.pop() }) {
-            BodyText("sealctl app: AGPL-3.0. sealctl-core: MIT.")
+            BodyText("sealctl app: AGPL-3.0. sealctl-core: MIT. Source code: github.com/sealctl/app.")
             BodyText("Swift packages: only the app's own, under AGPL-3.0.")
-            BodyText("Apple frameworks: SwiftUI, LocalAuthentication, CoreLocation, AVFoundation, UserNotifications (Apple SDK terms).")
+            BodyText("Apple frameworks: SwiftUI, UIKit, Foundation, Security, LocalAuthentication, CoreLocation, AVFoundation, UserNotifications, Network (Apple SDK terms).")
             LazyVStack(alignment: .leading, spacing: 8) {
                 ForEach(Array(Self.blocks.enumerated()), id: \.offset) { _, block in
                     if block.hasPrefix("=== ") {

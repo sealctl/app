@@ -830,8 +830,10 @@ class Engine(
     }
 
     /** The level 3 delay in seconds (shortened only in debug builds that ask for it). */
-    fun delaySecs(verdictDelay: Int): Int =
-        if (verdictDelay > 0 && BuildConfig.DEBUG && BuildConfig.TEST_DELAY_SECS > 0) BuildConfig.TEST_DELAY_SECS else verdictDelay
+    fun delaySecs(verdictDelay: Int): Int = Delays.shortened(verdictDelay, testDelaySecs())
+
+    /** The shortened level 3 delay a debug build asks for; 0 in release builds. */
+    private fun testDelaySecs(): Int = if (BuildConfig.DEBUG) BuildConfig.TEST_DELAY_SECS else 0
 
     /**
      * After biometrics: answer a level 2 or 3 request. `unseal` signs the plan, with the
@@ -841,7 +843,7 @@ class Engine(
         val place = placeKind()
         return when (w.verdict.kind) {
             RequestKind.UNSEAL -> {
-                val delay = delaySecs(w.verdict.delaySecs.toInt())
+                val delay = Delays.atConfirm(w.verdict.delaySecs.toInt(), w.verdict.level.toInt(), delayLifted(), testDelaySecs())
                 val notBefore = System.currentTimeMillis() + delay * 1000L
                 val ok = answerCard(w) { c ->
                     send(c.request, c.relay, Decision.Plan(place, notBefore.toULong()), "confirmed", allowed = true,

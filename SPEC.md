@@ -681,7 +681,7 @@ Wording in this section is exact. Text in quotes is shown as written. `dev@mbp.e
 - Text in the system sans (SF Pro, Roboto). Machine names, key names, commands, paths, tags, the words fingerprint and the wordmark in the system monospace (SF Mono, `FontFamily.Monospace`). No bundled fonts.
 - Cards have 12-point corners and soft shadows. The primary button is filled with the accent; secondary buttons are outlined; Deny is a plain text button.
 - The wordmark `sealctl` (lower case, monospace, weight 600) sits at the top of Welcome and About.
-- App icon from `brand/app-icon.svg`: the shield and prompt in white on sealing wax, full bleed. iOS 18+ dark variant: shield `#f0675c` on `#0e121a`. Tinted variant: the glyph alone. Android adaptive icon: the glyph as foreground, `#b4232c` as background, the glyph as the monochrome layer.
+- App icon from `brand/app-icon.svg`: the shield and prompt in white on sealing wax, full bleed. iOS 18+ dark variant: shield `#ff5c63` (the dark accent) on `#0e121a`. Tinted variant: the glyph alone. Android adaptive icon: the glyph as foreground, `#b4232c` as background, the glyph as the monochrome layer.
 - Animation: the Waiting dot pulses; nothing else moves. Reduce Motion stops the pulse.
 
 ### 11.2 Main screens at a glance

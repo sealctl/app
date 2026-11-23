@@ -1036,6 +1036,7 @@ Agent display names: `claude` "Claude Code", `codex` "Codex", `gemini` "Gemini C
 
 - Swipe or menu: [Remove]. Removing takes effect at the agent's next use, which asks again.
 - An answer unused for 80 days shows "Unused for 80 days. Removed in 10 days."
+- An answer unused for 90 days answers nothing from that moment, whether or not the daily prune has removed it yet, and whatever copy a merge brought back. A use allowed once does not renew it; "Allow for this session" (which remembers) does.
 - Footer: "Agents ask once per key and repository. You at the keyboard are never asked inside an Open session. A file in a repository never grants anything."
 - Empty: "No answers yet. When you tap Allow on an agent's first use of a key, it's remembered here."
 

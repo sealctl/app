@@ -9,6 +9,7 @@ use sealctl_core::{Decision, Place as PlaceKind, RefuseReason, Request, RequestK
 
 use crate::day::day_end;
 use crate::model::{DayRecord, Hold, PlanApprovalRecord, RememberedAnswer, TrustedPlace};
+use crate::prune::answer_live;
 
 /// Two hours, the level 3 delay away from a trusted place.
 pub const DELAY_SECS: u32 = 7200;
@@ -194,13 +195,21 @@ pub fn place_settled(place: TrustedPlace, now: u64) -> bool {
     !place.deleted && (!place.manual || now >= place.created.saturating_add(MANUAL_PLACE_SETTLE_MS))
 }
 
-/// Whether every agent use has a live answer. A use that names no key has none.
-fn uses_answered(uses: &[(String, String, Vec<String>)], answers: &[RememberedAnswer]) -> bool {
+/// Whether every agent use has a live answer at `now` (not removed, within its 90 days).
+/// A use that names no key has none.
+fn uses_answered(
+    uses: &[(String, String, Vec<String>)],
+    answers: &[RememberedAnswer],
+    now: u64,
+) -> bool {
     uses.iter().all(|(agent, repo, names)| {
         !names.is_empty()
             && names.iter().all(|n| {
                 answers.iter().any(|a| {
-                    !a.deleted && &a.agent == agent && &a.repo_id == repo && &a.key_name == n
+                    answer_live(a, now)
+                        && &a.agent == agent
+                        && &a.repo_id == repo
+                        && &a.key_name == n
                 })
             })
     })
@@ -295,7 +304,7 @@ pub fn decide_facts(f: &RequestFacts, ctx: &DecideContext) -> Verdict {
         match kind {
             RequestKind::Open => {
                 v.options = vec![AllowSession, AllowOnce, Deny];
-                let answered = uses_answered(&f.uses, &ctx.answers);
+                let answered = uses_answered(&f.uses, &ctx.answers, ctx.now);
                 v.agent_first_use = !answered;
                 let day_here = ctx.day.as_ref().is_some_and(|d| {
                     day_active(d, ctx.now, ctx.utc_offset_secs)
@@ -313,7 +322,7 @@ pub fn decide_facts(f: &RequestFacts, ctx: &DecideContext) -> Verdict {
                 v.options = vec![Allow, AllowOnce, Deny];
                 v.agent_first_use = true;
                 // An answer covers the named keys only; any other keys follow the `keys` rule.
-                if uses_answered(&f.uses, &ctx.answers)
+                if uses_answered(&f.uses, &ctx.answers, ctx.now)
                     && !f.uses.is_empty()
                     && (!f.has_keys || ctx.session_open)
                 {
@@ -431,6 +440,8 @@ mod tests {
             agent: agent.into(),
             key_name: key.into(),
             repo_id: repo.into(),
+            created: NOW - 86_400_000,
+            last_used: NOW - 3_600_000,
             ..RememberedAnswer::default()
         }
     }
@@ -543,6 +554,27 @@ mod tests {
             ..c.day.unwrap()
         });
         assert_eq!(decide_facts(&f, &c).asking, Asking::OneTap);
+    }
+
+    #[test]
+    fn an_answer_past_its_lifetime_answers_nothing_before_it_is_pruned() {
+        let mut c = ctx();
+        c.answers[0].created = NOW - 200 * 86_400_000;
+        c.answers[0].last_used = NOW - 91 * 86_400_000;
+        let v = decide_facts(
+            &with_use(facts(RequestKind::Agent, 1), "OPENAI_API_KEY"),
+            &c,
+        );
+        assert_eq!((v.asking, v.agent_first_use), (Asking::OneTap, true));
+        let v = decide_facts(&with_use(facts(RequestKind::Open, 1), "OPENAI_API_KEY"), &c);
+        assert_eq!((v.asking, v.agent_first_use), (Asking::OneTap, true));
+        // Used 89 days ago: still answers.
+        c.answers[0].last_used = NOW - 89 * 86_400_000;
+        let v = decide_facts(
+            &with_use(facts(RequestKind::Agent, 1), "OPENAI_API_KEY"),
+            &c,
+        );
+        assert_eq!(v.asking, Asking::Automatic);
     }
 
     #[test]

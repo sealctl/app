@@ -4,18 +4,25 @@
 //! after 90 days they shrink to their key, so a copy of the state from before the removal
 //! (another install, an old blob) cannot bring the machine or the place back.
 
-use crate::model::{Machine, State, TrustedPlace};
+use crate::model::{Machine, RememberedAnswer, State, TrustedPlace};
 
 /// 90 days in ms.
 pub const NINETY_DAYS_MS: u64 = 90 * 86_400_000;
 /// 365 days in ms.
 pub const YEAR_MS: u64 = 365 * 86_400_000;
 
+/// Whether an answer still answers at `now`: not removed, and used (or made) in the last 90
+/// days. The rule [`prune_state`] applies, so an answer past its lifetime answers nothing even
+/// before a prune has run, or after a merge brought back a copy from before one.
+pub fn answer_live(a: &RememberedAnswer, now: u64) -> bool {
+    !a.deleted && a.last_used.max(a.created) >= now.saturating_sub(NINETY_DAYS_MS)
+}
+
 /// Applies the lifetimes at `now`; changed records get `updated = now`.
 pub fn prune_state(mut s: State, now: u64) -> State {
     let old = now.saturating_sub(NINETY_DAYS_MS);
     for a in s.answers.iter_mut().filter(|a| !a.deleted) {
-        if a.last_used.max(a.created) < old {
+        if !answer_live(a, now) {
             a.deleted = true;
             a.updated = now;
         }

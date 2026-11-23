@@ -598,10 +598,13 @@ impl Store {
                             && &a.key_name == name
                     });
                     match existing {
-                        Some(a) => {
+                        // An answer past its 90 days (not pruned yet) is renewed only when this
+                        // answer remembers; a use allowed once leaves it to expire.
+                        Some(a) if remember || crate::prune::answer_live(a, now) => {
                             a.last_used = now;
                             a.updated = bump(a.updated, now);
                         }
+                        Some(_) => {}
                         None if remember => s.answers.push(RememberedAnswer {
                             agent: u.agent.clone(),
                             key_name: name.clone(),
@@ -1264,6 +1267,46 @@ mod tests {
         assert!(!st.see_request(req.id(), req.machine(), 0).unwrap());
         st.set_now(t0 + 25 * MIN + 2 * w + PENDING_KEEP_MS);
         assert!(st.see_request("r1".into(), "m".into(), 0).unwrap());
+    }
+
+    #[test]
+    fn a_use_allowed_once_does_not_revive_an_answer_past_its_lifetime() {
+        use sealctl_core::wire::AgentUse;
+        let st = store();
+        let m = paired(&st);
+        let t0 = MIDNIGHT + 9 * H;
+        st.set_now(t0);
+        st.apply(Event::RememberAnswer {
+            answer: RememberedAnswer {
+                agent: "claude".into(),
+                key_name: "K".into(),
+                repo_id: "r".into(),
+                ..RememberedAnswer::default()
+            },
+        })
+        .unwrap();
+        let uses = || {
+            vec![AgentUse {
+                agent: "claude".into(),
+                repository: "r".into(),
+                names: vec!["K".into()],
+            }]
+        };
+        // 91 days later, before any prune: the agent asks again and is allowed once.
+        let later = t0 + 91 * 24 * H;
+        st.set_now(later);
+        let r = request_at(&m, "agent", later, uses());
+        st.answered(r, "once".into(), true, false, None, 0).unwrap();
+        let a = st.snapshot().unwrap().answers[0].clone();
+        assert_eq!(a.last_used, t0);
+        assert!(st.prune(later).unwrap().answers[0].deleted);
+        // Allowed and remembered: the answer is kept again from now.
+        let r = request_at(&m, "agent", later, uses());
+        st.answered(r, "one_tap".into(), true, true, None, 0)
+            .unwrap();
+        let s = st.snapshot().unwrap();
+        assert_eq!(s.live_answers().count(), 1);
+        assert_eq!(s.live_answers().next().unwrap().last_used, later);
     }
 
     #[test]

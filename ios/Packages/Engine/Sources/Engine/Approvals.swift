@@ -41,6 +41,7 @@ extension AppEngine {
                 return
             }
         }
+        let mark = placeMark()
         var ctx = await context(r, machine)
         var verdict = decide(request: req, ctx: ctx)
         if verdict.asking == .planKeys, ctx.plan?.delayId != nil {
@@ -54,7 +55,7 @@ extension AppEngine {
             await silent(req, r)
         case .automatic:
             guard let d = verdict.automatic else { return }
-            if await reply(req, r, d, outcome: "automatic", allowed: true) {
+            if await reply(req, r, d, outcome: "automatic", allowed: true, decidedAt: mark) {
                 let place = currentPlace.flatMap { id in state.places.first { $0.id == id && !$0.deleted }?.name }
                 await notifier.post(id: "auto-\(r.id)", content: Notes.passive(Texts.answeredByItself(displayName(machine), place: place)))
             }
@@ -156,7 +157,7 @@ extension AppEngine {
         let approval = PlanApproval(machine: plan.machine, hash: plan.planHash, notBefore: plan.notBefore,
                                     keys: plan.keys.map { KeyRef(purpose: $0.purpose, id: $0.id) })
         guard let sealed = await withRoot({ try sealPlanKeysReply(root: $0, keys: keys, request: req, approval: approval) }) else { return }
-        if await post(r, sealed, delay: nil, userTapped: false) {
+        if await post(r, sealed, delay: nil, userTapped: false) == .posted {
             _ = try? await db.run {
                 try $0.answered(request: req, outcome: "in_session", allowed: true, remember: false, placeId: nil, utcOffsetSecs: utcOffset())
             }
@@ -167,15 +168,17 @@ extension AppEngine {
     func scheduleExpiry(_ w: Waiting) {
         expiryTasks[w.relay.id]?.cancel()
         expiryTasks[w.relay.id] = Task { [weak self] in
-            let left = w.relay.expires - nowMs()
+            let left = w.deadline - nowMs()
             if left > 0 { try? await Task.sleep(for: .milliseconds(left)) }
             if Task.isCancelled { return }
             await self?.expire(w.relay.id)
         }
     }
 
+    /// The card's time is up. While an answer is on its way the answer decides: the relay
+    /// takes it, or the answer closes the card when it fails after the deadline.
     func expire(_ id: String) async {
-        guard let w = waiting.first(where: { $0.relay.id == id && !$0.expired }) else { return }
+        guard !answering.contains(id), let w = waiting.first(where: { $0.relay.id == id && !$0.expired }) else { return }
         markExpired(id)
         await notifier.remove(ids: [id])
         _ = try? await db.run { try $0.closeRequest(id: id, outcome: "expired") }
@@ -218,96 +221,187 @@ extension AppEngine {
 
     /// Answers a waiting One tap request (card button or notification action) with one of
     /// the options it offers. Level 2 and 3 requests are answered only in the app (9.6).
+    /// A tap after the card's time, or an answer already on its way (from a notification action
+    /// and the card at once), sends nothing. A reply the relay did not take keeps the card and
+    /// says so (SPEC.md 8.5, 11.7).
     @discardableResult
     public func answer(_ id: String, _ option: ReplyOption) async -> Bool {
-        guard let w = waiting.first(where: { $0.relay.id == id && !$0.expired }),
-              w.verdict.asking == .oneTap, w.verdict.options.contains(option) else { return false }
+        await answerOutcome(id, option) == .posted
+    }
+
+    func answerOutcome(_ id: String, _ option: ReplyOption) async -> Sent? {
+        guard !answering.contains(id), let w = waiting.first(where: { $0.relay.id == id && !$0.expired }),
+              w.verdict.asking == .oneTap, w.verdict.options.contains(option) else { return nil }
+        if nowMs() >= w.deadline {
+            // The timer did not run (a late timer, a resumed process): the card stops waiting.
+            await expire(id)
+            return .gone
+        }
+        answering.insert(id)
+        let mark = placeMark()
         let (decision, outcome) = decisionFor(w, option)
         var remember = false
         if case .remember = decision { remember = true }
-        let ok = await reply(w.request, w.relay, decision, outcome: outcome, allowed: option != .deny, remember: remember)
-        if ok {
+        let sent = await send(w.request, w.relay, decision, outcome: outcome, allowed: option != .deny, remember: remember,
+                              decidedAt: mark)
+        answering.remove(id)
+        switch sent {
+        case .posted:
             drop(id)
             await notifier.remove(ids: [id])
             if w.verdict.agentFirstUse { await applyLocal(.agentNoteShown) }
             show(Texts.afterAnswer(option, w))
             await updateBadge()
+        case .failed:
+            if nowMs() >= w.deadline {
+                await expire(id)
+            } else {
+                show(Texts.answerNotSent)
+                // The timer may have fired while the answer was on its way, and left the card to it.
+                scheduleExpiry(w)
+            }
+        case .gone:
+            // `404 gone` closed the card already; a reply still retrying at the deadline did not.
+            if waiting.contains(where: { $0.relay.id == id && !$0.expired }) { await expire(id) }
+        case .locked:
+            // reply() said "Unlock your phone to answer."
+            scheduleExpiry(w)
         }
-        return ok
+        return sent
     }
 
-    /// A notification action: fetch the request again if this process did not see it.
+    /// A notification action: fetch the request again if this process did not see it. When the
+    /// answer can't be sent, the request's notification comes back saying so (SPEC.md 10.1).
     public func answerFromNotification(_ id: String, action: String) async {
         guard let option = Texts.option(actionId: action) else { return }
-        if !waiting.contains(where: { $0.relay.id == id }) { await catchUp() }
+        if !waiting.contains(where: { $0.relay.id == id }) {
+            if !(await catchUp()) {
+                await notifier.post(id: id, content: Notes.active(Texts.requestTitle, body: Texts.answerNotSent,
+                                                                  userInfo: ["id": id]))
+                return
+            }
+        }
         if option != .deny, !(await vault.canReadRoot()) {
             let name = waiting.first { $0.relay.id == id }.map { displayName($0.machine) } ?? ""
             await notifier.post(id: "unlock-\(id)", content: Notes.active(Texts.unlockToAnswer(name)))
             return
         }
-        await answer(id, option)
+        if await answerOutcome(id, option) == .failed, let w = waiting.first(where: { $0.relay.id == id && !$0.expired }) {
+            let content = Notes.requestContent(w, machineName: displayName(w.machine), biometry: biometryName)
+            content.body = Texts.answerNotSent
+            await notifier.post(id: id, content: content)
+        }
+    }
+
+    /// Where the phone was when a decision was made, and how many place exits it had seen.
+    struct PlaceMark {
+        let place: String?
+        let exits: Int
+    }
+
+    func placeMark() -> PlaceMark { PlaceMark(place: currentPlace, exits: placeExits) }
+
+    /// What became of one reply.
+    enum Sent: Equatable {
+        /// The relay took it.
+        case posted
+        /// The machine stopped waiting (`404 gone`, or the request's time ran out).
+        case gone
+        /// The root could not be read: "Unlock your phone to answer."
+        case locked
+        /// Not sealed, or the relay did not take it; the request can be answered again.
+        case failed
     }
 
     /// Seals and posts one reply, then records it. False when it could not be sealed or the
     /// machine stopped waiting.
     func reply(_ req: Request, _ r: RelayRequest, _ decision: Decision, outcome: String, allowed: Bool,
-               remember: Bool = false, delay: Int? = nil) async -> Bool {
-        guard let keys = await phoneKeys() else { return false }
+               remember: Bool = false, delay: Int? = nil, decidedAt: PlaceMark? = nil) async -> Bool {
+        await send(req, r, decision, outcome: outcome, allowed: allowed, remember: remember, delay: delay,
+                   decidedAt: decidedAt) == .posted
+    }
+
+    /// `reply`, telling why a reply did not go. A request on the card whose reply did not go is
+    /// opened again from the relay's text, as the core seals a request once.
+    func send(_ req: Request, _ r: RelayRequest, _ decision: Decision, outcome: String, allowed: Bool,
+              remember: Bool = false, delay: Int? = nil, decidedAt: PlaceMark? = nil) async -> Sent {
+        let mark = decidedAt ?? placeMark()
+        guard let keys = await phoneKeys() else { return .failed }
         let needsRoot = allowed && !req.items().isEmpty
         let sealed: String
         if needsRoot {
             guard let root = await vault.readRoot() else {
                 show(Texts.unlockToAnswerShort)
-                return false
+                return .locked
             }
-            guard let s = try? sealReply(root: root, keys: keys, request: req, decision: decision) else { return false }
+            guard let s = try? sealReply(root: root, keys: keys, request: req, decision: decision) else { return .failed }
             sealed = s
         } else {
-            guard let s = try? sealReply(root: nil, keys: keys, request: req, decision: decision) else { return false }
+            guard let s = try? sealReply(root: nil, keys: keys, request: req, decision: decision) else { return .failed }
             sealed = s
         }
-        let posted = await post(r, sealed, delay: delay, userTapped: true)
-        if posted {
-            answeredIds.insert(r.id)
-            let place = currentPlace
-            let result = try? await db.run {
-                try $0.answered(request: req, outcome: outcome, allowed: allowed, remember: remember, placeId: place,
-                                utcOffsetSecs: utcOffset())
+        if let h = hooks.beforeReply { await h(r.id) }
+        let sent = await post(r, sealed, delay: delay, userTapped: true)
+        guard sent == .posted else {
+            if sent == .failed, let i = waiting.firstIndex(where: { $0.relay.id == r.id }),
+               let again = try? openRequest(keys: keys, relayMachineKey: r.machine, id: r.id, sealed: r.sealed) {
+                waiting[i] = waiting[i].reopened(again)
             }
-            _ = try? await db.run { try $0.closeRequest(id: r.id, outcome: "answered") }
-            if result?.firstOfDay == true { Task { await self.firstApprovalOfDay() } }
-            await refreshState()
-            scheduleUpload(after: 10)
+            return sent
         }
-        return posted
+        answeredIds.insert(r.id)
+        // A place left while this was on its way: the day did not begin there after all.
+        let left = mark.place != nil && placeExits != mark.exits
+        let place = left ? currentPlace : mark.place
+        let result = try? await db.run {
+            try $0.answered(request: req, outcome: outcome, allowed: allowed, remember: remember, placeId: place,
+                            utcOffsetSecs: utcOffset())
+        }
+        _ = try? await db.run { try $0.closeRequest(id: r.id, outcome: "answered") }
+        if result?.firstOfDay == true { Task { await self.firstApprovalOfDay() } }
+        await refreshState()
+        scheduleUpload(after: 10)
+        if left, allowed, let m = machine(r.machine) {
+            // The lock that leaving sent may have reached the machine before this answer did.
+            await lock(m, reason: "place")
+        }
+        return .posted
     }
 
-    /// Posts a reply with the retries of 8.5: 1, 2, 4 s, then every 10 s until `expires`.
-    func post(_ r: RelayRequest, _ sealed: String, delay: Int?, userTapped: Bool) async -> Bool {
+    /// The time a reply may still go, on this phone's clock.
+    func deadline(_ r: RelayRequest) -> Int64 {
+        waiting.first { $0.relay.id == r.id }?.deadline
+            ?? Waiting.deadline(seenAt: nowMs(), created: r.created, expires: r.expires)
+    }
+
+    /// Posts a reply with the retries of 8.5: 1, 2, 4 s, then every 10 s until the deadline.
+    func post(_ r: RelayRequest, _ sealed: String, delay: Int?, userTapped: Bool) async -> Sent {
         let backoff: [Double] = [1, 2, 4]
         var attempt = 0
+        let until = deadline(r)
         // `try? Task.sleep` returns at once in a cancelled task: stop then, or this spins until `expires`.
-        while nowMs() < r.expires && !Task.isCancelled {
+        while nowMs() < until && !Task.isCancelled {
             do {
                 try await relay.reply(id: r.id, sealed: sealed, delay: delay, userTapped: userTapped)
                 relayOk()
-                return true
+                return .posted
             } catch let e as RelayError {
                 if e.code == "gone" {
                     _ = try? await db.run { try $0.closeRequest(id: r.id, outcome: "expired") }
                     markExpired(r.id)
-                    return false
+                    await notifier.remove(ids: [r.id])
+                    return .gone
                 }
                 relayFailed(e)
-                if case .rateLimited = e { return false }
-                if (400..<500).contains(e.status) { return false }
+                if case .rateLimited = e { return .failed }
+                if (400..<500).contains(e.status) { return .failed }
             } catch {
                 relayFailed(error)
             }
             try? await Task.sleep(for: .seconds(attempt < backoff.count ? backoff[attempt] : 10))
             attempt += 1
         }
-        return false
+        return nowMs() >= until ? .gone : .failed
     }
 
     // MARK: levels 2 and 3 (9.6)
@@ -399,6 +493,7 @@ extension AppEngine {
                     m.state = d.state
                     if d.state == "cancelled" { m.cancelledBy = d.by }
                     await applyLocal(.putDelayed(action: m))
+                    if d.state == "cancelled" { await notifier.remove(ids: ["ready-\(d.id)"]) }
                 }
             } else {
                 await applyLocal(.putDelayed(action: DelayedAction(
@@ -496,6 +591,7 @@ extension AppEngine {
                     d.cancelledBy = by
                     await applyLocal(.putDelayed(action: d))
                 }
+                await notifier.remove(ids: ["ready-\(id)"])
                 return "cancelled:" + (by ?? "")
             case "too_early": return "too_early"
             case "gone":

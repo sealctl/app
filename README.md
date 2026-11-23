@@ -64,6 +64,14 @@ target/release/fake-relay &
 SEALCTL_TEST_RELAY=http://127.0.0.1:8787 FAKE_MACHINE_BIN=$PWD/target/release/fake-machine ios/scripts/swift-test.sh Engine
 ```
 
+The Engine timing tests start a fake relay of their own on a free loopback port, with its clock
+and failures set per test; they need only the two binaries:
+
+```sh
+FAKE_RELAY_BIN=$PWD/target/release/fake-relay FAKE_MACHINE_BIN=$PWD/target/release/fake-machine \
+  ios/scripts/swift-test.sh Engine --filter Timing
+```
+
 The UI tests (scheme `sealctlUITests`) drive the app on a simulator with Face ID enrolled. They
 need the fake relay and `ios/scripts/harness.py`, which runs the fake machine (and, with
 `SEALCTL_BIN`, the real `sealctl` CLI in a temporary HOME) for them and sends pushes with

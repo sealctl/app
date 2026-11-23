@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import EngineKit
+import Places
 import SealCore
 import UserNotifications
 import Vault
@@ -10,15 +11,22 @@ let testRelay = ProcessInfo.processInfo.environment["SEALCTL_TEST_RELAY"]
 let machineBin = ProcessInfo.processInfo.environment["FAKE_MACHINE_BIN"]
 /// The real sealctl CLI, run in a temporary HOME like sealctl's scripts/pair-test.sh.
 let cliBin = ProcessInfo.processInfo.environment["SEALCTL_BIN"]
+/// `tools/fake-relay`, which the timing tests start on a loopback port of their own.
+let relayBin = ProcessInfo.processInfo.environment["FAKE_RELAY_BIN"]
 
 /// Records notifications instead of showing them.
 @MainActor
 final class RecordingNotifier: Notifier {
     var posted: [(String, String)] = []
+    /// The body of each post, in the same order.
+    var bodies: [String] = []
     var removed: [String] = []
     var badge = 0
 
-    func post(id: String, content: UNNotificationContent, at: Date?) { posted.append((id, content.title)) }
+    func post(id: String, content: UNNotificationContent, at: Date?) {
+        posted.append((id, content.title))
+        bodies.append(content.body)
+    }
     func remove(ids: [String]) { removed += ids }
     func removeStale(now: Int64, answered: Set<String>) {}
     func allowed() -> Bool { true }
@@ -32,13 +40,27 @@ func tempDir() -> URL {
     return u
 }
 
+/// Places with location allowed and no monitoring: tests set `currentPlace` themselves.
 @MainActor
-func makeEngine(testDelay: Int = 2, vault: MemoryVault = MemoryVault()) async throws -> (AppEngine, MemoryVault, RecordingNotifier) {
+final class StubPlaces: PlacesProvider {
+    var hasForeground = true
+    var hasAlways = true
+    var undetermined = false
+    func requestWhenInUse() async {}
+    func requestAlways() async {}
+    func monitor(_ fences: [Fence], onTransition: @escaping @Sendable ([String], Bool?) async -> Void) async {}
+    func sample() async -> Fix? { nil }
+}
+
+@MainActor
+func makeEngine(testDelay: Int = 2, vault: MemoryVault = MemoryVault(), relayURL: String? = nil,
+                places: PlacesProvider? = nil) async throws -> (AppEngine, MemoryVault, RecordingNotifier) {
     let dir = tempDir()
     let db = try Database(path: dir.appendingPathComponent("sealctl.db").path)
     let notifier = RecordingNotifier()
-    let engine = await AppEngine(vault: vault, db: db, config: EngineConfig(relayURL: testRelay ?? "http://127.0.0.1:8787", testDelaySecs: testDelay),
-                                 files: SharedFiles(root: dir.appendingPathComponent("shared")), notifier: notifier, places: nil)
+    let url = relayURL ?? testRelay ?? "http://127.0.0.1:8787"
+    let engine = await AppEngine(vault: vault, db: db, config: EngineConfig(relayURL: url, testDelaySecs: testDelay),
+                                 files: SharedFiles(root: dir.appendingPathComponent("shared")), notifier: notifier, places: places)
     return (engine, vault, notifier)
 }
 
@@ -55,6 +77,10 @@ func onboard(_ engine: AppEngine) async throws {
 /// A `tools/fake-machine` process with its own home.
 final class FakeMachine: @unchecked Sendable {
     let home = tempDir()
+    /// The relay it talks to: the shared test relay, or a test's own `LocalRelay`.
+    let relay: String?
+
+    init(relay: String? = testRelay) { self.relay = relay }
 
     final class Run: @unchecked Sendable {
         let process: Process
@@ -112,7 +138,7 @@ final class FakeMachine: @unchecked Sendable {
         p.arguments = args
         var env = ProcessInfo.processInfo.environment
         env["FAKE_MACHINE_HOME"] = home.path
-        env["SEALCTL_RELAY"] = testRelay!
+        env["SEALCTL_RELAY"] = relay!
         p.environment = env
         let out = Pipe()
         p.standardOutput = out
@@ -128,6 +154,47 @@ final class FakeMachine: @unchecked Sendable {
         await withCheckedContinuation { c in
             DispatchQueue.global().async { c.resume(returning: r.wait()) }
         }
+    }
+}
+
+/// A `tools/fake-relay` of one test's own, on a free loopback port: never a shared or remote
+/// relay. Its `/test/` routes set its clock and make calls fail.
+final class LocalRelay: @unchecked Sendable {
+    let process = Process()
+    let url: String
+
+    init() throws {
+        let port = Int.random(in: 20_000..<40_000)
+        url = "http://127.0.0.1:\(port)"
+        process.executableURL = URL(fileURLWithPath: relayBin!)
+        process.arguments = ["--bind", "127.0.0.1:\(port)"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+    }
+
+    static func start() async throws -> LocalRelay {
+        let r = try LocalRelay()
+        for _ in 0..<100 {
+            if let (_, resp) = try? await URLSession.shared.data(from: URL(string: r.url + "/v1/health")!),
+               (resp as? HTTPURLResponse)?.statusCode == 200 { return r }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        r.stop()
+        throw CancellationError()
+    }
+
+    /// A `/test/` control call.
+    @discardableResult
+    func control(_ path: String, _ body: String) async throws -> String {
+        var req = URLRequest(url: URL(string: url + path)!)
+        req.httpMethod = "POST"
+        req.httpBody = Data(body.utf8)
+        return String(decoding: try await URLSession.shared.data(for: req).0, as: UTF8.self)
+    }
+
+    func stop() {
+        if process.isRunning { process.terminate() }
     }
 }
 

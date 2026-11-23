@@ -150,6 +150,7 @@ jobs:
         run: |
           cargo build --release -p fake-relay -p fake-machine
           echo "FAKE_MACHINE_BIN=$PWD/target/release/fake-machine" >> "$GITHUB_ENV"
+          echo "FAKE_RELAY_BIN=$PWD/target/release/fake-relay" >> "$GITHUB_ENV"
           # The CLI at the same sealctl commit as the core the app is built on (Cargo.lock).
           rev=$(sed -n 's/.*sealctl?rev=[0-9a-f]*#\([0-9a-f]*\)".*/\1/p' Cargo.lock | head -1)
           git clone -q --filter=blob:none https://github.com/sealctl/sealctl "$RUNNER_TEMP/sealctl"

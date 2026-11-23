@@ -31,7 +31,7 @@ import com.sealctl.designsystem.Mono
 import com.sealctl.designsystem.Sealctl
 
 /**
- * Settings → About → Licences (SPEC.md 11.19): the app's own licences, then every third-party
+ * Settings → About → Licences (SPEC.md 11.18): the app's own licences, then every third-party
  * notice, generated at build time (app/build.gradle.kts `androidNotices`, notices/ for Rust).
  * Lazy, because the full texts run to thousands of lines.
  */

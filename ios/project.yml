@@ -43,6 +43,9 @@ targets:
     sources:
       - path: App/Sources
       - path: App/Resources
+      # Licences screen: the Rust crates in SealctlFFI (scripts/notices.sh)
+      - path: ../notices/rust-crates.txt
+        buildPhase: resources
     dependencies:
       - package: SealCore
       - package: Vault

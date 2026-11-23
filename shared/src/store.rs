@@ -1656,6 +1656,24 @@ mod tests {
     }
 
     #[test]
+    fn a_clock_set_back_keeps_message_seqs_rising_and_ids_refused() {
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        st.set_now(t0);
+        let a = st.next_message_seq("m".into()).unwrap();
+        assert!(st.see_request("r".into(), "m".into(), 0).unwrap());
+        st.close_request("r".into(), "answered".into()).unwrap();
+        // The clock goes back an hour: the machine still sees a larger seq, and the answered
+        // id is still refused (it is kept longer, never shorter).
+        st.set_now(t0 - H);
+        let b = st.next_message_seq("m".into()).unwrap();
+        assert!(b > a);
+        assert!(!st.see_request("r".into(), "m".into(), 0).unwrap());
+        // Seqs of two machines are separate.
+        assert_eq!(st.next_message_seq("n".into()).unwrap(), t0 - H);
+    }
+
+    #[test]
     fn display_names_are_sanitised() {
         let mut m = machine(
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",

@@ -70,7 +70,15 @@ struct PairingView: View {
             CardWordsView(positions: 2, groups: 2, title: "Use your card", body: nil, onPassed: {
                 Task {
                     await e.vault.resetGate()
-                    await register(offer, replaces, e)
+                    let ok = await register(offer, replaces, e)
+                    if !ok {
+                        // Back to the screen that asked, where the error shows.
+                        if let k = replaces, let existing = e.machine(k) {
+                            step = .duplicate(offer, existing)
+                        } else {
+                            step = .confirm(offer)
+                        }
+                    }
                 }
             }, onCancel: { step = .confirm(offer) })
         case .done(let name):
@@ -125,13 +133,16 @@ struct PairingView: View {
         }
     }
 
-    private func register(_ offer: PairingOffer, _ replaces: String?, _ e: AppEngine) async {
+    @discardableResult
+    private func register(_ offer: PairingOffer, _ replaces: String?, _ e: AppEngine) async -> Bool {
         switch await e.pair(offer, replaces: replaces) {
         case .success(let m):
             haptic(true)
             step = .done(e.displayName(m))
+            return true
         case .failure(let err):
             error = err.text
+            return false
         }
     }
 }

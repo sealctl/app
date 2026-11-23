@@ -8,6 +8,8 @@ import UserNotifications
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     @MainActor static var engine: AppEngine?
     @MainActor static weak var model: AppModel?
+    /// This launch's APNs token. Kept: before the words exist the engine can't register it,
+    /// and iOS gives it again only at the next launch.
     @MainActor static var pendingToken: String?
 
     func application(_ application: UIApplication,
@@ -28,8 +30,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
         Task { @MainActor in
-            if let e = AppDelegate.engine { await e.registerPush(token: hex) } else { AppDelegate.pendingToken = hex }
+            AppDelegate.pendingToken = hex
+            if let e = AppDelegate.engine { await e.registerPush(token: hex) }
         }
+    }
+
+    /// Registers this launch's token when the engine has not stored it yet (after onboarding,
+    /// or when the relay was down at the last try).
+    @MainActor
+    static func registerPendingToken(_ e: AppEngine) async {
+        if let t = pendingToken, e.local.device.token != t { await e.registerPush(token: t) }
     }
 
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {

@@ -2,6 +2,27 @@ import SwiftUI
 
 // MARK: text
 
+extension Text {
+    /// The app's copy marks commands with backticks. Text can also carry what a machine sent
+    /// (names, agents, repositories), so Markdown is applied only when all it does is draw
+    /// code spans: links, emphasis, escapes and entities would hide or change characters, and
+    /// such text is drawn as it is.
+    public init(inlineMarkdown text: String) {
+        if let a = Text.codeSpansOnly(text) { self.init(a) } else { self.init(verbatim: text) }
+    }
+
+    /// The parsed text when it shows every character of `text` except the backticks, with no
+    /// link; otherwise nil.
+    static func codeSpansOnly(_ text: String) -> AttributedString? {
+        guard text.contains("`") else { return nil }
+        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        guard let a = try? AttributedString(markdown: text, options: options) else { return nil }
+        guard String(a.characters) == text.replacingOccurrences(of: "`", with: "") else { return nil }
+        guard !a.runs.contains(where: { $0.link != nil }) else { return nil }
+        return a
+    }
+}
+
 public struct TitleText: View {
     let text: String
     public init(_ text: String) { self.text = text }
@@ -16,7 +37,7 @@ public struct BodyText: View {
     let text: String
     public init(_ text: String) { self.text = text }
     public var body: some View {
-        Text(LocalizedStringKey(text)).font(.body).foregroundStyle(Palette.ink2)
+        Text(inlineMarkdown: text).font(.body).foregroundStyle(Palette.ink2)
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -26,7 +47,7 @@ public struct MutedText: View {
     let text: String
     public init(_ text: String) { self.text = text }
     public var body: some View {
-        Text(LocalizedStringKey(text)).font(.subheadline).foregroundStyle(Palette.muted)
+        Text(inlineMarkdown: text).font(.subheadline).foregroundStyle(Palette.muted)
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -53,7 +74,7 @@ public struct ErrorText: View {
     public init(_ text: String?) { self.text = text }
     public var body: some View {
         if let text {
-            Text(LocalizedStringKey(text)).font(.subheadline).foregroundStyle(Palette.accent)
+            Text(inlineMarkdown: text).font(.subheadline).foregroundStyle(Palette.accent)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("error")
@@ -202,7 +223,7 @@ public struct Banner<Trailing: View>: View {
     }
     public var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(LocalizedStringKey(text)).font(.subheadline).foregroundStyle(Palette.ink)
+            Text(inlineMarkdown: text).font(.subheadline).foregroundStyle(Palette.ink)
                 .fixedSize(horizontal: false, vertical: true)
             trailing
         }

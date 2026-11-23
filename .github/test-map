@@ -1,0 +1,119 @@
+# Which tests a pull request runs (SPEC 17.1, "Test selection"). Read by scripts/select-tests.py,
+# which ios.yml and supply-chain.yml run in their `changes` jobs.
+#
+# Each line: a path glob, then the suites a change to a matching path needs. `*` matches within
+# one folder, `**` across folders. A path takes the suites of EVERY line it matches. A path that
+# no line matches runs everything, so a new file or folder is tested in full until it is mapped.
+#
+# Suites:
+#   all            everything: iOS (every package test and UI test) and Android
+#   none           no test of its own; marks the path as mapped
+#   ios            the iOS job: XCFramework, project, build (with nothing else selected, no tests)
+#   ios:all        the iOS job with every package test and every UI test
+#   pkg:<Package>  that Swift package's tests (ios/Packages/<Package>), on macOS and, for the
+#                  packages in the sealctl scheme, on the simulator
+#   pkg:all        every Swift package's tests
+#   ui:<Class>     one XCUITest class of ios/UITests (`-only-testing:sealctlUITests/<Class>`)
+#   ui:all         every UI test
+#   android        the Android jobs (the Gradle jobs in supply-chain.yml)
+#
+# A file in ios/Packages/<Package>/ also selects that package's tests; a change outside its
+# Tests/ folder selects the tests of every package that depends on it (Package.swift).
+# Push to main, schedules, manual runs, tags and pull requests labelled `ci:full` run everything.
+
+# ---- everything ---------------------------------------------------------------------------
+# build inputs, toolchain, CI and this selection itself; Cargo.toml and Cargo.lock also hold the
+# sealctl-core pin, which swaps the core both apps run on
+Cargo.lock                                    all
+**/Cargo.toml                                 all
+rust-toolchain.toml                           all
+flake.*                                       all
+uniffi-bindings.toml                          all
+.github/workflows/**                          all
+.github/test-map                              all
+scripts/select-tests*                         all
+# the shared core
+shared/**                                     all
+# test helpers (fake relay, fake machine) and the bindings generator
+tools/**                                      all
+# builds both libraries and compares both bindings
+scripts/check-core.sh                         all
+
+# ---- iOS: build and project -------------------------------------------------------------------
+scripts/build-core-ios.sh                     ios:all
+ios/project.yml                               ios:all
+ios/Config/**                                 ios:all
+ios/App/Resources/**                          ios ui:all
+# test support: the package test runner, the UI tests' harness, base class and helpers
+ios/scripts/package-tests.sh                  ios pkg:all
+ios/scripts/swift-test.sh                     ios pkg:all
+ios/scripts/harness.py                        ios ui:all
+ios/scripts/failure-attachments.py            ios ui:all
+ios/UITests/SealctlTestCase.swift             ios ui:all
+ios/UITests/Support.swift                     ios ui:all
+
+# ---- iOS: Swift packages ----------------------------------------------------------------------
+# Sources and manifests: the package's tests and its dependents' (see above), and every UI test,
+# since the app runs on them (DesignSystem, EngineKit and the engine included)
+ios/Packages/*/Sources/**                     ios ui:all
+ios/Packages/*/Package.swift                  ios ui:all
+# a package's own tests: that package only
+ios/Packages/*/Tests/**                       ios
+
+# ---- iOS: app screens (ios/App/Sources) -> UI test classes --------------------------------------
+# Every UI test starts with onboarding or a restore (words screens, the secure layer), lands on
+# the main tabs and moves through the router: those files run every UI test.
+ios/App/Sources/SealctlApp.swift              ios ui:all
+ios/App/Sources/RootView.swift                ios ui:all
+ios/App/Sources/Router.swift                  ios ui:all
+ios/App/Sources/Common.swift                  ios ui:all
+ios/App/Sources/Main.swift                    ios ui:all
+ios/App/Sources/Onboarding.swift              ios ui:all
+ios/App/Sources/Protected.swift               ios ui:all
+# every test but OnboardingTests pairs a fake machine or the CLI
+ios/App/Sources/Pairing.swift                 ios ui:PairingTests ui:ApprovalTests ui:CLIEndToEndTests ui:LeaveTests ui:PushTests ui:SensitiveTests ui:SettingsTests ui:StagingTests
+# the approval card; notifications, their actions and the permission asked during onboarding
+ios/App/Sources/Approval.swift                ios ui:ApprovalTests ui:PushTests ui:CLIEndToEndTests ui:StagingTests
+ios/App/Sources/AppDelegate.swift             ios ui:ApprovalTests ui:PushTests ui:OnboardingTests ui:SettingsTests
+ios/NotifyExtension/**                        ios ui:PushTests
+# levels 2 and 3: number match, delays, reports, the card check
+ios/App/Sources/Sensitive.swift               ios ui:SensitiveTests ui:CLIEndToEndTests ui:StagingTests ui:SettingsTests ui:LeaveTests
+# the blank card, offered in onboarding and at the end of Leave
+ios/App/Sources/CardPDF.swift                 ios ui:OnboardingTests ui:CLIEndToEndTests ui:SettingsTests ui:StagingTests ui:LeaveTests
+ios/App/Sources/Leave.swift                   ios ui:LeaveTests
+# Settings, and the screens it holds: Answers, machine detail (nickname, unpair), Leave's entry
+ios/App/Sources/Settings.swift                ios ui:SettingsTests ui:LeaveTests ui:ApprovalTests ui:PairingTests ui:OnboardingTests
+
+# ---- iOS: UI test classes: the file itself ----------------------------------------------------
+ios/UITests/ApprovalTests.swift               ios ui:ApprovalTests
+ios/UITests/CLIEndToEndTests.swift            ios ui:CLIEndToEndTests
+ios/UITests/LeaveTests.swift                  ios ui:LeaveTests
+ios/UITests/OnboardingTests.swift             ios ui:OnboardingTests
+ios/UITests/PairingTests.swift                ios ui:PairingTests
+ios/UITests/PushTests.swift                   ios ui:PushTests
+ios/UITests/SensitiveTests.swift              ios ui:SensitiveTests
+ios/UITests/SettingsTests.swift               ios ui:SettingsTests
+ios/UITests/StagingTests.swift                ios ui:StagingTests
+
+# ---- Android ----------------------------------------------------------------------------------
+android/**                                    android
+scripts/build-core-android.sh                 android
+
+# ---- both apps' Licences screens --------------------------------------------------------------
+notices/**                                    ios ui:SettingsTests android
+scripts/notices.sh                            ios ui:SettingsTests android
+scripts/notices.hbs                           ios ui:SettingsTests android
+
+# ---- no tests ---------------------------------------------------------------------------------
+# prose and licences
+*.md                                          none
+LICENSE                                       none
+# brand sources: the apps carry their own copies of the tokens and marks
+brand/**                                      none
+# supply chain: supply-chain.yml's cargo job checks these
+deny.toml                                     none
+about.toml                                    none
+supply-chain/**                               none
+# repository settings
+.github/dependabot.yml                        none
+.gitignore                                    none

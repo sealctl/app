@@ -5,12 +5,16 @@ name: iOS
 # sealctl CLI. With the SEALCTL_STAGING_RELAY secret, the end-to-end tests also run against
 # the staging relay. No signing: everything runs on the simulator.
 
+# No workflow path filter: the `changes` job (Linux, a few seconds) runs scripts/select-tests.py,
+# which maps the pull request's files through .github/test-map (SPEC 17.1, "Test selection").
+# The macOS job starts only when iOS is affected, and then runs only the Swift package tests and
+# the UI test classes the change can affect. Push to main and manual runs, a path the map does
+# not know, the Cargo files (the sealctl-core pin), shared/, tools/, the workflows and the label
+# `ci:full` run everything.
 on:
   push:
     branches: [main]
-    paths: ["ios/**", "shared/**", "tools/**", "scripts/build-core-ios.sh", "scripts/check-core.sh", "Cargo.toml", "Cargo.lock", ".github/workflows/ios.yml"]
   pull_request:
-    paths: ["ios/**", "shared/**", "tools/**", "scripts/build-core-ios.sh", "scripts/check-core.sh", "Cargo.toml", "Cargo.lock", ".github/workflows/ios.yml"]
   workflow_dispatch:
     inputs:
       only:
@@ -32,43 +36,45 @@ env:
   FAKE_RELAY: http://127.0.0.1:8787
 
 jobs:
-  ios:
-    runs-on: macos-26
-    timeout-minutes: 180
+  # The free plan runs 5 macOS jobs at a time and the UI tests take about an hour: select what
+  # this pull request needs. Outputs: full, ios (the macOS job), packages (Swift package tests),
+  # simulator (their test targets in the sealctl scheme), ui (" all " or " <Class> ... ").
+  # If this job fails, the iOS job runs everything (the outputs are then empty, never "false").
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
-      pull-requests: read # the pull request's file list (UI tests step)
+      pull-requests: read
+    outputs:
+      full: ${{ steps.select.outputs.full }}
+      ios: ${{ steps.select.outputs.ios }}
+      packages: ${{ steps.select.outputs.packages }}
+      simulator: ${{ steps.select.outputs.simulator }}
+      ui: ${{ steps.select.outputs.ui }}
     steps:
-      # The free plan runs 5 macOS jobs at a time and the UI tests take about an hour. Only
-      # Dependabot's pull requests that change nothing but Cargo.toml / Cargo.lock skip them
-      # (the core, the packages and the unit tests still run). Every other pull request runs
-      # them when the app, the core, the tools, this workflow or the Cargo files change: a
-      # sealctl-core pin bump touches only the Cargo files but swaps the core the app runs on.
-      # Always on main and manual runs.
-      - name: What changed
-        id: changes
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # the selection itself: example file lists and the suites they select
+      - name: Test selection tests
+        run: python3 -B scripts/select-tests-test.py
+      - id: select
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
-          AUTHOR: ${{ github.event.pull_request.user.login }}
-        run: |
-          if [ "$EVENT" != pull_request ]; then
-            echo "ui=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename')
-          ui=false
-          while IFS= read -r f; do
-            case "$f" in
-              ios/*|shared/*|tools/*|scripts/*|.github/workflows/ios.yml) ui=true ;;
-              Cargo.toml|Cargo.lock|*/Cargo.toml) [ "$AUTHOR" = "dependabot[bot]" ] || ui=true ;;
-            esac
-          done <<< "$files"
-          echo "ui=$ui" >> "$GITHUB_OUTPUT"
-          echo "UI tests: $ui"
+        run: python3 -B scripts/select-tests.py --github
 
+  ios:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.ios != 'false' }}
+    runs-on: macos-26
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -162,26 +168,44 @@ jobs:
 
       # The test log is printed as the tests run; a package still running after LIMIT seconds
       # prints the tests that never finished and every thread's stack, then fails.
+      # The packages the change affects (all of them when `changes` selected everything).
       - name: Package tests on macOS (vectors, relay client, engine end to end)
+        if: needs.changes.outputs.full != 'false' || needs.changes.outputs.packages != ''
         timeout-minutes: 15
         env:
           SEALCTL_TEST_RELAY: ${{ env.FAKE_RELAY }}
           LIMIT: 300
-        run: ios/scripts/package-tests.sh SealCore Vault Relay Engine DesignSystem
+          FULL: ${{ needs.changes.outputs.full }}
+          PACKAGES: ${{ needs.changes.outputs.packages }}
+        run: |
+          if [ "$FULL" != false ]; then PACKAGES="SealCore Vault Relay Engine DesignSystem"; fi
+          # shellcheck disable=SC2086 # one package per word
+          ios/scripts/package-tests.sh $PACKAGES
 
       - name: Unit tests on the simulator (vectors through the Swift bindings, vault, relay)
+        if: needs.changes.outputs.full != 'false' || needs.changes.outputs.simulator != ''
         env:
           TEST_RUNNER_SEALCTL_TEST_RELAY: ${{ env.FAKE_RELAY }}
+          FULL: ${{ needs.changes.outputs.full }}
+          TARGETS: ${{ needs.changes.outputs.simulator }}
         run: |
           set -o pipefail
+          only=()
+          if [ "$FULL" = false ]; then
+            for t in $TARGETS; do only+=("-only-testing:$t"); done
+          fi
           xcodebuild test-without-building -project ios/sealctl.xcodeproj -scheme sealctl \
-            -destination "id=$SIM_UDID" -derivedDataPath "$RUNNER_TEMP/dd" \
+            -destination "id=$SIM_UDID" -derivedDataPath "$RUNNER_TEMP/dd" "${only[@]}" \
             -resultBundlePath "$RUNNER_TEMP/unit.xcresult" | tail -60
 
+      # The UI test classes the change affects (`ui` is " all " or " <Class> ... "); a manual
+      # run's `only` input picks its own.
       - name: UI tests (fake relay, fake machine, sealctl CLI)
-        if: steps.changes.outputs.ui == 'true'
+        if: needs.changes.outputs.full != 'false' || needs.changes.outputs.ui != ''
         env:
           ONLY: ${{ inputs.only }}
+          FULL: ${{ needs.changes.outputs.full }}
+          UI: ${{ needs.changes.outputs.ui }}
           TEST_RUNNER_SEALCTL_RELAY: ${{ env.FAKE_RELAY }}
           TEST_RUNNER_SEALCTL_TEST_DELAY: "20"
         run: |
@@ -189,17 +213,27 @@ jobs:
           SEALCTL_RELAY="$FAKE_RELAY" nohup python3 ios/scripts/harness.py 8790 > "$RUNNER_TEMP/harness.log" 2>&1 &
           sleep 1
           only=()
-          [ -n "$ONLY" ] && only=("-only-testing:$ONLY")
+          if [ -n "$ONLY" ]; then
+            only=("-only-testing:$ONLY")
+          elif [ "$FULL" = false ] && [ "$UI" != " all " ]; then
+            for c in $UI; do only+=("-only-testing:sealctlUITests/$c"); done
+          fi
+          echo "UI tests: ${only[*]:-all}"
           xcodebuild test-without-building -project ios/sealctl.xcodeproj -scheme sealctlUITests \
             -destination "id=$SIM_UDID" -derivedDataPath "$RUNNER_TEMP/dd" "${only[@]}" \
             -resultBundlePath "$RUNNER_TEMP/ui.xcresult" | grep -E "Test Case|error|failed|passed|skipped|\*\*" | tail -200
           pkill -f harness.py || true
 
+      # With the secret, and only when everything runs or the selection holds these classes.
       - name: End to end against the staging relay (fake machine and sealctl CLI)
         env:
           STAGING: ${{ secrets.SEALCTL_STAGING_RELAY }}
           TEST_RUNNER_SEALCTL_TEST_DELAY: "20"
-        if: ${{ env.STAGING != '' }}
+        if: >-
+          ${{ env.STAGING != '' && (needs.changes.outputs.full != 'false'
+          || contains(needs.changes.outputs.ui, ' all ')
+          || contains(needs.changes.outputs.ui, ' StagingTests ')
+          || contains(needs.changes.outputs.ui, ' CLIEndToEndTests ')) }}
         run: |
           set -o pipefail
           export TEST_RUNNER_SEALCTL_RELAY="$STAGING"

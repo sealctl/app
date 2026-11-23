@@ -7,7 +7,8 @@ name: Supply chain
 # Its jobs are required checks, so the workflow runs on every pull request (no workflow-level
 # path filter, which would leave a required check pending forever); the `changes` job skips
 # the Gradle or Cargo jobs when a pull request does not touch their files, and a skipped job
-# counts as passed.
+# counts as passed. The Gradle jobs are the Android jobs of the test selection
+# (scripts/select-tests.py, .github/test-map: suite `android`); if `changes` fails, every job runs.
 on:
   push:
     branches: [main]
@@ -28,40 +29,49 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      contents: read
       pull-requests: read
     outputs:
-      gradle: ${{ steps.files.outputs.gradle }}
+      gradle: ${{ steps.select.outputs.android }}
       cargo: ${{ steps.files.outputs.cargo }}
     steps:
-      - id: files
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: select
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
+        run: python3 -B scripts/select-tests.py --github
+      - id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FULL: ${{ steps.select.outputs.full }}
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
         run: |
-          if [ "$EVENT" != pull_request ]; then
-            printf 'gradle=true\ncargo=true\n' >> "$GITHUB_OUTPUT"
+          # everything (not a pull request, the label ci:full, a path the test map does not know)
+          if [ "$EVENT" != pull_request ] || [ "$FULL" = true ]; then
+            echo "cargo=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename')
-          gradle=false
           cargo=false
           while IFS= read -r f; do
-            case "$f" in
-              android/*|.github/workflows/supply-chain.yml) gradle=true ;;
-            esac
             case "$f" in
               Cargo.toml|Cargo.lock|*/Cargo.toml|deny.toml|supply-chain/*|rust-toolchain.toml|\
               .github/workflows/supply-chain.yml) cargo=true ;;
             esac
           done <<< "$files"
-          printf 'gradle=%s\ncargo=%s\n' "$gradle" "$cargo" >> "$GITHUB_OUTPUT"
-          echo "gradle=$gradle cargo=$cargo"
+          echo "cargo=$cargo" >> "$GITHUB_OUTPUT"
+          echo "cargo=$cargo"
 
   gradle-wrapper:
     needs: changes
-    if: needs.changes.outputs.gradle == 'true'
+    if: ${{ !cancelled() && needs.changes.outputs.gradle != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -72,7 +82,8 @@ jobs:
 
   gradle-verification:
     needs: [changes, gradle-wrapper]
-    if: needs.changes.outputs.gradle == 'true'
+    # never without a genuine wrapper
+    if: ${{ !cancelled() && needs.gradle-wrapper.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -89,7 +100,7 @@ jobs:
 
   cargo:
     needs: changes
-    if: needs.changes.outputs.cargo == 'true'
+    if: ${{ !cancelled() && needs.changes.outputs.cargo != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

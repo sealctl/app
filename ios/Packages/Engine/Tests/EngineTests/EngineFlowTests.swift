@@ -411,7 +411,9 @@ struct EngineUnitTests {
     }
 
     @Test func wording() {
-        #expect(Texts.cut(String(repeating: "a", count: 100)).count == 80)
+        #expect(Texts.shown(String(repeating: "a", count: 100), Texts.maxLine).count <= 81)
+        #expect(!Texts.shown("evil\u{202E}txt.exe\nrm -rf", Texts.maxLine).contains("\u{202E}"))
+        #expect(!Texts.shown("a\nb", Texts.maxLine).contains("\n"))
         #expect(Texts.duration(7800) == "2 h 10 min")
         #expect(Texts.duration(30) == "1 min")
         #expect(Texts.agentName("claude") == "Claude Code")

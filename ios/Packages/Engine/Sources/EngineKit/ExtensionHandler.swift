@@ -67,7 +67,7 @@ public struct ExtensionHandler: Sendable {
         guard let machine = state.machines.first(where: { $0.key == r.machine && !$0.deleted }),
               let req = try? openRequest(keys: keys, relayMachineKey: r.machine, id: r.id, sealed: r.sealed)
         else { return nil }
-        let name = machineDisplayName(machine: machine)
+        let name = Texts.shown(machineDisplayName(machine: machine), Texts.maxName)
         let biometry = await vault.biometryName()
         let now = nowMs()
         let status = machine.lastStatus

@@ -30,21 +30,34 @@ public enum Texts {
         }
     }
 
-    public static func facts(_ w: Waiting, machineName: String) -> Facts {
+    /// Longest machine-controlled values on the card and in notifications (as Android).
+    public static let maxName = 60
+    public static let maxAgent = 40
+    public static let maxLine = 80
+
+    /// A machine-controlled string made safe to show (SPEC.md 11.7): no bidi or control
+    /// characters, no line breaks, and, when `short`, cut in the middle to `max` characters.
+    public static func shown(_ text: String, _ max: Int, short: Bool = true) -> String {
+        displayText(text: text, maxChars: short ? UInt32(max) : 0)
+    }
+
+    /// The facts with every machine-controlled value sanitised; `short` also caps their length.
+    public static func facts(_ w: Waiting, machineName: String, short: Bool = true) -> Facts {
         let ctx = w.request.ctx()
         let first = w.request.items().first
+        func s(_ text: String?, _ max: Int) -> String? { text.flatMap { $0.isEmpty ? nil : shown($0, max, short: short) } }
         return Facts(
             kind: w.verdict.kind,
             level: Int(w.verdict.level),
-            subjectKind: ctx?.subject?.kind,
-            subjectName: ctx?.subject?.name.nonEmpty,
-            names: ctx?.names ?? [],
-            agent: ctx?.agent,
-            command: ctx?.command.nonEmpty,
-            cwd: ctx?.cwd.nonEmpty,
-            repoName: ctx?.repo?.name.nonEmpty,
+            subjectKind: ctx?.subject.map { shown($0.kind, maxAgent, short: short) },
+            subjectName: s(ctx?.subject?.name, maxName),
+            names: (ctx?.names ?? []).compactMap { s($0, maxName) },
+            agent: s(ctx?.agent, maxAgent),
+            command: s(ctx?.command, maxLine),
+            cwd: s(ctx?.cwd, maxLine),
+            repoName: s(ctx?.repo?.name, maxName),
             machineName: machineName,
-            firstItem: first.map { $0.object?.path.nonEmpty ?? $0.id },
+            firstItem: first.flatMap { s($0.object?.path, maxLine) ?? s($0.id, maxLine) },
             all: w.plan?.all ?? false
         )
     }
@@ -95,7 +108,7 @@ public enum Texts {
     /// the machine's name from the phone's own records.
     public static func notification(_ f: Facts, biometry: String = "Face ID") -> (title: String, body: String) {
         let name = f.machineName
-        let cmdIn = [f.command.map(cut), f.cwd.map { "in \($0)" }].compactMap { $0 }.joined(separator: " ")
+        let cmdIn = [f.command, f.cwd.map { "in \($0)" }].compactMap { $0 }.joined(separator: " ")
         switch f.kind {
         case .rewrap: return ("Move \(name) to new words?", "Open sealctl to confirm with \(biometry).")
         case .keys where f.level >= 2: return ("sealctl seal on \(name)", "Open sealctl to see what it takes over.")
@@ -104,24 +117,20 @@ public enum Texts {
         case .oldWords: return ("\(name) has an object sealed with old words.", "Open sealctl to move it.")
         case .unknown: return (title(f), "")
         case .agent:
-            return (title(f), [f.repoName.map { "First use in \($0)" }, f.command.map(cut), name].compactMap { $0 }.joined(separator: " · "))
+            return (title(f), [f.repoName.map { "First use in \($0)" }, f.command, name].compactMap { $0 }.joined(separator: " · "))
         case .own: return (title(f), [cmdIn.nonEmpty, name].compactMap { $0 }.joined(separator: " · "))
         case .keys: return (title(f), name)
         default: return (title(f), [cmdIn.nonEmpty, name, f.agent].compactMap { $0 }.joined(separator: " · "))
         }
     }
 
-    /// "For" is cut in the middle after 80 characters.
-    public static func cut(_ command: String) -> String {
-        command.count <= 80 ? command : String(command.prefix(39)) + "…" + String(command.suffix(40))
-    }
 
     /// The note under the facts (11.7 "By kind").
     public static func note(_ w: Waiting) -> String? {
         let ctx = w.request.ctx()
         let use = w.request.uses().first
-        let agent = ctx?.agent ?? use?.agent
-        let repo = ctx?.repo?.name ?? use.map { $0.repository.components(separatedBy: "/").last ?? $0.repository }
+        let agent = (ctx?.agent ?? use?.agent).map { shown($0, maxAgent) }
+        let repo = (ctx?.repo?.name ?? use.map { $0.repository.components(separatedBy: "/").last ?? $0.repository }).map { shown($0, maxName) }
         switch w.verdict.kind {
         case .open:
             if w.verdict.agentFirstUse, let agent { return "First use of this key by \(agent) in \(repo ?? ""). Allow is remembered." }
@@ -178,8 +187,8 @@ public enum Texts {
 
     private static func remembered(_ w: Waiting) -> String {
         let u = w.request.uses().first
-        let repo = w.request.ctx()?.repo?.name ?? u.map { $0.repository.components(separatedBy: "/").last ?? "" } ?? ""
-        return "Remembered for \(u?.agent ?? w.request.ctx()?.agent ?? "the agent") in \(repo)"
+        let repo = shown(w.request.ctx()?.repo?.name ?? u.map { $0.repository.components(separatedBy: "/").last ?? "" } ?? "", maxName)
+        return "Remembered for \((u?.agent ?? w.request.ctx()?.agent).map { shown($0, maxAgent) } ?? "the agent") in \(repo)"
     }
 
     public static func waitingFor(_ seconds: Int64) -> String { String(format: "WAITING · %d:%02d", seconds / 60, seconds % 60) }

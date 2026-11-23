@@ -38,7 +38,7 @@ struct ApprovalSheet: View {
         let name = e.displayName(w.machine)
         let f = Texts.facts(w, machineName: name)
         var facts: [ApprovalCardModel.Pair] = []
-        if let c = f.command { facts.append(.init("For", Texts.cut(c))) }
+        if let c = f.command { facts.append(.init("For", c)) }
         if let d = f.cwd { facts.append(.init("In", d)) }
         facts.append(.init("From", [name, f.agent].compactMap { $0 }.joined(separator: " · ")))
         let secs = (now - min(w.relay.created, now)) / 1000

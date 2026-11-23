@@ -97,7 +97,7 @@ struct EngineFlowTests {
         #expect(try m.run(["status", "--state", "open", "--left", "3600"]).0 == 0)
         await engine.refreshStatus()
         r = try m.start(agentArgs)
-        for _ in 0..<50 where r.process.isRunning {
+        for _ in 0..<50 where r.isRunning {
             await engine.catchUp()
             try await Task.sleep(for: .milliseconds(100))
         }
@@ -107,7 +107,7 @@ struct EngineFlowTests {
         // A report is recorded silently; a hand-back opens the report.
         r = try m.start(["request", "--kind", "report", "--state", "open", "--left", "3600",
                          "--handback", "secrets:store:macOS Keychain:done", "--handback", "volume:safe:folder:failed"])
-        for _ in 0..<50 where r.process.isRunning {
+        for _ in 0..<50 where r.isRunning {
             await engine.catchUp()
             try await Task.sleep(for: .milliseconds(100))
         }
@@ -166,7 +166,7 @@ struct EngineFlowTests {
         #expect(out.contains("no_match"))
         #expect(engine.local.holds.contains { $0.machine == w.machine.key })
         r = try m.start(["request", "--kind", "unseal", "--plan", "backup:b:backup:b-1", "--match"])
-        for _ in 0..<50 where r.process.isRunning {
+        for _ in 0..<50 where r.isRunning {
             await engine.catchUp()
             try await Task.sleep(for: .milliseconds(100))
         }

@@ -21,7 +21,7 @@ struct CLIFlowTests {
                _ choose: (Waiting) async throws -> Void) async throws -> (Int32, String) {
         let end = Date().addingTimeInterval(timeout)
         var seen: Set<String> = []
-        while run.process.isRunning && Date() < end {
+        while run.isRunning && Date() < end {
             await engine.catchUp()
             for w in engine.waiting where !w.expired && !seen.contains(w.id) {
                 seen.insert(w.id)
@@ -29,7 +29,7 @@ struct CLIFlowTests {
             }
             try await Task.sleep(for: .milliseconds(200))
         }
-        if run.process.isRunning { run.process.terminate() }
+        if run.isRunning { run.process.terminate() }
         return run.wait()
     }
 

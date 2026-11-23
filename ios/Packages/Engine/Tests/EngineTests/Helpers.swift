@@ -82,29 +82,103 @@ final class FakeMachine: @unchecked Sendable {
 
     init(relay: String? = testRelay) { self.relay = relay }
 
+    /// A started process: its output as it comes, and its exit.
+    ///
+    /// The output is read in the pipe's `readabilityHandler`, which Foundation runs on one serial
+    /// queue for every file handle in the process: a read there that blocks holds up the output
+    /// of every other process. The pipe is non-blocking, so a handler called with nothing to read
+    /// returns at once; at the end of the output the handler is removed before the pipe closes,
+    /// so a later pipe that gets the same descriptor number never wakes this one. The exit comes
+    /// from `terminationHandler` (set before the process runs), never from a thread blocked in
+    /// `waitUntilExit`.
     final class Run: @unchecked Sendable {
         let process: Process
         /// Kept open while the process runs: under `script`, an early end of input reads as ^D.
         var input: FileHandle?
         private let lock = NSLock()
         private var buffer = Data()
+        private var status: Int32?
+        private var outputEnded = false
+        private var exitWaiters: [CheckedContinuation<Void, Never>] = []
 
         init(process: Process, out: Pipe) {
             self.process = process
-            out.fileHandleForReading.readabilityHandler = { [weak self] h in
-                let d = h.availableData
-                guard let self, !d.isEmpty else { return }
-                self.lock.withLock { self.buffer.append(d) }
+            let reader = out.fileHandleForReading
+            let fd = reader.fileDescriptor
+            _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+            reader.readabilityHandler = { [weak self] h in
+                let (data, end) = Run.drain(h.fileDescriptor)
+                if end {
+                    h.readabilityHandler = nil
+                    try? h.close()
+                }
+                guard let self else { return }
+                self.lock.withLock {
+                    self.buffer.append(data)
+                    if end { self.outputEnded = true }
+                }
+            }
+            process.terminationHandler = { [weak self] p in
+                guard let self else { return }
+                let waiters = self.lock.withLock {
+                    self.status = p.terminationStatus
+                    defer { self.exitWaiters = [] }
+                    return self.exitWaiters
+                }
+                waiters.forEach { $0.resume() }
+            }
+        }
+
+        /// Everything readable now from a non-blocking descriptor, and whether the output ended
+        /// (end of file, or an error other than "nothing yet").
+        private static func drain(_ fd: Int32) -> (Data, Bool) {
+            var data = Data()
+            var chunk = [UInt8](repeating: 0, count: 16_384)
+            while true {
+                let n = read(fd, &chunk, chunk.count)
+                if n > 0 { data.append(chunk, count: n); continue }
+                if n == 0 { return (data, true) }
+                if errno == EINTR { continue }
+                return (data, errno != EAGAIN && errno != EWOULDBLOCK)
             }
         }
 
         var output: String { lock.withLock { String(decoding: buffer, as: UTF8.self) } }
 
+        /// Not exited yet (as `terminationHandler` reported it).
+        var isRunning: Bool { lock.withLock { status == nil } }
+
+        private var exitStatus: Int32? { lock.withLock { status } }
+        private var ended: Bool { lock.withLock { outputEnded } }
+
+        /// Waits for the exit on this thread, keeping its run loop turning (as `waitUntilExit`
+        /// did), then up to 0.5 s for the rest of the output: a process the child left running
+        /// (the CLI's daemon) may hold the pipe open.
         func wait() -> (Int32, String) {
-            process.waitUntilExit()
+            while exitStatus == nil {
+                if !RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02)) {
+                    Thread.sleep(forTimeInterval: 0.01)
+                }
+            }
             try? input?.close()
-            Thread.sleep(forTimeInterval: 0.1)
-            return (process.terminationStatus, output)
+            let end = Date().addingTimeInterval(0.5)
+            while !ended && Date() < end { Thread.sleep(forTimeInterval: 0.01) }
+            return (exitStatus ?? -1, output)
+        }
+
+        /// `wait()` without holding a thread.
+        func finished() async -> (Int32, String) {
+            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                let done = lock.withLock {
+                    if status != nil { return true }
+                    exitWaiters.append(c)
+                    return false
+                }
+                if done { c.resume() }
+            }
+            try? input?.close()
+            for _ in 0..<50 where !ended { try? await Task.sleep(for: .milliseconds(10)) }
+            return (exitStatus ?? -1, output)
         }
 
         /// The first match of a regular expression's group 1 in the output, waiting for it.
@@ -115,7 +189,7 @@ final class FakeMachine: @unchecked Sendable {
                 let out = output
                 if let m = re.firstMatch(in: out, range: NSRange(out.startIndex..., in: out)),
                    let r = Range(m.range(at: 1), in: out) { return String(out[r]) }
-                if !process.isRunning { break }
+                if !isRunning { break }
                 try await Task.sleep(for: .milliseconds(100))
             }
             throw CancellationError()
@@ -150,11 +224,10 @@ final class FakeMachine: @unchecked Sendable {
 
     func run(_ args: [String]) throws -> (Int32, String) { try start(args).wait() }
 
-    func waitAsync(_ r: Run) async -> (Int32, String) {
-        await withCheckedContinuation { c in
-            DispatchQueue.global().async { c.resume(returning: r.wait()) }
-        }
-    }
+    /// The run's exit status and output, without holding a thread.
+    static func waitAsync(_ r: Run) async -> (Int32, String) { await r.finished() }
+
+    func waitAsync(_ r: Run) async -> (Int32, String) { await r.finished() }
 }
 
 /// A `tools/fake-relay` of one test's own, on a free loopback port: never a shared or remote

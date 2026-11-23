@@ -18,7 +18,7 @@ enum CardPDF {
         return renderer.pdfData { ctx in
             ctx.beginPage()
             let ink = UIColor(red: 0x1a / 255, green: 0x21 / 255, blue: 0x33 / 255, alpha: 1)
-            let muted = UIColor(red: 0x6b / 255, green: 0x71 / 255, blue: 0x83 / 255, alpha: 1)
+            let muted = UIColor(red: 0x5f / 255, green: 0x66 / 255, blue: 0x77 / 255, alpha: 1)
             let margin: CGFloat = 48
             func text(_ s: String, _ x: CGFloat, _ y: CGFloat, _ font: UIFont, _ color: UIColor = ink) {
                 (s as NSString).draw(at: CGPoint(x: x, y: y), withAttributes: [.font: font, .foregroundColor: color])

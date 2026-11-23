@@ -43,6 +43,7 @@ class TextsTest {
         assertEquals("This machine uses another relay (relay.example.org). This phone uses relay.sealctl.com.",
             Texts.otherRelay("https://relay.example.org", "relay.sealctl.com"))
         assertEquals("dev@mbp.example.com stopped waiting.", Texts.stoppedWaiting("dev@mbp.example.com"))
+        assertEquals("Couldn't send your answer — try again.", Texts.ANSWER_NOT_SENT)
         assertEquals("Claude Code", Texts.agentName("claude"))
         assertEquals("aider", Texts.agentName("aider"))
         assertEquals("Ready: open sealctl to finish showing your words.", Texts.ready("words"))

@@ -167,6 +167,10 @@ object Texts {
     fun answeredByItself(name: String, place: String?) = if (place != null) "Opened $name at $place." else "Opened $name."
     fun unlockToAnswer(name: String) = "Unlock your phone to answer $name."
     const val UNLOCK_TO_ANSWER = "Unlock your phone to answer."
+    /** A reply the relay did not take (SPEC.md 8.5, 11.20); the card keeps its buttons. */
+    const val ANSWER_NOT_SENT = "Couldn't send your answer — try again."
+    /** The generic request notification's title (SPEC.md 11.7). */
+    const val REQUEST_TITLE = "Waiting for your phone"
 
     fun agentName(a: String?): String = when (a) {
         "claude" -> "Claude Code"

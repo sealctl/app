@@ -268,6 +268,10 @@ struct EngineFlowTests {
 
     @Test func backupOffLeavesAnEmptyState() async throws {
         let (engine, _, _, _) = try await paired()
+        // Pairing scheduled an upload; it must not write between this test's own relay calls.
+        let scheduled = engine.uploadTask
+        scheduled?.cancel()
+        await scheduled?.value
         #expect(await engine.upload())
         // Another install wrote since: the clear uses the relay's revision, not this phone's.
         let stored = try await engine.relay.getState()

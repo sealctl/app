@@ -1,23 +1,37 @@
 //! Lifetimes (SPEC.md 6.4): answers unused for 90 days go, machines unseen for 90 days are
 //! flagged, inventory unseen for a year is stale, tombstones older than 90 days are dropped,
-//! summaries older than 12 months are dropped. Machine and place tombstones are not dropped:
-//! after 90 days they shrink to their key, so a copy of the state from before the removal
-//! (another install, an old blob) cannot bring the machine or the place back.
+//! summaries older than 12 months (by the calendar) are dropped. Machine and place tombstones
+//! are not dropped: after 90 days they shrink to their key, so a copy of the state from before
+//! the removal (another install, an old blob) cannot bring the machine or the place back.
 
-use crate::model::{Machine, State, TrustedPlace};
+use crate::model::{Machine, RememberedAnswer, State, TrustedPlace};
 
 /// 90 days in ms.
 pub const NINETY_DAYS_MS: u64 = 90 * 86_400_000;
 /// 365 days in ms.
 pub const YEAR_MS: u64 = 365 * 86_400_000;
 
-/// Applies the lifetimes at `now`; changed records get `updated = now`.
+/// Whether an answer still answers at `now`: not removed, and used (or made) in the last 90
+/// days. The rule [`prune_state`] applies, so an answer past its lifetime answers nothing even
+/// before a prune has run, or after a merge brought back a copy from before one.
+pub fn answer_live(a: &RememberedAnswer, now: u64) -> bool {
+    !a.deleted && a.last_used.max(a.created) >= now.saturating_sub(NINETY_DAYS_MS)
+}
+
+/// `updated` for a record the lifetimes change at `now`: later than its previous value, even
+/// one from a clock that ran ahead, so the change wins a merge with the copy it changed.
+fn bump(prev: u64, now: u64) -> u64 {
+    now.max(prev.saturating_add(1))
+}
+
+/// Applies the lifetimes at `now`; changed records get `updated = now` (or just after their
+/// previous `updated`, when that is later).
 pub fn prune_state(mut s: State, now: u64) -> State {
     let old = now.saturating_sub(NINETY_DAYS_MS);
     for a in s.answers.iter_mut().filter(|a| !a.deleted) {
-        if a.last_used.max(a.created) < old {
+        if !answer_live(a, now) {
             a.deleted = true;
-            a.updated = now;
+            a.updated = bump(a.updated, now);
         }
     }
     for m in s.machines.iter_mut().filter(|m| !m.deleted) {
@@ -25,7 +39,7 @@ pub fn prune_state(mut s: State, now: u64) -> State {
         let flag = seen < old;
         if flag != m.flagged {
             m.flagged = flag;
-            m.updated = now;
+            m.updated = bump(m.updated, now);
         }
     }
     let year = now.saturating_sub(YEAR_MS);
@@ -33,7 +47,7 @@ pub fn prune_state(mut s: State, now: u64) -> State {
         let stale = i.last_use.max(i.first_use) < year;
         if stale != i.stale {
             i.stale = stale;
-            i.updated = now;
+            i.updated = bump(i.updated, now);
         }
     }
     for m in s
@@ -58,10 +72,28 @@ pub fn prune_state(mut s: State, now: u64) -> State {
     }
     s.answers.retain(|a| !a.deleted || a.updated >= old);
     s.inventory.retain(|i| !i.deleted || i.updated >= old);
+    // Twelve months by the calendar: this month and the eleven before it. "This month" is
+    // taken 14 hours back, so no time zone's current month counts as older than it is. A
+    // month after this one (14 hours ahead, for the same reason) comes from an install whose
+    // clock ran ahead: it is dropped, so it never pushes a real month out of the twelve.
+    let first_kept = first_kept_month(now);
+    let last_kept = crate::day::local_month(now.saturating_add(14 * 3_600_000), 0);
+    s.summaries.retain(|m| {
+        m.month.as_str() >= first_kept.as_str() && m.month.as_str() <= last_kept.as_str()
+    });
     s.summaries.sort_by(|a, b| b.month.cmp(&a.month));
     s.summaries.truncate(12);
     s.summaries.sort_by(|a, b| a.month.cmp(&b.month));
     s
+}
+
+/// The oldest month (`YYYY-MM`) a summary is kept for at `now`.
+fn first_kept_month(now: u64) -> String {
+    let this = crate::day::local_month(now.saturating_sub(14 * 3_600_000), 0);
+    let y: i64 = this[..4].parse().unwrap_or(0);
+    let m: i64 = this[5..].parse().unwrap_or(1);
+    let n = y * 12 + (m - 1) - 11;
+    format!("{:04}-{:02}", n.div_euclid(12), n.rem_euclid(12) + 1)
 }
 
 /// Days until an answer is removed (SPEC.md 11.10: "Unused for 80 days. Removed in 10 days.").
@@ -115,11 +147,11 @@ mod tests {
             last_use: NOW - 400 * D,
             ..InventoryItem::default()
         });
-        for m in 1..=14 {
+        // Fourteen months up to NOW's month, 2025-10 to 2026-11.
+        for n in 0..14 {
+            let (y, m) = if n < 3 { (2025, 10 + n) } else { (2026, n - 2) };
             s.summaries.push(MonthSummary {
-                month: format!("2025-{m:02}")
-                    .replace("2025-13", "2026-01")
-                    .replace("2025-14", "2026-02"),
+                month: format!("{y}-{m:02}"),
                 ..MonthSummary::default()
             });
         }
@@ -139,8 +171,67 @@ mod tests {
         );
         assert!(p.inventory[0].stale);
         assert_eq!(p.summaries.len(), 12);
-        assert_eq!(p.summaries[0].month, "2025-03");
+        assert_eq!(p.summaries[0].month, "2025-12");
         assert_eq!(answer_days_left(NOW - 80 * D, NOW), 10);
+    }
+
+    #[test]
+    fn summaries_are_kept_twelve_months_by_the_calendar() {
+        // Months with nothing in them leave gaps: 2025-01 is 22 months old at NOW (2026-11).
+        let s = State {
+            summaries: ["2025-01", "2025-02", "2025-12", "2026-10", "2026-11"]
+                .into_iter()
+                .map(|m| MonthSummary {
+                    month: m.into(),
+                    keys_used: 1,
+                    ..MonthSummary::default()
+                })
+                .collect(),
+            ..State::default()
+        };
+        let p = prune_state(s, NOW);
+        let months: Vec<&str> = p.summaries.iter().map(|s| s.month.as_str()).collect();
+        assert_eq!(months, ["2025-12", "2026-10", "2026-11"]);
+    }
+
+    #[test]
+    fn a_month_from_a_clock_ahead_never_pushes_a_real_month_out() {
+        let month = |m: &str| MonthSummary {
+            month: m.into(),
+            keys_used: 1,
+            ..MonthSummary::default()
+        };
+        // Twelve real months to 2026-11, and one an install whose clock ran ahead counted in.
+        let months: Vec<String> = (0..12)
+            .map(|i| {
+                let n = 2025 * 12 + 11 + i;
+                format!("{:04}-{:02}", n / 12, n % 12 + 1)
+            })
+            .collect();
+        assert_eq!(
+            (months[0].as_str(), months[11].as_str()),
+            ("2025-12", "2026-11")
+        );
+        let s = State {
+            summaries: months
+                .iter()
+                .map(|m| month(m))
+                .chain([month("2027-04")])
+                .collect(),
+            ..State::default()
+        };
+        let p = prune_state(s, NOW);
+        let kept: Vec<String> = p.summaries.iter().map(|s| s.month.clone()).collect();
+        assert_eq!(kept, months);
+        // Late on the last day of a month, the next month is already this month in UTC+14.
+        let s = State {
+            summaries: vec![month("2026-12")],
+            ..State::default()
+        };
+        // 2026-11-30T12:00Z.
+        let late = 1_796_040_000_000;
+        assert_eq!(crate::day::local_month(late + 14 * 3_600_000, 0), "2026-12");
+        assert_eq!(prune_state(s, late).summaries.len(), 1);
     }
 
     #[test]

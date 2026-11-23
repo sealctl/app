@@ -195,7 +195,7 @@ fn report_with_status_and_handback() {
     });
     let req = send(&m, &keys, b);
     assert_eq!(decide(req.clone(), ctx()).asking, Asking::Silent);
-    let r = store.apply_report(req).unwrap();
+    let r = store.apply_report(req, 0).unwrap();
     assert_eq!(r.ack, Some(7));
     assert_eq!(r.handback.unwrap().items.len(), 1);
     let s = store.snapshot().unwrap();

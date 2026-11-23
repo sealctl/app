@@ -23,7 +23,9 @@ const USAGE_MONTHS_MS: u64 = 396 * 86_400_000;
 const PENDING_KEEP_MS: u64 = 10 * 60 * 1000;
 /// A request's id is kept as long as its signed time can still be accepted after it was first
 /// seen (the body's `t` may lie up to the window ahead). The relay's `expires` does not shorten
-/// or lengthen this: a body is refused by its signed time after that anyway.
+/// or lengthen this: a body is refused by its signed time after that anyway. A request opened
+/// and answered later than it was first seen (its signed time ahead of this phone's clock) is
+/// kept from its answer: `seen` moves to the time it is closed.
 const PENDING_SIGNED_KEEP_MS: u64 = 2 * sealctl_core::request::TIME_WINDOW_MS;
 /// The relay state blob limit, less room for the seal.
 pub const STATE_LIMIT: usize = 1_048_576 - 1024;
@@ -212,6 +214,330 @@ pub struct ReportResult {
 #[derive(uniffi::Object)]
 pub struct Store {
     conn: Mutex<Connection>,
+    /// Tests only: the clock the store reads (Unix ms); 0 reads the system clock. A new store
+    /// starts at [`TEST_EPOCH_MS`], so no test depends on the day it runs.
+    #[cfg(test)]
+    fake_now: std::sync::atomic::AtomicU64,
+}
+
+/// Tests only: where a new store's clock starts, 2026-11-20T00:00:00Z.
+#[cfg(test)]
+const TEST_EPOCH_MS: u64 = 1_795_132_800_000;
+
+impl Store {
+    /// The time every change is stamped with.
+    fn now(&self) -> u64 {
+        #[cfg(test)]
+        {
+            let t = self.fake_now.load(std::sync::atomic::Ordering::SeqCst);
+            if t != 0 {
+                return t;
+            }
+        }
+        now_ms()
+    }
+
+    /// Tests only: sets the store's clock.
+    #[cfg(test)]
+    fn set_now(&self, t: u64) {
+        self.fake_now.store(t, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// [`Store::answered`] given at `at`, recorded `now`.
+    #[allow(clippy::too_many_arguments)]
+    fn record_answer(
+        &self,
+        request: &Request,
+        outcome: &str,
+        allowed: bool,
+        remember: bool,
+        place_id: Option<String>,
+        utc_offset_secs: i32,
+        at: u64,
+        now: u64,
+    ) -> Result<AnsweredResult> {
+        let c = lock(&self.conn)?;
+        let mut s: State = read_doc(&c, "state")?;
+        let mut l: LocalState = read_doc(&c, "local")?;
+        let machine = request.machine();
+        let ctx = request.ctx().unwrap_or_default();
+        let fp = s
+            .words
+            .as_ref()
+            .map(|w| w.fingerprint.clone())
+            .unwrap_or_default();
+
+        if let Some(p) = l.pending.iter_mut().find(|p| p.id == request.id()) {
+            p.outcome = if outcome == "expired" {
+                "expired"
+            } else {
+                "answered"
+            }
+            .into();
+            p.seen = p.seen.max(now);
+        }
+        let entry = UsageEntry {
+            time: at,
+            machine: machine.clone(),
+            key: subject_label(request),
+            agent: ctx.agent.clone(),
+            repo: ctx.repo.as_ref().map(|r| r.name.clone()),
+            command: Some(ctx.command.clone()).filter(|c| !c.is_empty()),
+            outcome: outcome.to_owned(),
+        };
+        insert_usage(&c, &entry)?;
+        let month = local_month(at, utc_offset_secs);
+        let declined = u64::from(outcome == "denied");
+        let keys = if allowed {
+            request.items().len().max(1) as u64
+        } else {
+            0
+        };
+        add_to_summary(&mut s, month, &machine, keys, declined, now);
+
+        if allowed {
+            for u in request.uses() {
+                for name in &u.names {
+                    let existing = s.answers.iter_mut().find(|a| {
+                        !a.deleted
+                            && a.agent == u.agent
+                            && a.repo_id == u.repository
+                            && &a.key_name == name
+                    });
+                    match existing {
+                        // An answer past its 90 days (not pruned yet) is renewed only when this
+                        // answer remembers; a use allowed once leaves it to expire.
+                        Some(a) if remember || crate::prune::answer_live(a, at) => {
+                            a.last_used = a.last_used.max(at);
+                            a.updated = bump(a.updated, now);
+                        }
+                        Some(_) => {}
+                        None if remember => {
+                            let updated = bump_over(
+                                s.answers
+                                    .iter()
+                                    .filter(|a| {
+                                        a.agent == u.agent
+                                            && a.repo_id == u.repository
+                                            && &a.key_name == name
+                                    })
+                                    .map(|a| a.updated),
+                                0,
+                                now,
+                            );
+                            s.answers.push(RememberedAnswer {
+                                agent: u.agent.clone(),
+                                key_name: name.clone(),
+                                repo_id: u.repository.clone(),
+                                repo_name: ctx
+                                    .repo
+                                    .as_ref()
+                                    .filter(|r| r.id == u.repository)
+                                    .map(|r| r.name.clone())
+                                    .unwrap_or_else(|| {
+                                        u.repository.rsplit('/').next().unwrap_or("").to_owned()
+                                    }),
+                                created: at,
+                                last_used: at,
+                                updated,
+                                deleted: false,
+                            })
+                        }
+                        None => {}
+                    }
+                }
+            }
+            for item in request.items() {
+                upsert_inventory(&mut s, item_inventory(&item, &machine, at, &fp), at, now);
+            }
+        }
+
+        let mut first_of_day = false;
+        // Only a person's answer begins a day. An answer given by itself (`automatic`, or a
+        // plan's later part) needed a day that was active when it was decided; recorded after
+        // that day ended (the reply took a while to post, or the extension's answer is merged
+        // later), it must not begin a new one without a tap.
+        if allowed && request.kind() == RequestKind::Open && answer_begins_day(outcome) {
+            let active = l
+                .days
+                .iter()
+                .find(|d| d.machine == machine)
+                .is_some_and(|d| crate::decide::day_active(d, at, utc_offset_secs));
+            if !active {
+                first_of_day = true;
+                l.days.retain(|d| d.machine != machine);
+                l.days.push(DayRecord {
+                    machine: machine.clone(),
+                    first_approval: at,
+                    place_id,
+                    ends: day_end(at, utc_offset_secs),
+                });
+            }
+        }
+        l.dirty = true;
+        let s = normalise(s);
+        write_doc(&c, "state", &s)?;
+        write_doc(&c, "local", &l)?;
+        Ok(AnsweredResult { first_of_day })
+    }
+
+    /// [`Store::apply_report`] received at `at`, recorded `now`.
+    fn record_report(
+        &self,
+        request: &Request,
+        utc_offset_secs: i32,
+        at: u64,
+        now: u64,
+    ) -> Result<ReportResult> {
+        let machine = request.machine();
+        let mut result = match request.status() {
+            Some(st) => self.record_status(machine.clone(), st, utc_offset_secs, at, now)?,
+            None => ReportResult {
+                ack: None,
+                handback: None,
+            },
+        };
+        if let Some(hb) = request.handback() {
+            let c = lock(&self.conn)?;
+            let mut s: State = read_doc(&c, "state")?;
+            let name = s.machine(&machine).map(display_name).unwrap_or_default();
+            let report = HandbackReport {
+                id: format!("{}:{}", machine, hb.hash),
+                machine: machine.clone(),
+                machine_name: name,
+                what: "unseal".into(),
+                plan_hash: hb.hash.clone(),
+                items: hb
+                    .items
+                    .iter()
+                    .map(|i| ReportItem {
+                        kind: i.kind.clone(),
+                        name: i.name.clone(),
+                        to: i.to.clone(),
+                        state: i.state.clone(),
+                    })
+                    .collect(),
+                run: hb.run.clone(),
+                time: at,
+                updated: now,
+            };
+            let report = HandbackReport {
+                updated: bump_over(
+                    s.reports
+                        .iter()
+                        .filter(|r| r.id == report.id)
+                        .map(|r| r.updated),
+                    0,
+                    now,
+                ),
+                ..report
+            };
+            s.reports.retain(|r| r.id != report.id);
+            s.reports.push(report.clone());
+            let mut l: LocalState = read_doc(&c, "local")?;
+            // A cancelled approval stays cancelled, whatever report arrives after the cancel.
+            for p in l.plans.iter_mut().filter(|p| {
+                p.machine == machine && p.plan_hash == hb.hash && p.state != "cancelled"
+            }) {
+                p.state = "done".into();
+            }
+            l.dirty = true;
+            write_doc(&c, "state", &normalise(s))?;
+            write_doc(&c, "local", &l)?;
+            result.handback = Some(report);
+        }
+        Ok(result)
+    }
+
+    /// [`Store::apply_status`] received at `at`, recorded `now`.
+    fn record_status(
+        &self,
+        machine: String,
+        status: MachineStatus,
+        utc_offset_secs: i32,
+        at: u64,
+        now: u64,
+    ) -> Result<ReportResult> {
+        let c = lock(&self.conn)?;
+        let mut s: State = read_doc(&c, "state")?;
+        let fp = s
+            .words
+            .as_ref()
+            .map(|w| w.fingerprint.clone())
+            .unwrap_or_default();
+        let Some(m) = s
+            .machines
+            .iter_mut()
+            .find(|m| m.key == machine && !m.deleted)
+        else {
+            return Err(AppError::NotFound);
+        };
+        let seen = m.last_status.as_ref().map_or(0, |st| st.seq);
+        if status.seq != 0 && status.seq <= seen {
+            return Ok(ReportResult {
+                ack: Some(status.seq),
+                handback: None,
+            });
+        }
+        if let Some(st) = &status.state {
+            m.last_status = Some(SessionStatus {
+                session: st.session.clone(),
+                left: st.left,
+                stop: st.stop,
+                place: st.place.clone(),
+                reported_at: at,
+                seq: status.seq,
+            });
+        } else if let Some(prev) = m.last_status.as_mut() {
+            prev.seq = status.seq;
+        }
+        m.last_seen = Some(m.last_seen.unwrap_or(0).max(at));
+        m.updated = bump(m.updated, now);
+        let month = local_month(at, utc_offset_secs);
+        let mut uses = 0;
+        // A machine resends its log until it is acknowledged, so a later status repeats the
+        // entries an earlier one carried: an entry already recorded before this status is
+        // skipped (two equal entries inside one status are both kept).
+        let before: i64 =
+            c.query_row("SELECT COALESCE(MAX(id), 0) FROM usage", [], |r| r.get(0))?;
+        for e in &status.log {
+            let entry = UsageEntry {
+                time: if e.time > 0 { e.time } else { at },
+                machine: machine.clone(),
+                key: e
+                    .names
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| e.command.clone()),
+                agent: e.agent.clone(),
+                repo: e
+                    .repository
+                    .as_ref()
+                    .map(|r| r.rsplit('/').next().unwrap_or(r).to_owned()),
+                command: Some(e.command.clone()).filter(|c| !c.is_empty()),
+                outcome: "in_session".into(),
+            };
+            if e.time > 0 && usage_recorded(&c, &entry, before)? {
+                continue;
+            }
+            insert_usage(&c, &entry)?;
+            uses += e.names.len().max(1) as u64;
+        }
+        if uses > 0 {
+            add_to_summary(&mut s, month, &machine, uses, 0, now);
+        }
+        for item in &status.inventory {
+            upsert_inventory(&mut s, item_inventory(item, &machine, at, &fp), at, now);
+        }
+        write_doc(&c, "state", &normalise(s))?;
+        let mut l: LocalState = read_doc(&c, "local")?;
+        l.dirty = true;
+        write_doc(&c, "local", &l)?;
+        Ok(ReportResult {
+            ack: Some(status.seq),
+            handback: None,
+        })
+    }
 }
 
 fn lock(m: &Mutex<Connection>) -> Result<std::sync::MutexGuard<'_, Connection>> {
@@ -262,7 +588,15 @@ fn bump(prev: u64, now: u64) -> u64 {
     now.max(prev.saturating_add(1))
 }
 
-fn item_inventory(item: &RequestItem, machine: &str, now: u64, fp: &str) -> InventoryItem {
+/// `updated` for a record that replaces every copy of it held now, removed ones too: later
+/// than all of them, so it wins a merge with any of them even when their times came from a
+/// clock that ran ahead (another install).
+fn bump_over(held: impl Iterator<Item = u64>, given: u64, now: u64) -> u64 {
+    bump(held.fold(given, u64::max), now)
+}
+
+/// An inventory item used at `at`; [`upsert_inventory`] stamps `updated`.
+fn item_inventory(item: &RequestItem, machine: &str, at: u64, fp: &str) -> InventoryItem {
     let o = item.object.clone().unwrap_or_default();
     InventoryItem {
         purpose: item.purpose.clone(),
@@ -272,22 +606,23 @@ fn item_inventory(item: &RequestItem, machine: &str, now: u64, fp: &str) -> Inve
         machine: machine.to_owned(),
         path: o.path,
         size: o.size,
-        first_use: now,
-        last_use: now,
+        first_use: at,
+        last_use: at,
         stale: false,
-        updated: now,
+        updated: at,
         deleted: false,
     }
 }
 
-fn upsert_inventory(state: &mut State, mut item: InventoryItem, now: u64) {
+/// Records a use at `at` of an inventory item, changed `now`.
+fn upsert_inventory(state: &mut State, mut item: InventoryItem, at: u64, now: u64) {
     match state
         .inventory
         .iter_mut()
         .find(|i| i.purpose == item.purpose && i.id == item.id && i.machine == item.machine)
     {
         Some(existing) => {
-            existing.last_use = now;
+            existing.last_use = existing.last_use.max(at);
             existing.stale = false;
             existing.deleted = false;
             if !item.path.is_empty() {
@@ -304,7 +639,10 @@ fn upsert_inventory(state: &mut State, mut item: InventoryItem, now: u64) {
             }
             existing.updated = bump(existing.updated, now);
         }
-        None => state.inventory.push(item),
+        None => state.inventory.push(InventoryItem {
+            updated: now,
+            ..item
+        }),
     }
 }
 
@@ -372,6 +710,8 @@ impl Store {
         )?;
         Ok(Arc::new(Self {
             conn: Mutex::new(conn),
+            #[cfg(test)]
+            fake_now: std::sync::atomic::AtomicU64::new(TEST_EPOCH_MS),
         }))
     }
 
@@ -391,7 +731,7 @@ impl Store {
     pub fn apply(&self, event: Event) -> Result<State> {
         let c = lock(&self.conn)?;
         let mut s: State = read_doc(&c, "state")?;
-        let now = now_ms();
+        let now = self.now();
         apply_event(&mut s, event, now)?;
         let s = normalise(s);
         write_doc(&c, "state", &s)?;
@@ -405,18 +745,43 @@ impl Store {
     pub fn apply_local(&self, event: LocalEvent) -> Result<LocalState> {
         let c = lock(&self.conn)?;
         let mut l: LocalState = read_doc(&c, "local")?;
-        let now = now_ms();
+        let now = self.now();
         match event {
             LocalEvent::SetDay { day } => {
                 l.days.retain(|d| d.machine != day.machine);
                 l.days.push(day);
             }
-            LocalEvent::SetHold { hold } => {
+            LocalEvent::SetHold { mut hold } => {
+                // A hold only grows: a later wrong number never ends an earlier hold sooner.
+                // Only ClearHold (Release now, with biometrics) ends it early. How far it
+                // reaches is capped below, after every change.
+                for h in l.holds.iter().filter(|h| h.machine == hold.machine) {
+                    hold.until = hold.until.max(h.until);
+                }
                 l.holds.retain(|h| h.machine != hold.machine);
                 l.holds.push(hold);
             }
             LocalEvent::ClearHold { machine } => l.holds.retain(|h| h.machine != machine),
-            LocalEvent::PutPlan { plan } => {
+            LocalEvent::PutPlan { mut plan } => {
+                // A cancelled approval stays cancelled: a write of the same approval (same
+                // request) made before the cancel was seen does not bring it back, and an
+                // approval whose delayed action was already recorded as cancelled (the cancel
+                // came before the approval was stored) is stored cancelled.
+                let delay_cancelled = plan.delay_id.as_ref().is_some_and(|id| {
+                    l.delayed
+                        .iter()
+                        .any(|d| &d.id == id && d.state == "cancelled")
+                });
+                if delay_cancelled
+                    || l.plans.iter().any(|p| {
+                        p.machine == plan.machine
+                            && p.plan_hash == plan.plan_hash
+                            && p.request_id == plan.request_id
+                            && p.state == "cancelled"
+                    })
+                {
+                    plan.state = "cancelled".into();
+                }
                 l.plans
                     .retain(|p| !(p.machine == plan.machine && p.plan_hash == plan.plan_hash));
                 l.plans.push(plan);
@@ -424,7 +789,31 @@ impl Store {
                     p.not_before + crate::decide::PLAN_WINDOW_MS + 7 * 86_400_000 > now
                 });
             }
-            LocalEvent::PutDelayed { action } => {
+            LocalEvent::PutDelayed { mut action } => {
+                // A delayed action that ended (cancelled, finished, gone, expired) stays
+                // ended: a write made from an older read (the relay's list fetched before a
+                // cancel note) does not make it wait again. Only a known end (cancelled,
+                // finished) replaces an unknown one (gone, expired).
+                if let Some(d) = l
+                    .delayed
+                    .iter()
+                    .find(|d| d.id == action.id && delayed_ended(&d.state))
+                {
+                    if !(delayed_known_end(&action.state) && !delayed_known_end(&d.state)) {
+                        action.state = d.state.clone();
+                        action.cancelled_by = d.cancelled_by.clone().or(action.cancelled_by);
+                    }
+                }
+                // Its plan approval is cancelled with it, whichever of the two was stored first.
+                if action.state == "cancelled" {
+                    for p in l
+                        .plans
+                        .iter_mut()
+                        .filter(|p| p.delay_id.as_deref() == Some(action.id.as_str()))
+                    {
+                        p.state = "cancelled".into();
+                    }
+                }
                 l.delayed.retain(|d| d.id != action.id);
                 l.delayed.push(action);
             }
@@ -456,6 +845,13 @@ impl Store {
                 }
             }
         }
+        // A hold never reaches more than its hour past now: one recorded while the clock ran
+        // ahead (until a year on) ends an hour after the next change once the clock is right,
+        // never sooner than an hour from now.
+        let cap = now.saturating_add(crate::decide::HOLD_MS);
+        for h in &mut l.holds {
+            h.until = h.until.min(cap);
+        }
         write_doc(&c, "local", &l)?;
         Ok(l)
     }
@@ -466,7 +862,7 @@ impl Store {
     pub fn see_request(&self, id: String, machine: String, expires: u64) -> Result<bool> {
         let c = lock(&self.conn)?;
         let mut l: LocalState = read_doc(&c, "local")?;
-        let now = now_ms();
+        let now = self.now();
         l.pending.retain(|p| {
             p.seen
                 .saturating_add(PENDING_SIGNED_KEEP_MS)
@@ -489,15 +885,19 @@ impl Store {
 
     /// Marks a pending request `answered`, `expired` or `ignored`.
     pub fn close_request(&self, id: String, outcome: String) -> Result<()> {
+        let now = self.now();
         let c = lock(&self.conn)?;
         let mut l: LocalState = read_doc(&c, "local")?;
         match l.pending.iter_mut().find(|p| p.id == id) {
-            Some(p) => p.outcome = outcome,
+            Some(p) => {
+                p.outcome = outcome;
+                p.seen = p.seen.max(now);
+            }
             None => l.pending.push(PendingEntry {
                 id,
                 outcome,
-                expires: now_ms(),
-                seen: now_ms(),
+                expires: now,
+                seen: now,
                 ..PendingEntry::default()
             }),
         }
@@ -517,246 +917,82 @@ impl Store {
         place_id: Option<String>,
         utc_offset_secs: i32,
     ) -> Result<AnsweredResult> {
-        let now = now_ms();
-        let c = lock(&self.conn)?;
-        let mut s: State = read_doc(&c, "state")?;
-        let mut l: LocalState = read_doc(&c, "local")?;
-        let machine = request.machine();
-        let ctx = request.ctx().unwrap_or_default();
-        let fp = s
-            .words
-            .as_ref()
-            .map(|w| w.fingerprint.clone())
-            .unwrap_or_default();
-
-        if let Some(p) = l.pending.iter_mut().find(|p| p.id == request.id()) {
-            p.outcome = if outcome == "expired" {
-                "expired"
-            } else {
-                "answered"
-            }
-            .into();
-        }
-        let entry = UsageEntry {
-            time: now,
-            machine: machine.clone(),
-            key: subject_label(&request),
-            agent: ctx.agent.clone(),
-            repo: ctx.repo.as_ref().map(|r| r.name.clone()),
-            command: Some(ctx.command.clone()).filter(|c| !c.is_empty()),
-            outcome: outcome.clone(),
-        };
-        insert_usage(&c, &entry)?;
-        let month = local_month(now, utc_offset_secs);
-        let declined = u64::from(outcome == "denied");
-        let keys = if allowed {
-            request.items().len().max(1) as u64
-        } else {
-            0
-        };
-        add_to_summary(&mut s, month, &machine, keys, declined, now);
-
-        if allowed {
-            for u in request.uses() {
-                for name in &u.names {
-                    let existing = s.answers.iter_mut().find(|a| {
-                        !a.deleted
-                            && a.agent == u.agent
-                            && a.repo_id == u.repository
-                            && &a.key_name == name
-                    });
-                    match existing {
-                        Some(a) => {
-                            a.last_used = now;
-                            a.updated = bump(a.updated, now);
-                        }
-                        None if remember => s.answers.push(RememberedAnswer {
-                            agent: u.agent.clone(),
-                            key_name: name.clone(),
-                            repo_id: u.repository.clone(),
-                            repo_name: ctx
-                                .repo
-                                .as_ref()
-                                .filter(|r| r.id == u.repository)
-                                .map(|r| r.name.clone())
-                                .unwrap_or_else(|| {
-                                    u.repository.rsplit('/').next().unwrap_or("").to_owned()
-                                }),
-                            created: now,
-                            last_used: now,
-                            updated: now,
-                            deleted: false,
-                        }),
-                        None => {}
-                    }
-                }
-            }
-            for item in request.items() {
-                upsert_inventory(&mut s, item_inventory(&item, &machine, now, &fp), now);
-            }
-        }
-
-        let mut first_of_day = false;
-        if allowed && request.kind() == RequestKind::Open {
-            let active = l
-                .days
-                .iter()
-                .find(|d| d.machine == machine)
-                .is_some_and(|d| crate::decide::day_active(d, now, utc_offset_secs));
-            if !active {
-                first_of_day = true;
-                l.days.retain(|d| d.machine != machine);
-                l.days.push(DayRecord {
-                    machine: machine.clone(),
-                    first_approval: now,
-                    place_id,
-                    ends: day_end(now, utc_offset_secs),
-                });
-            }
-        }
-        l.dirty = true;
-        let s = normalise(s);
-        write_doc(&c, "state", &s)?;
-        write_doc(&c, "local", &l)?;
-        Ok(AnsweredResult { first_of_day })
+        let now = self.now();
+        self.record_answer(
+            &request,
+            &outcome,
+            allowed,
+            remember,
+            place_id,
+            utc_offset_secs,
+            now,
+            now,
+        )
     }
 
-    /// Records a `report` request: status, uses, inventory, hand-back.
-    pub fn apply_report(&self, request: Arc<Request>) -> Result<ReportResult> {
-        let machine = request.machine();
-        let mut result = match request.status() {
-            Some(st) => self.apply_status(machine.clone(), st)?,
-            None => ReportResult {
-                ack: None,
-                handback: None,
-            },
-        };
-        if let Some(hb) = request.handback() {
-            let now = now_ms();
-            let c = lock(&self.conn)?;
-            let mut s: State = read_doc(&c, "state")?;
-            let name = s.machine(&machine).map(display_name).unwrap_or_default();
-            let report = HandbackReport {
-                id: format!("{}:{}", machine, hb.hash),
-                machine: machine.clone(),
-                machine_name: name,
-                what: "unseal".into(),
-                plan_hash: hb.hash.clone(),
-                items: hb
-                    .items
-                    .iter()
-                    .map(|i| ReportItem {
-                        kind: i.kind.clone(),
-                        name: i.name.clone(),
-                        to: i.to.clone(),
-                        state: i.state.clone(),
-                    })
-                    .collect(),
-                run: hb.run.clone(),
-                time: now,
-                updated: now,
-            };
-            s.reports.retain(|r| r.id != report.id);
-            s.reports.push(report.clone());
-            let mut l: LocalState = read_doc(&c, "local")?;
-            for p in l
-                .plans
-                .iter_mut()
-                .filter(|p| p.machine == machine && p.plan_hash == hb.hash)
-            {
-                p.state = "done".into();
-            }
-            l.dirty = true;
-            write_doc(&c, "state", &normalise(s))?;
-            write_doc(&c, "local", &l)?;
-            result.handback = Some(report);
-        }
-        Ok(result)
+    /// [`Store::answered`] for an answer given earlier, at `answered_at` (Unix ms): what the
+    /// iOS extension answered by itself, merged from its inbox when the app next runs, which
+    /// can be hours later. The use counts at the time it was given: the usage entry, its
+    /// month, the answer's last use and the inventory. A time after this phone's clock counts
+    /// as now.
+    pub fn answered_at(
+        &self,
+        request: Arc<Request>,
+        outcome: String,
+        allowed: bool,
+        place_id: Option<String>,
+        utc_offset_secs: i32,
+        answered_at: u64,
+    ) -> Result<AnsweredResult> {
+        let now = self.now();
+        self.record_answer(
+            &request,
+            &outcome,
+            allowed,
+            false,
+            place_id,
+            utc_offset_secs,
+            answered_at.min(now),
+            now,
+        )
+    }
+
+    /// Records a `report` request: status, uses, inventory, hand-back. `utc_offset_secs` is
+    /// the phone's UTC offset now, for the month the uses count in.
+    pub fn apply_report(
+        &self,
+        request: Arc<Request>,
+        utc_offset_secs: i32,
+    ) -> Result<ReportResult> {
+        let now = self.now();
+        self.record_report(&request, utc_offset_secs, now, now)
+    }
+
+    /// [`Store::apply_report`] for a report the iOS extension acknowledged earlier, at
+    /// `received_at` (Unix ms), merged from its inbox later: the status counts as reported
+    /// then (an open session's time left runs from then), and its uses in that month. A time
+    /// after this phone's clock counts as now.
+    pub fn apply_report_at(
+        &self,
+        request: Arc<Request>,
+        utc_offset_secs: i32,
+        received_at: u64,
+    ) -> Result<ReportResult> {
+        let now = self.now();
+        self.record_report(&request, utc_offset_secs, received_at.min(now), now)
     }
 
     /// Records a machine status (machine channel or `report`). A `seq` already seen is ignored
-    /// except for its `ack`.
-    pub fn apply_status(&self, machine: String, status: MachineStatus) -> Result<ReportResult> {
-        let now = now_ms();
-        let c = lock(&self.conn)?;
-        let mut s: State = read_doc(&c, "state")?;
-        let fp = s
-            .words
-            .as_ref()
-            .map(|w| w.fingerprint.clone())
-            .unwrap_or_default();
-        let Some(m) = s
-            .machines
-            .iter_mut()
-            .find(|m| m.key == machine && !m.deleted)
-        else {
-            return Err(AppError::NotFound);
-        };
-        let seen = m.last_status.as_ref().map_or(0, |st| st.seq);
-        if status.seq != 0 && status.seq <= seen {
-            return Ok(ReportResult {
-                ack: Some(status.seq),
-                handback: None,
-            });
-        }
-        if let Some(st) = &status.state {
-            m.last_status = Some(SessionStatus {
-                session: st.session.clone(),
-                left: st.left,
-                stop: st.stop,
-                place: st.place.clone(),
-                reported_at: now,
-                seq: status.seq,
-            });
-        } else if let Some(prev) = m.last_status.as_mut() {
-            prev.seq = status.seq;
-        }
-        m.last_seen = Some(now);
-        m.updated = bump(m.updated, now);
-        let month = local_month(now, 0);
-        let mut uses = 0;
-        // A machine resends its log until it is acknowledged, so a later status repeats the
-        // entries an earlier one carried: an entry already recorded before this status is
-        // skipped (two equal entries inside one status are both kept).
-        let before: i64 =
-            c.query_row("SELECT COALESCE(MAX(id), 0) FROM usage", [], |r| r.get(0))?;
-        for e in &status.log {
-            let entry = UsageEntry {
-                time: if e.time > 0 { e.time } else { now },
-                machine: machine.clone(),
-                key: e
-                    .names
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| e.command.clone()),
-                agent: e.agent.clone(),
-                repo: e
-                    .repository
-                    .as_ref()
-                    .map(|r| r.rsplit('/').next().unwrap_or(r).to_owned()),
-                command: Some(e.command.clone()).filter(|c| !c.is_empty()),
-                outcome: "in_session".into(),
-            };
-            if e.time > 0 && usage_recorded(&c, &entry, before)? {
-                continue;
-            }
-            insert_usage(&c, &entry)?;
-            uses += e.names.len().max(1) as u64;
-        }
-        if uses > 0 {
-            add_to_summary(&mut s, month, &machine, uses, 0, now);
-        }
-        for item in &status.inventory {
-            upsert_inventory(&mut s, item_inventory(item, &machine, now, &fp), now);
-        }
-        write_doc(&c, "state", &normalise(s))?;
-        let mut l: LocalState = read_doc(&c, "local")?;
-        l.dirty = true;
-        write_doc(&c, "local", &l)?;
-        Ok(ReportResult {
-            ack: Some(status.seq),
-            handback: None,
-        })
+    /// except for its `ack`. The uses it reports count in this month by the phone's UTC offset
+    /// now, `utc_offset_secs`, as answers do.
+    pub fn apply_status(
+        &self,
+        machine: String,
+        status: MachineStatus,
+        utc_offset_secs: i32,
+    ) -> Result<ReportResult> {
+        let now = self.now();
+        self.record_status(machine, status, utc_offset_secs, now, now)
     }
 
     /// The usage log, newest first, optionally for one machine or key.
@@ -855,7 +1091,7 @@ impl Store {
     pub fn next_message_seq(&self, machine: String) -> Result<u64> {
         let c = lock(&self.conn)?;
         let mut l: LocalState = read_doc(&c, "local")?;
-        let now = now_ms();
+        let now = self.now();
         let v = match l.message_seq.iter_mut().find(|m| m.machine == machine) {
             Some(m) => {
                 m.value = m.value.max(now).max(m.value + 1);
@@ -879,6 +1115,23 @@ impl Store {
         c.execute_batch("DELETE FROM doc; DELETE FROM usage;")?;
         Ok(())
     }
+}
+
+/// A delayed action's state from which it never waits again.
+fn delayed_ended(state: &str) -> bool {
+    matches!(state, "cancelled" | "finished" | "gone" | "expired")
+}
+
+/// An end that says what happened (cancelled, and by whom; finished), rather than only that
+/// the relay no longer has the action.
+fn delayed_known_end(state: &str) -> bool {
+    matches!(state, "cancelled" | "finished")
+}
+
+/// Whether an allowed `open` with this outcome can be the first approval of a day: only an
+/// answer the person gave (SPEC.md 9.3).
+fn answer_begins_day(outcome: &str) -> bool {
+    matches!(outcome, "one_tap" | "once" | "confirmed")
 }
 
 /// Whether a usage row equal to `e` was stored with an id up to `max_id`.
@@ -926,6 +1179,24 @@ pub fn display_name(m: &Machine) -> String {
 #[uniffi::export]
 pub fn machine_display_name(machine: Machine) -> String {
     display_name(&machine)
+}
+
+/// Opens a request that was already answered, against the time it was answered
+/// (`answered_at`, Unix ms) instead of the clock now: for recording what the iOS extension
+/// answered by itself (its inbox), which the app may merge hours later, after the signed time
+/// has left the 10-minute window. Everything else is checked as `open_request` checks it. Only
+/// for [`Store::answered_at`] and [`Store::apply_report_at`]; a request to answer is opened
+/// with `open_request`.
+#[uniffi::export]
+pub fn open_answered_request(
+    keys: Arc<sealctl_core::PhoneKeys>,
+    relay_machine_key: String,
+    id: String,
+    sealed: String,
+    answered_at: u64,
+) -> std::result::Result<Arc<Request>, sealctl_core::CoreError> {
+    sealctl_core::request::open_request_at(&keys, &relay_machine_key, &id, &sealed, answered_at)
+        .map(Arc::new)
 }
 
 fn apply_event(s: &mut State, event: Event, now: u64) -> Result<()> {
@@ -987,12 +1258,17 @@ fn apply_event(s: &mut State, event: Event, now: u64) -> Result<()> {
             }
         }
         Event::RememberAnswer { mut answer } => {
-            s.answers.retain(|a| {
-                !(a.agent == answer.agent
+            let same = |a: &RememberedAnswer| {
+                a.agent == answer.agent
                     && a.key_name == answer.key_name
-                    && a.repo_id == answer.repo_id)
-            });
-            answer.updated = bump(answer.updated, now);
+                    && a.repo_id == answer.repo_id
+            };
+            answer.updated = bump_over(
+                s.answers.iter().filter(|a| same(a)).map(|a| a.updated),
+                answer.updated,
+                now,
+            );
+            s.answers.retain(|a| !same(a));
             answer.deleted = false;
             if answer.created == 0 {
                 answer.created = now;
@@ -1025,7 +1301,14 @@ fn apply_event(s: &mut State, event: Event, now: u64) -> Result<()> {
                     msg: format!("at most {} places", places::MAX_PLACES),
                 });
             }
-            place.updated = bump(place.updated, now);
+            place.updated = bump_over(
+                s.places
+                    .iter()
+                    .filter(|p| p.id == place.id)
+                    .map(|p| p.updated),
+                place.updated,
+                now,
+            );
             if place.created == 0 {
                 place.created = now;
             }
@@ -1059,7 +1342,14 @@ fn apply_event(s: &mut State, event: Event, now: u64) -> Result<()> {
             s.settings = settings;
         }
         Event::AddReport { mut report } => {
-            report.updated = bump(report.updated, now);
+            report.updated = bump_over(
+                s.reports
+                    .iter()
+                    .filter(|r| r.id == report.id)
+                    .map(|r| r.updated),
+                report.updated,
+                now,
+            );
             s.reports.retain(|r| r.id != report.id);
             s.reports.push(report);
         }
@@ -1102,6 +1392,706 @@ mod tests {
             name: name.into(),
             ..Machine::default()
         }
+    }
+
+    /// 2026-11-21T00:00:00Z.
+    const MIDNIGHT: u64 = 1_795_219_200_000;
+    const H: u64 = 3_600_000;
+    const MIN: u64 = 60_000;
+
+    /// A request of `why` signed by `machine` at `t`, opened at `t`.
+    fn request_at(
+        machine: &sealctl_core::machine::MachineKeys,
+        why: &str,
+        t: u64,
+        uses: Vec<sealctl_core::wire::AgentUse>,
+    ) -> Arc<Request> {
+        request_with(machine, why, t, |b| b.uses = uses)
+    }
+
+    thread_local! {
+        /// This test phone's keys.
+        static KEYS: Arc<sealctl_core::PhoneKeys> = Arc::new(sealctl_core::PhoneKeys::from_root(
+            &sealctl_core::Root::from_words(&sealctl_core::Words::generate().unwrap()),
+        ));
+    }
+
+    /// A request of `why` signed by `machine` at `t`, as the relay carries it: (id, sealed).
+    fn sealed_with(
+        machine: &sealctl_core::machine::MachineKeys,
+        why: &str,
+        t: u64,
+        f: impl FnOnce(&mut sealctl_core::wire::RequestBody),
+    ) -> (String, String) {
+        use sealctl_core::request::{new_request_id, seal_request};
+        let keys = KEYS.with(Arc::clone);
+        let phone = sealctl_core::PhonePublic::from_b64u(&keys.public_id(), &keys.box_public_key())
+            .unwrap();
+        let id = new_request_id().unwrap();
+        let mut body = sealctl_core::wire::RequestBody {
+            v: 1,
+            t,
+            why: why.into(),
+            ..Default::default()
+        };
+        f(&mut body);
+        let sealed = seal_request(machine, &phone, &id, body).unwrap();
+        (id, sealed.sealed)
+    }
+
+    /// [`request_at`] with the body set up by `f`.
+    fn request_with(
+        machine: &sealctl_core::machine::MachineKeys,
+        why: &str,
+        t: u64,
+        f: impl FnOnce(&mut sealctl_core::wire::RequestBody),
+    ) -> Arc<Request> {
+        let (id, sealed) = sealed_with(machine, why, t, f);
+        open_answered_request(KEYS.with(Arc::clone), machine.id(), id, sealed, t).unwrap()
+    }
+
+    fn paired(st: &Store) -> sealctl_core::machine::MachineKeys {
+        let m = sealctl_core::machine::MachineKeys::generate().unwrap();
+        st.apply(Event::PairMachine {
+            machine: machine(&m.id(), "dev@mbp"),
+            replaces: None,
+        })
+        .unwrap();
+        m
+    }
+
+    fn day_of(st: &Store, key: &str) -> Option<DayRecord> {
+        st.local()
+            .unwrap()
+            .days
+            .into_iter()
+            .find(|d| d.machine == key)
+    }
+
+    #[test]
+    fn an_answer_given_by_itself_never_begins_a_day() {
+        let st = store();
+        let m = paired(&st);
+        // The day begins with a tap at 13:00 at the desk; it ends at 02:00.
+        st.set_now(MIDNIGHT + 13 * H);
+        let r = request_at(&m, "open", MIDNIGHT + 13 * H, Vec::new());
+        let first = st
+            .answered(r, "one_tap".into(), true, false, Some("desk".into()), 0)
+            .unwrap();
+        assert!(first.first_of_day);
+        let day = day_of(&st, &m.id()).unwrap();
+        assert_eq!(day.ends, MIDNIGHT + 26 * H);
+        // An open decided by itself at 01:59:59 is recorded once its reply was posted, after
+        // 02:00: the answer was the old day's, and begins no new one.
+        let r = request_at(&m, "open", MIDNIGHT + 26 * H - 1000, Vec::new());
+        st.set_now(MIDNIGHT + 26 * H + 2000);
+        let late = st
+            .answered(r, "automatic".into(), true, false, Some("desk".into()), 0)
+            .unwrap();
+        assert!(!late.first_of_day);
+        assert_eq!(day_of(&st, &m.id()), Some(day));
+        // So the next morning's first open at the desk still asks.
+        let morning = MIDNIGHT + 33 * H;
+        let d = day_of(&st, &m.id()).unwrap();
+        assert!(!crate::decide::day_active(&d, morning, 0));
+        // The same for a later part of an approved plan, answered without asking.
+        let r = request_at(&m, "open", MIDNIGHT + 30 * H, Vec::new());
+        st.set_now(MIDNIGHT + 30 * H);
+        let plan = st
+            .answered(r, "in_session".into(), true, false, Some("desk".into()), 0)
+            .unwrap();
+        assert!(!plan.first_of_day);
+        // A tap after 02:00 begins the day.
+        let r = request_at(&m, "open", morning, Vec::new());
+        st.set_now(morning);
+        let tap = st
+            .answered(r, "once".into(), true, false, Some("desk".into()), 0)
+            .unwrap();
+        assert!(tap.first_of_day);
+        assert_eq!(day_of(&st, &m.id()).unwrap().first_approval, morning);
+    }
+
+    #[test]
+    fn an_answer_the_extension_gave_counts_when_its_inbox_is_merged_late() {
+        use sealctl_core::wire::AgentUse;
+        let st = store();
+        let m = paired(&st);
+        let t0 = MIDNIGHT + 9 * H;
+        st.set_now(t0);
+        st.apply(Event::RememberAnswer {
+            answer: RememberedAnswer {
+                agent: "claude".into(),
+                key_name: "K".into(),
+                repo_id: "r".into(),
+                ..RememberedAnswer::default()
+            },
+        })
+        .unwrap();
+        // 89 days on, the extension answers the agent's use by itself; the app runs again
+        // five hours later and merges the inbox.
+        let used = t0 + 89 * 24 * H;
+        let (id, sealed) = sealed_with(&m, "agent", used, |b| {
+            b.uses = vec![AgentUse {
+                agent: "claude".into(),
+                repository: "r".into(),
+                names: vec!["K".into()],
+            }];
+        });
+        let merged = used + 5 * H;
+        st.set_now(merged);
+        // Opened against the clock now, the signed time is long outside its window.
+        assert!(matches!(
+            KEYS.with(|k| sealctl_core::request::open_request_at(k, &m.id(), &id, &sealed, merged)),
+            Err(sealctl_core::CoreError::Expired)
+        ));
+        let req = open_answered_request(KEYS.with(Arc::clone), m.id(), id, sealed, used).unwrap();
+        let r = st
+            .answered_at(req, "automatic".into(), true, Some("desk".into()), 0, used)
+            .unwrap();
+        assert!(!r.first_of_day);
+        // The use renews the answer, and counts when it was made.
+        let a = st.snapshot().unwrap().answers[0].clone();
+        assert_eq!(a.last_used, used);
+        let u = st.usage(None, None, 10).unwrap();
+        assert_eq!((u[0].time, u[0].outcome.as_str()), (used, "automatic"));
+        assert_eq!(st.summary(local_month(used, 0)).unwrap().keys_used, 1);
+        // So it still answers by itself past the 90 days from its first remembering.
+        assert!(crate::prune::answer_live(&a, t0 + 100 * 24 * H));
+        assert!(!st.prune(t0 + 100 * 24 * H).unwrap().answers[0].deleted);
+        // An answer time after the phone's clock counts as now.
+        let r = request_at(&m, "open", merged + H, Vec::new());
+        st.answered_at(r, "automatic".into(), true, None, 0, merged + H)
+            .unwrap();
+        assert_eq!(st.usage(None, None, 1).unwrap()[0].time, merged);
+    }
+
+    #[test]
+    fn a_report_the_extension_acknowledged_counts_from_when_it_came() {
+        use sealctl_core::wire::{LogEntry, SessionState};
+        let st = store();
+        let m = paired(&st);
+        let came = MIDNIGHT + 9 * H;
+        // An open session with 10 minutes left, reported at 09:00 and merged at 11:00.
+        let r = request_with(&m, "report", came, |b| {
+            b.seq = Some(7);
+            b.state = Some(SessionState {
+                session: "open".into(),
+                left: Some(600),
+                ..SessionState::default()
+            });
+            b.log = vec![LogEntry {
+                command: "env".into(),
+                names: vec!["A".into()],
+                ..LogEntry::default()
+            }];
+            b.handback = Some(sealctl_core::wire::Handback {
+                hash: "h".into(),
+                ..Default::default()
+            });
+        });
+        st.set_now(came - H);
+        for (hash, state) in [("h", "approved"), ("h2", "cancelled")] {
+            st.apply_local(LocalEvent::PutPlan {
+                plan: PlanApprovalRecord {
+                    machine: m.id(),
+                    request_id: hash.into(),
+                    plan_hash: hash.into(),
+                    not_before: came - H,
+                    state: state.into(),
+                    ..PlanApprovalRecord::default()
+                },
+            })
+            .unwrap();
+        }
+        st.set_now(came + 2 * H);
+        let res = st.apply_report_at(r, 0, came).unwrap();
+        assert_eq!(res.ack, Some(7));
+        assert_eq!(res.handback.unwrap().time, came);
+        let mach = st.snapshot().unwrap().machine(&m.id()).cloned().unwrap();
+        // The session's time left runs from 09:00: it is not shown open at 11:00.
+        let status = mach.last_status.unwrap();
+        assert_eq!(status.reported_at, came);
+        assert_eq!(mach.last_seen, Some(came));
+        assert_eq!(st.usage(None, None, 1).unwrap()[0].time, came);
+        // With a status in the same report, the hand-back still marks its plan done.
+        let l = st.local().unwrap();
+        let state = |h: &str| {
+            l.plans
+                .iter()
+                .find(|p| p.plan_hash == h)
+                .unwrap()
+                .state
+                .clone()
+        };
+        assert_eq!(
+            (state("h"), state("h2")),
+            ("done".into(), "cancelled".into())
+        );
+        // The same hand-back for a cancelled plan, with a status, leaves it cancelled.
+        let r = request_with(&m, "report", came + MIN, |b| {
+            b.seq = Some(8);
+            b.state = Some(SessionState {
+                session: "locked".into(),
+                ..SessionState::default()
+            });
+            b.handback = Some(sealctl_core::wire::Handback {
+                hash: "h2".into(),
+                ..Default::default()
+            });
+        });
+        assert_eq!(st.apply_report(r, 0).unwrap().ack, Some(8));
+        let l = st.local().unwrap();
+        assert_eq!(
+            l.plans.iter().find(|p| p.plan_hash == "h2").unwrap().state,
+            "cancelled"
+        );
+    }
+
+    #[test]
+    fn a_late_answer_keeps_its_id_as_long_as_its_body_can_be_opened() {
+        let w = sealctl_core::request::TIME_WINDOW_MS;
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        // Seen at 09:00 but not opened then (signed 25 minutes ahead of this phone's clock),
+        // opened and answered at 09:25.
+        st.set_now(t0);
+        assert!(st.see_request("r1".into(), "m".into(), 0).unwrap());
+        st.set_now(t0 + 25 * MIN);
+        st.close_request("r1".into(), "answered".into()).unwrap();
+        let m = paired(&st);
+        let req = request_at(&m, "open", t0 + 25 * MIN, Vec::new());
+        st.set_now(t0);
+        assert!(st.see_request(req.id(), req.machine(), 0).unwrap());
+        st.set_now(t0 + 25 * MIN);
+        st.answered(req.clone(), "one_tap".into(), true, false, None, 0)
+            .unwrap();
+        // Its body can be opened until 09:45: until then (and the 10 minutes after) the id is
+        // refused, although it was first seen more than 30 minutes ago.
+        st.set_now(t0 + 25 * MIN + 2 * w + PENDING_KEEP_MS - 1);
+        assert!(!st.see_request("r1".into(), "m".into(), 0).unwrap());
+        assert!(!st.see_request(req.id(), req.machine(), 0).unwrap());
+        st.set_now(t0 + 25 * MIN + 2 * w + PENDING_KEEP_MS);
+        assert!(st.see_request("r1".into(), "m".into(), 0).unwrap());
+    }
+
+    #[test]
+    fn a_use_allowed_once_does_not_revive_an_answer_past_its_lifetime() {
+        use sealctl_core::wire::AgentUse;
+        let st = store();
+        let m = paired(&st);
+        let t0 = MIDNIGHT + 9 * H;
+        st.set_now(t0);
+        st.apply(Event::RememberAnswer {
+            answer: RememberedAnswer {
+                agent: "claude".into(),
+                key_name: "K".into(),
+                repo_id: "r".into(),
+                ..RememberedAnswer::default()
+            },
+        })
+        .unwrap();
+        let uses = || {
+            vec![AgentUse {
+                agent: "claude".into(),
+                repository: "r".into(),
+                names: vec!["K".into()],
+            }]
+        };
+        // 91 days later, before any prune: the agent asks again and is allowed once.
+        let later = t0 + 91 * 24 * H;
+        st.set_now(later);
+        let r = request_at(&m, "agent", later, uses());
+        st.answered(r, "once".into(), true, false, None, 0).unwrap();
+        let a = st.snapshot().unwrap().answers[0].clone();
+        assert_eq!(a.last_used, t0);
+        assert!(st.prune(later).unwrap().answers[0].deleted);
+        // Allowed and remembered: the answer is kept again from now.
+        let r = request_at(&m, "agent", later, uses());
+        st.answered(r, "one_tap".into(), true, true, None, 0)
+            .unwrap();
+        let s = st.snapshot().unwrap();
+        assert_eq!(s.live_answers().count(), 1);
+        assert_eq!(s.live_answers().next().unwrap().last_used, later);
+    }
+
+    #[test]
+    fn re_adding_beats_a_removal_from_a_clock_ahead() {
+        use sealctl_core::wire::AgentUse;
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        let answer = || RememberedAnswer {
+            agent: "claude".into(),
+            key_name: "K".into(),
+            repo_id: "r".into(),
+            ..RememberedAnswer::default()
+        };
+        st.set_now(t0);
+        st.apply(Event::RememberAnswer { answer: answer() })
+            .unwrap();
+        // Removed on an install whose clock runs a day ahead; this phone merged that.
+        st.set_now(t0 + 24 * H);
+        let removed = st
+            .apply(Event::RemoveAnswer {
+                agent: "claude".into(),
+                key_name: "K".into(),
+                repo_id: "r".into(),
+            })
+            .unwrap();
+        // Remembered again here an hour later: it must win a merge with that removal.
+        st.set_now(t0 + H);
+        let s = st
+            .apply(Event::RememberAnswer { answer: answer() })
+            .unwrap();
+        let merged = crate::merge::merge_state(removed.clone(), s);
+        assert_eq!(merged.live_answers().count(), 1);
+        // The same when the agent's first use is allowed and remembered.
+        let st = store();
+        st.apply(Event::MergeRemote {
+            remote: removed.clone(),
+        })
+        .unwrap();
+        st.set_now(t0 + H);
+        let m = paired(&st);
+        let uses = vec![AgentUse {
+            agent: "claude".into(),
+            repository: "r".into(),
+            names: vec!["K".into()],
+        }];
+        let r = request_at(&m, "open", t0 + H, uses);
+        st.answered(r, "one_tap".into(), true, true, None, 0)
+            .unwrap();
+        let merged = crate::merge::merge_state(removed, st.snapshot().unwrap());
+        assert_eq!(merged.live_answers().count(), 1);
+    }
+
+    #[test]
+    fn a_prune_wins_over_copies_stamped_by_a_clock_ahead() {
+        let t0 = MIDNIGHT + 9 * H;
+        let ahead = t0 + 24 * H;
+        let held = State {
+            answers: vec![RememberedAnswer {
+                agent: "claude".into(),
+                key_name: "K".into(),
+                repo_id: "r".into(),
+                created: t0 - 200 * 24 * H,
+                last_used: t0 - 91 * 24 * H,
+                updated: ahead,
+                ..RememberedAnswer::default()
+            }],
+            ..State::default()
+        };
+        let pruned = crate::prune::prune_state(held.clone(), t0);
+        assert!(pruned.answers[0].deleted);
+        let merged = crate::merge::merge_state(pruned, held);
+        assert!(merged.answers[0].deleted);
+    }
+
+    #[test]
+    fn a_later_wrong_number_never_shortens_a_hold() {
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        st.set_now(t0);
+        let hold = |until| LocalEvent::SetHold {
+            hold: Hold {
+                machine: "m".into(),
+                until,
+            },
+        };
+        st.apply_local(hold(t0 + H)).unwrap();
+        // A second wrong number recorded with an earlier end (its time read before the first
+        // was stored, or the clock was set back): the hold keeps the later end.
+        let l = st.apply_local(hold(t0 + H - 5 * MIN)).unwrap();
+        assert_eq!(l.holds.len(), 1);
+        assert_eq!(l.holds[0].until, t0 + H);
+        // A wrong number half an hour on holds an hour from then.
+        st.set_now(t0 + 30 * MIN);
+        let l = st.apply_local(hold(t0 + H + 30 * MIN)).unwrap();
+        assert_eq!(l.holds[0].until, t0 + H + 30 * MIN);
+        // Only a release ends it early.
+        let l = st
+            .apply_local(LocalEvent::ClearHold {
+                machine: "m".into(),
+            })
+            .unwrap();
+        assert!(l.holds.is_empty());
+    }
+
+    #[test]
+    fn a_hold_recorded_while_the_clock_ran_ahead_ends_an_hour_after_it_is_right() {
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        let year = 365 * 24 * H;
+        // A wrong number while the phone's clock reads a year ahead.
+        st.set_now(t0 + year);
+        let l = st
+            .apply_local(LocalEvent::SetHold {
+                hold: Hold {
+                    machine: "m".into(),
+                    until: t0 + year + H,
+                },
+            })
+            .unwrap();
+        assert_eq!(l.holds[0].until, t0 + year + H);
+        // The clock is put right; the next change of the local records caps the hold at an
+        // hour from now: still held for that hour, not for a year.
+        st.set_now(t0 + 10 * MIN);
+        let l = st
+            .apply_local(LocalEvent::Synced {
+                rev: 1,
+                uploaded: false,
+            })
+            .unwrap();
+        assert_eq!(l.holds[0].until, t0 + 10 * MIN + H);
+        // A clock set back: the hold still lasts its full hour from when it is capped.
+        st.set_now(t0 - 2 * H);
+        let l = st.apply_local(LocalEvent::AgentNoteShown).unwrap();
+        assert_eq!(l.holds[0].until, t0 - H);
+    }
+
+    #[test]
+    fn a_cancelled_delay_cancels_its_plan_whichever_is_stored_first() {
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        st.set_now(t0);
+        let action = |id: &str, state: &str, by: Option<&str>| LocalEvent::PutDelayed {
+            action: DelayedAction {
+                id: id.into(),
+                what: "unseal_all".into(),
+                machine: Some("m".into()),
+                release_at: t0 + 2 * H,
+                expires: t0 + 2 * H + 15 * MIN,
+                state: state.into(),
+                cancelled_by: by.map(Into::into),
+            },
+        };
+        let plan = |id: &str, hash: &str| LocalEvent::PutPlan {
+            plan: PlanApprovalRecord {
+                machine: "m".into(),
+                request_id: id.into(),
+                plan_hash: hash.into(),
+                not_before: t0 + 2 * H,
+                state: "delayed".into(),
+                delay_id: Some(id.into()),
+                ..PlanApprovalRecord::default()
+            },
+        };
+        // The machine cancels while the reply is posted: the cancel is recorded before the
+        // approval is stored.
+        st.apply_local(action("d1", "cancelled", Some("m")))
+            .unwrap();
+        st.apply_local(action("d1", "waiting", None)).unwrap();
+        let l = st.apply_local(plan("d1", "h1")).unwrap();
+        assert_eq!(l.plans[0].state, "cancelled");
+        // The other order: the approval first, then the cancel.
+        st.apply_local(plan("d2", "h2")).unwrap();
+        let l = st
+            .apply_local(action("d2", "cancelled", Some("m")))
+            .unwrap();
+        let p = l.plans.iter().find(|p| p.request_id == "d2").unwrap();
+        assert_eq!(p.state, "cancelled");
+    }
+
+    #[test]
+    fn a_known_end_replaces_gone_but_nothing_makes_an_end_wait() {
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        st.set_now(t0);
+        let action = |state: &str, by: Option<&str>| LocalEvent::PutDelayed {
+            action: DelayedAction {
+                id: "d1".into(),
+                what: "unseal_all".into(),
+                machine: Some("m".into()),
+                release_at: t0 + 2 * H,
+                expires: t0 + 2 * H + 15 * MIN,
+                state: state.into(),
+                cancelled_by: by.map(Into::into),
+            },
+        };
+        // The relay's list no longer has it (gone), then the cancel note says who cancelled.
+        st.apply_local(action("gone", None)).unwrap();
+        let l = st.apply_local(action("cancelled", Some("m"))).unwrap();
+        assert_eq!(l.delayed[0].state, "cancelled");
+        assert_eq!(l.delayed[0].cancelled_by.as_deref(), Some("m"));
+        for (state, by) in [("waiting", None), ("gone", None), ("finished", None)] {
+            let l = st.apply_local(action(state, by)).unwrap();
+            assert_eq!(l.delayed[0].state, "cancelled");
+            assert_eq!(l.delayed[0].cancelled_by.as_deref(), Some("m"));
+        }
+        // Expired, then finished.
+        st.apply_local(LocalEvent::RemoveDelayed { id: "d1".into() })
+            .unwrap();
+        st.apply_local(action("expired", None)).unwrap();
+        assert_eq!(
+            st.apply_local(action("waiting", None)).unwrap().delayed[0].state,
+            "expired"
+        );
+        assert_eq!(
+            st.apply_local(action("finished", None)).unwrap().delayed[0].state,
+            "finished"
+        );
+    }
+
+    #[test]
+    fn a_cancel_is_not_undone_by_an_older_write() {
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        st.set_now(t0);
+        let action = |state: &str, by: Option<&str>| LocalEvent::PutDelayed {
+            action: DelayedAction {
+                id: "d1".into(),
+                what: "unseal_all".into(),
+                machine: Some("m".into()),
+                release_at: t0 + 2 * H,
+                expires: t0 + 2 * H + 15 * MIN,
+                state: state.into(),
+                cancelled_by: by.map(Into::into),
+            },
+        };
+        st.apply_local(action("waiting", None)).unwrap();
+        // The cancel note arrives while the relay's list, read just before it, is on its way.
+        st.apply_local(action("cancelled", Some("m"))).unwrap();
+        let l = st.apply_local(action("waiting", None)).unwrap();
+        assert_eq!(l.delayed[0].state, "cancelled");
+        assert_eq!(l.delayed[0].cancelled_by.as_deref(), Some("m"));
+
+        let plan = |request: &str, state: &str| LocalEvent::PutPlan {
+            plan: PlanApprovalRecord {
+                machine: "m".into(),
+                request_id: request.into(),
+                plan_hash: "h".into(),
+                not_before: t0 + 2 * H,
+                state: state.into(),
+                delay_id: Some(request.into()),
+                ..PlanApprovalRecord::default()
+            },
+        };
+        st.apply_local(plan("d1", "delayed")).unwrap();
+        st.apply_local(plan("d1", "cancelled")).unwrap();
+        // A write of the same approval made before the cancel was seen.
+        let l = st.apply_local(plan("d1", "delayed")).unwrap();
+        assert_eq!(l.plans.len(), 1);
+        assert_eq!(l.plans[0].state, "cancelled");
+        // The same plan approved again by a new request is a new approval.
+        let l = st.apply_local(plan("d2", "delayed")).unwrap();
+        assert_eq!(
+            (l.plans[0].request_id.as_str(), l.plans[0].state.as_str()),
+            ("d2", "delayed")
+        );
+    }
+
+    #[test]
+    fn uses_reported_by_a_machine_count_in_the_phone_s_month() {
+        use sealctl_core::wire::{LogEntry, MachineStatus};
+        let st = store();
+        let m = paired(&st);
+        // 23:30 on 2026-11-30 in UTC-5, 04:30 on 2026-12-01 UTC.
+        let t = 1_796_099_400_000;
+        assert_eq!(crate::day::local_date(t, -5 * 3600), "2026-11-30");
+        assert_eq!(crate::day::local_date(t, 0), "2026-12-01");
+        st.set_now(t);
+        let r = request_at(&m, "open", t, Vec::new());
+        st.answered(r, "one_tap".into(), true, false, None, -5 * 3600)
+            .unwrap();
+        st.apply_status(
+            m.id(),
+            MachineStatus {
+                seq: 1,
+                log: vec![LogEntry {
+                    time: t,
+                    command: "env".into(),
+                    names: vec!["A".into(), "B".into()],
+                    ..LogEntry::default()
+                }],
+                ..MachineStatus::default()
+            },
+            -5 * 3600,
+        )
+        .unwrap();
+        assert_eq!(st.summary("2026-11".into()).unwrap().keys_used, 3);
+        assert_eq!(st.summary("2026-12".into()).unwrap().keys_used, 0);
+    }
+
+    #[test]
+    fn a_hand_back_report_does_not_reopen_a_cancelled_plan() {
+        let st = store();
+        let m = paired(&st);
+        let t0 = MIDNIGHT + 9 * H;
+        st.set_now(t0);
+        let plan = |state: &str| LocalEvent::PutPlan {
+            plan: PlanApprovalRecord {
+                machine: m.id(),
+                request_id: "d1".into(),
+                plan_hash: "h".into(),
+                not_before: t0,
+                state: state.into(),
+                ..PlanApprovalRecord::default()
+            },
+        };
+        st.apply_local(plan("approved")).unwrap();
+        st.apply_local(plan("cancelled")).unwrap();
+        // A report of a hand-back for the same plan arrives after the cancel.
+        let r = request_with(&m, "report", t0 + MIN, |b| {
+            b.handback = Some(sealctl_core::wire::Handback {
+                hash: "h".into(),
+                ..Default::default()
+            });
+        });
+        st.set_now(t0 + MIN);
+        st.apply_report(r, 0).unwrap();
+        let l = st.local().unwrap();
+        assert_eq!(l.plans[0].state, "cancelled");
+        // Within its window the plan still answers nothing by itself.
+        let mut c = crate::decide::DecideContext {
+            now: t0 + 2 * MIN,
+            utc_offset_secs: 0,
+            phone_unlocked: true,
+            near: true,
+            on_wifi: true,
+            places_on: true,
+            current_place: None,
+            current_place_settled: false,
+            day: None,
+            answers: Vec::new(),
+            session_open: false,
+            hold: None,
+            biometrics: crate::decide::Biometrics::Available,
+            plan: Some(l.plans[0].clone()),
+        };
+        let f = crate::decide::RequestFacts {
+            kind: Some(RequestKind::Unseal),
+            level: 2,
+            machine: m.id(),
+            plan_hash: Some("h".into()),
+            has_keys: true,
+            ..Default::default()
+        };
+        assert_ne!(
+            crate::decide::decide_facts(&f, &c).asking,
+            crate::decide::Asking::PlanKeys
+        );
+        c.plan.as_mut().unwrap().state = "done".into();
+        assert_eq!(
+            crate::decide::decide_facts(&f, &c).asking,
+            crate::decide::Asking::PlanKeys
+        );
+    }
+
+    #[test]
+    fn a_clock_set_back_keeps_message_seqs_rising_and_ids_refused() {
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        st.set_now(t0);
+        let a = st.next_message_seq("m".into()).unwrap();
+        assert!(st.see_request("r".into(), "m".into(), 0).unwrap());
+        st.close_request("r".into(), "answered".into()).unwrap();
+        // The clock goes back an hour: the machine still sees a larger seq, and the answered
+        // id is still refused (it is kept longer, never shorter).
+        st.set_now(t0 - H);
+        let b = st.next_message_seq("m".into()).unwrap();
+        assert!(b > a);
+        assert!(!st.see_request("r".into(), "m".into(), 0).unwrap());
+        // Seqs of two machines are separate.
+        assert_eq!(st.next_message_seq("n".into()).unwrap(), t0 - H);
     }
 
     #[test]
@@ -1170,7 +2160,7 @@ mod tests {
         // The removal was made on a device whose clock ran a day ahead.
         let c = lock(&st.conn).unwrap();
         let mut s: State = read_doc(&c, "state").unwrap();
-        s.machines[0].updated = now_ms() + 86_400_000;
+        s.machines[0].updated = TEST_EPOCH_MS + 86_400_000;
         write_doc(&c, "state", &s).unwrap();
         drop(c);
         let removed = st.snapshot().unwrap();
@@ -1261,22 +2251,10 @@ mod tests {
             assert!(!st.see_request(id.into(), "m".into(), expires).unwrap());
         }
         // Kept while a signed time first seen 15 minutes ago can still be accepted.
-        let c = lock(&st.conn).unwrap();
-        let mut l: LocalState = read_doc(&c, "local").unwrap();
-        for p in &mut l.pending {
-            p.seen = now_ms() - 15 * 60 * 1000;
-        }
-        write_doc(&c, "local", &l).unwrap();
-        drop(c);
+        st.set_now(TEST_EPOCH_MS + 15 * MIN);
         assert!(!st.see_request("r2".into(), "m".into(), 1).unwrap());
         // Dropped once that time has passed, however late the relay says they expire.
-        let c = lock(&st.conn).unwrap();
-        let mut l: LocalState = read_doc(&c, "local").unwrap();
-        for p in &mut l.pending {
-            p.seen = now_ms() - 31 * 60 * 1000;
-        }
-        write_doc(&c, "local", &l).unwrap();
-        drop(c);
+        st.set_now(TEST_EPOCH_MS + 31 * MIN);
         assert!(st.see_request("r4".into(), "m".into(), u64::MAX).unwrap());
         let c = lock(&st.conn).unwrap();
         let l: LocalState = read_doc(&c, "local").unwrap();
@@ -1294,7 +2272,7 @@ mod tests {
             replaces: None,
         })
         .unwrap();
-        let t = now_ms() - 60_000;
+        let t = TEST_EPOCH_MS - 60_000;
         let entry = |n: u64, name: &str| LogEntry {
             time: t + n,
             command: "env".into(),
@@ -1318,6 +2296,7 @@ mod tests {
                 log: first.clone(),
                 ..MachineStatus::default()
             },
+            0,
         )
         .unwrap();
         assert_eq!(st.usage(None, None, 100).unwrap().len(), 3);
@@ -1332,6 +2311,7 @@ mod tests {
                 log: second,
                 ..MachineStatus::default()
             },
+            0,
         )
         .unwrap();
         assert_eq!(st.usage(None, None, 100).unwrap().len(), 4);
@@ -1341,7 +2321,7 @@ mod tests {
     #[test]
     fn pending_ids_refuse_replays() {
         let st = store();
-        let far = now_ms() + 60_000;
+        let far = TEST_EPOCH_MS + 60_000;
         assert!(st.see_request("r1".into(), "m".into(), far).unwrap());
         assert!(st.see_request("r1".into(), "m".into(), far).unwrap());
         assert!(!st.see_request("r1".into(), "other".into(), far).unwrap());
@@ -1417,7 +2397,7 @@ mod tests {
         assert_eq!(all.len(), 5);
         assert_eq!(all[0].time, 1004);
         assert_eq!(st.usage(Some("a".into()), None, 10).unwrap().len(), 3);
-        st.prune(now_ms()).unwrap();
+        st.prune(TEST_EPOCH_MS).unwrap();
         assert!(st.usage(None, None, 10).unwrap().is_empty());
         assert_eq!(st.summary("2026-11".into()).unwrap().keys_used, 0);
     }

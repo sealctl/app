@@ -115,6 +115,21 @@ mod tests {
     }
 
     #[test]
+    fn daylight_saving_at_two_or_three_never_stretches_the_day() {
+        let h = 3_600_000;
+        // 2026-03-29T00:00Z, the night Europe moves from UTC+1 to UTC+2 at 01:00 UTC.
+        let eu = 1_774_742_400_000;
+        // First approval 20:00 UTC+1 the evening before: ends at 02:00 UTC+1, the moment the
+        // wall clock jumps to 03:00.
+        assert_eq!(day_end(eu - 5 * h, 3600), eu + h);
+        // 2026-11-01T00:00Z, the night New York moves from UTC-4 to UTC-5 at 06:00 UTC.
+        let ny = 1_793_491_200_000;
+        // First approval 20:00 UTC-4: ends at 06:00 UTC, when the wall clock reads 02:00 EDT
+        // and turns back to 01:00: an hour early on the wall, never late.
+        assert_eq!(day_end(ny, -4 * 3600), ny + 6 * h);
+    }
+
+    #[test]
     fn exactly_two_oclock_starts_a_new_day() {
         let two = T - 7 * 3_600_000 - 2 * 60_000; // 02:00 UTC
         assert_eq!(day_end(two, 0), two + DAY_MAX_MS);

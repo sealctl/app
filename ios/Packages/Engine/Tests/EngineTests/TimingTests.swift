@@ -36,7 +36,7 @@ final class Gate {
 
 /// Engine-level answers that need nothing from a relay.
 @MainActor
-@Suite struct TimingUnitTests {
+@Suite(.timeLimit(.minutes(2))) struct TimingUnitTests {
     /// The phone's clock may be ahead of the relay's (up to the relay's 5-minute window, which
     /// raises no error): the request still gets its whole lifetime on this phone (SPEC.md 8.5).
     @Test func deadlineOnThePhonesClock() {
@@ -71,7 +71,8 @@ final class Gate {
 /// phone clock ahead of the relay's, a failed reply, a socket request during a slow list,
 /// leaving a place while an answer is on its way, and Leave after the relay data is gone.
 @MainActor
-@Suite(.enabled(if: relayBin != nil && machineBin != nil), .serialized)
+// A test that hangs fails at its time limit, with its name, instead of holding the job.
+@Suite(.enabled(if: relayBin != nil && machineBin != nil), .serialized, .timeLimit(.minutes(3)))
 struct TimingTests {
     func paired(_ relay: LocalRelay, places: PlacesProvider? = nil) async throws -> (AppEngine, RecordingNotifier, FakeMachine) {
         let (engine, _, notifier) = try await makeEngine(relayURL: relay.url, places: places)
@@ -97,7 +98,8 @@ struct TimingTests {
 
     /// The first request on the phone, waiting or not.
     func firstRequest(_ engine: AppEngine, _ run: FakeMachine.Run) async throws -> Waiting {
-        for _ in 0..<100 {
+        let end = Date().addingTimeInterval(30)
+        while Date() < end {
             await engine.catchUp()
             if let w = engine.waiting.first { return w }
             try await Task.sleep(for: .milliseconds(100))

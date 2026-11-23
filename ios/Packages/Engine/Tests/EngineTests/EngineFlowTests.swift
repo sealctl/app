@@ -19,7 +19,7 @@ func nearControl(_ near: Bool?) async throws -> Data {
 /// every level 1 answer, remembered answers, reports, the level 2 number match and hold, the
 /// level 3 plan with its delay and cancel, actions on the phone, locks and sync.
 @MainActor
-@Suite(.enabled(if: testRelay != nil && machineBin != nil), .serialized)
+@Suite(.enabled(if: testRelay != nil && machineBin != nil), .serialized, .timeLimit(.minutes(7)))
 struct EngineFlowTests {
     /// Polls the relay until a request is waiting on the phone.
     func waitForCard(_ engine: AppEngine, _ count: Int = 1, _ run: FakeMachine.Run? = nil) async throws -> Waiting {

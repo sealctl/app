@@ -12,7 +12,7 @@ import Vault
 /// `open`, secrets with and without own approval, an agent's first use, `unseal` of one secret
 /// (level 2) and `unseal --all` (level 3) with the number, the delay, a cancel and the report.
 @MainActor
-@Suite(.enabled(if: testRelay != nil && cliBin != nil), .serialized)
+@Suite(.enabled(if: testRelay != nil && cliBin != nil), .serialized, .timeLimit(.minutes(7)))
 struct CLIFlowTests {
     let name = "pairtest@ci.example.com"
 

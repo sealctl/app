@@ -173,10 +173,21 @@ final class LocalRelay: @unchecked Sendable {
         try process.run()
     }
 
+    /// Test calls to a local relay: a relay that does not answer fails them in seconds, not
+    /// after URLSession's default minute.
+    static let session: URLSession = {
+        let c = URLSessionConfiguration.ephemeral
+        c.timeoutIntervalForRequest = 2
+        c.timeoutIntervalForResource = 5
+        return URLSession(configuration: c)
+    }()
+
+    /// Started and answering `/v1/health`, within 5 seconds.
     static func start() async throws -> LocalRelay {
         let r = try LocalRelay()
-        for _ in 0..<100 {
-            if let (_, resp) = try? await URLSession.shared.data(from: URL(string: r.url + "/v1/health")!),
+        let end = Date().addingTimeInterval(5)
+        while Date() < end {
+            if let (_, resp) = try? await session.data(from: URL(string: r.url + "/v1/health")!),
                (resp as? HTTPURLResponse)?.statusCode == 200 { return r }
             try await Task.sleep(for: .milliseconds(50))
         }
@@ -190,7 +201,7 @@ final class LocalRelay: @unchecked Sendable {
         var req = URLRequest(url: URL(string: url + path)!)
         req.httpMethod = "POST"
         req.httpBody = Data(body.utf8)
-        return String(decoding: try await URLSession.shared.data(for: req).0, as: UTF8.self)
+        return String(decoding: try await Self.session.data(for: req).0, as: UTF8.self)
     }
 
     func stop() {

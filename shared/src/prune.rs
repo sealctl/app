@@ -73,10 +73,14 @@ pub fn prune_state(mut s: State, now: u64) -> State {
     s.answers.retain(|a| !a.deleted || a.updated >= old);
     s.inventory.retain(|i| !i.deleted || i.updated >= old);
     // Twelve months by the calendar: this month and the eleven before it. "This month" is
-    // taken 14 hours back, so no time zone's current month counts as older than it is.
+    // taken 14 hours back, so no time zone's current month counts as older than it is. A
+    // month after this one (14 hours ahead, for the same reason) comes from an install whose
+    // clock ran ahead: it is dropped, so it never pushes a real month out of the twelve.
     let first_kept = first_kept_month(now);
-    s.summaries
-        .retain(|m| m.month.as_str() >= first_kept.as_str());
+    let last_kept = crate::day::local_month(now.saturating_add(14 * 3_600_000), 0);
+    s.summaries.retain(|m| {
+        m.month.as_str() >= first_kept.as_str() && m.month.as_str() <= last_kept.as_str()
+    });
     s.summaries.sort_by(|a, b| b.month.cmp(&a.month));
     s.summaries.truncate(12);
     s.summaries.sort_by(|a, b| a.month.cmp(&b.month));
@@ -188,6 +192,46 @@ mod tests {
         let p = prune_state(s, NOW);
         let months: Vec<&str> = p.summaries.iter().map(|s| s.month.as_str()).collect();
         assert_eq!(months, ["2025-12", "2026-10", "2026-11"]);
+    }
+
+    #[test]
+    fn a_month_from_a_clock_ahead_never_pushes_a_real_month_out() {
+        let month = |m: &str| MonthSummary {
+            month: m.into(),
+            keys_used: 1,
+            ..MonthSummary::default()
+        };
+        // Twelve real months to 2026-11, and one an install whose clock ran ahead counted in.
+        let months: Vec<String> = (0..12)
+            .map(|i| {
+                let n = 2025 * 12 + 11 + i;
+                format!("{:04}-{:02}", n / 12, n % 12 + 1)
+            })
+            .collect();
+        assert_eq!(
+            (months[0].as_str(), months[11].as_str()),
+            ("2025-12", "2026-11")
+        );
+        let s = State {
+            summaries: months
+                .iter()
+                .map(|m| month(m))
+                .chain([month("2027-04")])
+                .collect(),
+            ..State::default()
+        };
+        let p = prune_state(s, NOW);
+        let kept: Vec<String> = p.summaries.iter().map(|s| s.month.clone()).collect();
+        assert_eq!(kept, months);
+        // Late on the last day of a month, the next month is already this month in UTC+14.
+        let s = State {
+            summaries: vec![month("2026-12")],
+            ..State::default()
+        };
+        // 2026-11-30T12:00Z.
+        let late = 1_796_040_000_000;
+        assert_eq!(crate::day::local_month(late + 14 * 3_600_000, 0), "2026-12");
+        assert_eq!(prune_state(s, late).summaries.len(), 1);
     }
 
     #[test]

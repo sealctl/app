@@ -238,7 +238,7 @@ Defined once in `sealctl-app`. "Relay" means the record is part of the encrypted
 | Day | machine, first approval time, place id or none | Local; ends at the next 02:00 local time or 14 h after the first approval, whichever is first |
 | Inventory item | purpose, id, words fingerprint, key check, machine, path or URL, size, first use, last use, stale | Relay; kept; stale after a year unseen |
 | Usage entry | time, machine, key or object, agent or "you", repository, command, outcome | Local; 13 months, at most 50,000 entries |
-| Summary | month, keys used, requests declined | Relay; 12 months by the calendar (this month and the 11 before it), however many months had no use |
+| Summary | month, keys used, requests declined | Relay; 12 months by the calendar (this month and the 11 before it), however many months had no use; a month after this one (counted by an install whose clock ran ahead) is dropped |
 | Words | fingerprint, written on, last check, retired cards (fingerprint, retired on) | Relay |
 | Change | old and new fingerprint, reason, started, per-machine progress, not-seen list | Relay; until finished |
 | Settings | relay backup on, keychain backup on | Relay |

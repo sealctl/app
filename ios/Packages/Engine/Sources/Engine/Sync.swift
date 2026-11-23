@@ -128,7 +128,7 @@ extension AppEngine {
     /// Registers this install's APNs token (hex) with the relay. Not once Leave sealctl has
     /// reached its deletion step: that would put this phone back on the relay (11.22).
     public func registerPush(token: String? = nil) async {
-        guard local.leaveStep < 5, await phoneKeys() != nil, let t = token ?? local.device.token else { return }
+        guard !relayDataDeleted, await phoneKeys() != nil, let t = token ?? local.device.token else { return }
         let id = await deviceId()
         do {
             try await relay.putPush(device: id, platform: "apns", token: t, sandbox: config.sandboxPush)

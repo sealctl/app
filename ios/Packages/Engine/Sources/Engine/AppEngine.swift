@@ -62,6 +62,12 @@ public final class AppEngine {
     @ObservationIgnored var placeExits = 0
     /// Test seams; always empty in the app.
     @ObservationIgnored var hooks = EngineHooks()
+    /// The phone's clock for a request's time (deadlines, the card's timer, catch-up). A test
+    /// sets it to move time on; the app never does.
+    @ObservationIgnored var clock: () -> Int64 = { nowMs() }
+
+    /// Now, on this phone's clock, for a request's time.
+    func now() -> Int64 { clock() }
 
     public init(vault: Vault, db: Database, config: EngineConfig, files: SharedFiles, notifier: Notifier,
                 places: PlacesProvider?) async {
@@ -212,7 +218,7 @@ public final class AppEngine {
         foreground = true
         notificationsAllowed = await notifier.allowed()
         biometryName = await vault.biometryName()
-        guard phase == .ready, let _ = await phoneKeys() else { return }
+        guard phase == .ready, !relayDataDeleted, let _ = await phoneKeys() else { return }
         await takeInbox()
         if socket == nil {
             socket = PhoneSocket(
@@ -231,6 +237,10 @@ public final class AppEngine {
         await notifier.removeStale(now: nowMs(), answered: answeredIds)
         await registerPush()
     }
+
+    /// Leave sealctl from step 5 on: the relay data is being deleted or is gone, so foreground
+    /// work does not call the relay, which would only be refused or bring the phone back (11.22).
+    var relayDataDeleted: Bool { local.leaveStep >= 5 }
 
     public func onBackground() async {
         foreground = false
@@ -269,9 +279,9 @@ public final class AppEngine {
     /// False when the relay could not be asked.
     @discardableResult
     public func catchUp(fromPush: Bool = false) async -> Bool {
-        guard await phoneKeys() != nil else { return false }
+        guard !relayDataDeleted, await phoneKeys() != nil else { return false }
         // A request seen after this was asked for (by the socket) may be newer than the list.
-        let asked = nowMs()
+        let asked = now()
         let list: [RelayRequest]
         do {
             list = try await relay.requests()
@@ -284,12 +294,12 @@ public final class AppEngine {
         for r in list { await handle(r, fromPush: fromPush) }
         // Requests that left the relay list expired or were answered elsewhere.
         let ids = Set(list.map(\.id))
-        let now = nowMs()
+        let t = now()
         var gone: [String] = []
         waiting = waiting.map { w in
             var w = w
             if !ids.contains(w.relay.id) && !w.expired && !answering.contains(w.relay.id)
-                && (w.deadline < now || w.seenAt < asked) {
+                && (w.deadline < t || w.seenAt < asked) {
                 gone.append(w.relay.id)
                 w.expired = true
             }
@@ -389,6 +399,11 @@ struct EngineHooks {
     var beforeReply: (@MainActor (String) async -> Void)?
     /// After `catchUp` has the relay's list, before it handles it.
     var afterRequestList: (@MainActor () async -> Void)?
+    /// After each reply call, with the request id and the call's error (nil when the relay took
+    /// it); returns the error the engine sees instead, as when a response is lost on its way back.
+    var afterReplyCall: (@MainActor (String, Error?) async -> Error?)?
+    /// After the relay took a reply, once the place it counts for is chosen, before it is recorded.
+    var beforeRecord: (@MainActor (String) async -> Void)?
 }
 
 /// The phone keys for the relay client's signing closure.

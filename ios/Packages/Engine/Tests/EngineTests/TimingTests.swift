@@ -86,6 +86,15 @@ struct TimingTests {
         return (engine, notifier, m)
     }
 
+    /// Inside the trusted place "Desk" (p1).
+    func atDesk(_ engine: AppEngine) async throws {
+        await engine.apply(.addPlace(place: TrustedPlace(id: "p1", name: "Desk", lat: 0, lon: 0, radius: 150,
+                                                         created: UInt64(nowMs() - 3 * 86_400_000), updated: 0,
+                                                         deleted: false, manual: false)))
+        await engine.onPlaceTransition(["p1"], entered: true)
+        #expect(engine.placeKind() == .trusted)
+    }
+
     /// The first request on the phone, waiting or not.
     func firstRequest(_ engine: AppEngine, _ run: FakeMachine.Run) async throws -> Waiting {
         for _ in 0..<100 {
@@ -211,19 +220,80 @@ struct TimingTests {
     }
 
     /// The card's timer did not run (a late timer, a resumed process): a tap after the
-    /// deadline closes the card as stopped waiting instead of doing nothing.
+    /// deadline closes the card as stopped waiting and sends nothing. The phone's clock is moved
+    /// on instead of waiting for it.
     @Test func answerAfterTheDeadlineClosesTheCard() async throws {
         let relay = try await LocalRelay.start()
         defer { relay.stop() }
         let (engine, _, m) = try await paired(relay)
-        let r = try openRequest(m, ttl: 2)
+        let r = try openRequest(m)
         let w = try await firstRequest(engine, r)
         engine.expiryTasks[w.id]?.cancel()
-        try await Task.sleep(for: .milliseconds(2_600))
+        engine.clock = { nowMs() + Waiting.clockWindowMs + 120_000 }
+        var sealed = 0
+        engine.hooks.beforeReply = { _ in sealed += 1 }
+        #expect(!(await engine.answer(w.id, .allowOnce)))
+        #expect(sealed == 0)
+        #expect(engine.waiting.first { $0.id == w.id }?.expired == true)
+        #expect(engine.toast == nil)
+        r.process.terminate()
+    }
+
+    /// A reply that keeps failing (`5xx`) until the request's time is up closes the card as
+    /// stopped waiting, not "try again". A failed try may still have reached the relay, so the
+    /// answer is recorded once, as given, and not also as expired (SPEC.md 8.5).
+    @Test func replyFailingPastTheDeadlineClosesTheCard() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, _, m) = try await paired(relay)
+        let r = try openRequest(m)
+        let w = try await firstRequest(engine, r)
+        try await relay.control("/test/fail", #"{"path": "/reply", "status": 503, "error": "internal"}"#)
+        engine.hooks.afterReplyCall = { _, error in
+            engine.clock = { nowMs() + Waiting.clockWindowMs + 120_000 }
+            return error
+        }
         #expect(!(await engine.answer(w.id, .allowOnce)))
         #expect(engine.waiting.first { $0.id == w.id }?.expired == true)
         #expect(engine.toast == nil)
-        _ = await m.waitAsync(r)
+        let log = await engine.usage(machine: nil)
+        #expect(log.map(\.outcome) == ["once"], "\(log.map(\.outcome))")
+        r.process.terminate()
+    }
+
+    /// The card's timer runs out while an answer is on its way and leaves the card to it; the
+    /// reply then fails just before the deadline: the card says so, and still stops waiting at
+    /// its deadline. The phone's clock is moved on to a second before the deadline instead of
+    /// waiting for it.
+    @Test func timerDuringAFailedAnswerStillClosesTheCardAtItsDeadline() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, _, m) = try await paired(relay)
+        let r = try openRequest(m)
+        let w = try await firstRequest(engine, r)
+        try await relay.control("/test/fail", #"{"path": "/reply", "status": 400, "error": "bad_sealed"}"#)
+        let timer = try #require(engine.expiryTasks[w.id])
+        engine.hooks.beforeReply = { id in
+            let ahead = w.deadline - 1_000 - nowMs()
+            engine.clock = { nowMs() + ahead }
+            timer.cancel()
+            await timer.value
+            await engine.expire(id)
+        }
+        #expect(!(await engine.answer(w.id, .allowOnce)))
+        engine.hooks.beforeReply = nil
+        #expect(engine.toast?.text == Texts.answerNotSent)
+        #expect(engine.waiting.contains { $0.id == w.id && !$0.expired })
+        // The expiry marks the card first and records it after: wait for the record.
+        var outcomes: [String] = []
+        for _ in 0..<50 {
+            outcomes = await engine.usage(machine: nil).map(\.outcome)
+            if !outcomes.isEmpty { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(outcomes == ["expired"], "\(outcomes)")
+        #expect(engine.waiting.first { $0.id == w.id }?.expired == true)
+        r.process.terminate()
     }
 
     /// A request that comes by the socket while a slow request list is on its way is not
@@ -245,7 +315,8 @@ struct TimingTests {
                 }
                 try? await Task.sleep(for: .milliseconds(100))
             }
-            try? await Task.sleep(for: .milliseconds(2_200))
+            // The list took a while: the phone's clock moves on by 3 seconds.
+            engine.clock = { nowMs() + 3_000 }
         }
         await engine.catchUp()
         let w = try #require(engine.waiting.first)
@@ -259,22 +330,142 @@ struct TimingTests {
         let relay = try await LocalRelay.start()
         defer { relay.stop() }
         let (engine, _, m) = try await paired(relay, places: StubPlaces())
-        await engine.apply(.addPlace(place: TrustedPlace(id: "p1", name: "Desk", lat: 0, lon: 0, radius: 150,
-                                                         created: UInt64(nowMs() - 3 * 86_400_000), updated: 0,
-                                                         deleted: false, manual: false)))
-        await engine.onPlaceTransition(["p1"], entered: true)
-        #expect(engine.placeKind() == .trusted)
+        try await atDesk(engine)
         let r = try openRequest(m)
         let w = try await firstRequest(engine, r)
         #expect(w.verdict.asking == .oneTap)
         let listen = try m.start(["listen", "--secs", "8", "--count", "1"])
-        try await Task.sleep(for: .milliseconds(300))
+        _ = try await listen.find("(LISTENING)")
         engine.hooks.beforeReply = { _ in await engine.onPlaceTransition(["p1"], entered: false) }
         #expect(await engine.answer(w.id, .allowSession))
         let (code, out) = await m.waitAsync(r)
         #expect(code == 0, "\(out)")
         let (_, heard) = await m.waitAsync(listen)
         #expect(heard.contains("lock"), "\(heard)")
+    }
+
+    /// The same exit just after the relay took the answer, before its day is recorded: the
+    /// machine is still locked after that answer, and only once the day is in place can the exit
+    /// find it by itself (SPEC.md 11.9).
+    @Test func leavingThePlaceRightAfterThePostLocksTheMachine() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, _, m) = try await paired(relay, places: StubPlaces())
+        try await atDesk(engine)
+        let r = try openRequest(m)
+        let w = try await firstRequest(engine, r)
+        let listen = try m.start(["listen", "--secs", "8", "--count", "1"])
+        _ = try await listen.find("(LISTENING)")
+        engine.hooks.beforeRecord = { _ in await engine.onPlaceTransition(["p1"], entered: false) }
+        #expect(await engine.answer(w.id, .allowSession))
+        let (code, out) = await m.waitAsync(r)
+        #expect(code == 0, "\(out)")
+        let (_, heard) = await m.waitAsync(listen)
+        #expect(heard.contains("lock"), "\(heard)")
+    }
+
+    /// The relay took the answer but its response was lost, and the retry gets `404 gone`: the
+    /// answer may have reached the machine, so it is recorded as given at the place, and leaving
+    /// the place locks that machine (SPEC.md 8.5, 11.9).
+    @Test func answerWhoseResponseWasLostStillCountsForThePlace() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, _, m) = try await paired(relay, places: StubPlaces())
+        try await atDesk(engine)
+        let r = try openRequest(m)
+        let w = try await firstRequest(engine, r)
+        var calls = 0
+        engine.hooks.afterReplyCall = { _, error in
+            calls += 1
+            return calls == 1 ? RelayError.transport("the response was lost") : error
+        }
+        _ = await engine.answer(w.id, .allowSession)
+        engine.hooks.afterReplyCall = nil
+        #expect(calls == 2)
+        let (code, out) = await m.waitAsync(r)
+        #expect(code == 0, "\(out)")
+        #expect(engine.local.days.contains { $0.placeId == "p1" })
+        let listen = try m.start(["listen", "--secs", "8", "--count", "1"])
+        _ = try await listen.find("(LISTENING)")
+        await engine.onPlaceTransition(["p1"], entered: false)
+        let (_, heard) = await m.waitAsync(listen)
+        #expect(heard.contains("lock"), "\(heard)")
+    }
+
+    /// The expiry timer fires while a level 2 confirm is on its way and the relay takes it: one
+    /// answer is recorded, not also an expiry (SPEC.md 8.5, 9.6).
+    @Test func expiryDuringASensitiveConfirmKeepsTheAnswer() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, _, m) = try await paired(relay)
+        try await relay.control("/test/near", #"{"near": false}"#)
+        let r = try m.start(["request", "--kind", "unseal", "--plan", "volume:safe:volume:vol-1", "--match"])
+        let w = try await firstRequest(engine, r)
+        #expect(w.verdict.asking == .inApp)
+        #expect(w.request.matchChoices().count == 3)
+        #expect(w.request.checkMatch(pick: try await r.number()))
+        engine.hooks.beforeReply = { id in await engine.expire(id) }
+        #expect(await engine.confirmSensitive(w))
+        engine.hooks.beforeReply = nil
+        let (code, out) = await m.waitAsync(r)
+        #expect(code == 0, "\(out)")
+        let log = await engine.usage(machine: nil)
+        #expect(!log.contains { $0.outcome == "expired" }, "\(log.map(\.outcome))")
+        #expect(!engine.waiting.contains { $0.id == w.id })
+    }
+
+    /// A level 2 confirm the relay does not take keeps the card, and a second confirm from the
+    /// same screen goes (the card's request was opened again; SPEC.md 8.5).
+    @Test func failedSensitiveConfirmCanBeConfirmedAgain() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, _, m) = try await paired(relay)
+        try await relay.control("/test/near", #"{"near": false}"#)
+        let r = try m.start(["request", "--kind", "unseal", "--plan", "volume:safe:volume:vol-1", "--match"])
+        let w = try await firstRequest(engine, r)
+        #expect(w.request.matchChoices().count == 3)
+        #expect(w.request.checkMatch(pick: try await r.number()))
+        try await relay.control("/test/fail", #"{"path": "/reply", "status": 400, "error": "bad_sealed"}"#)
+        #expect(!(await engine.confirmSensitive(w)))
+        #expect(engine.waiting.contains { $0.id == w.id && !$0.expired })
+        #expect(await engine.confirmSensitive(w))
+        let (code, out) = await m.waitAsync(r)
+        #expect(code == 0, "\(out)")
+    }
+
+    /// A reply that could not be sealed (the core seals a request once) keeps the card and
+    /// opens the request again, so the next tap answers (SPEC.md 8.5).
+    @Test func failedSealOpensTheRequestAgain() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, _, m) = try await paired(relay)
+        let r = try openRequest(m)
+        let w = try await firstRequest(engine, r)
+        let keys = try #require(await engine.phoneKeys())
+        _ = try sealReply(root: nil, keys: keys, request: w.request, decision: .deny)
+        #expect(!(await engine.answer(w.id, .allowOnce)))
+        #expect(engine.toast?.text == Texts.answerNotSent)
+        #expect(engine.waiting.contains { $0.id == w.id && !$0.expired })
+        #expect(await engine.answer(w.id, .allowOnce))
+        let (code, out) = await m.waitAsync(r)
+        #expect(code == 0, "\(out)")
+    }
+
+    /// Leave sealctl after step 5: coming back to the app calls nothing on the relay (no socket,
+    /// no list, no banners from a relay that no longer knows this phone) (SPEC.md 11.22).
+    @Test func noRelayCallsOnForegroundAfterTheRelayDataIsDeleted() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, _, _) = try await paired(relay)
+        await engine.setLeave(step: 5, skipped: [])
+        #expect(await engine.leaveDeleteEverything())
+        await engine.setLeave(step: 6, skipped: [])
+        relay.stop()
+        await engine.onForeground()
+        #expect(engine.socket == nil)
+        #expect(!engine.banners.relayDown)
+        #expect(!(await engine.catchUp()))
+        #expect(!engine.banners.relayDown)
     }
 
     /// Leave sealctl after step 5: the relay data is gone, and coming back to the app does not

@@ -1109,7 +1109,9 @@ public protocol PlanAssemblerProtocol: AnyObject, Sendable {
     /**
      * Adds one part. Returns the whole plan once every part is in and the hash checks out;
      * the plan is then also attached to `request`, which the final answer is sealed for.
-     * A part for another machine or plan hash starts over.
+     * A part for another machine or plan hash starts over. A later key request of an
+     * approved plan (`plan: {h}` only, no part) is not a part: it returns `None` and leaves
+     * the parts collected so far as they are.
      */
     func add(request: Request) throws  -> RequestPlan?
     
@@ -1184,7 +1186,9 @@ public convenience init() {
     /**
      * Adds one part. Returns the whole plan once every part is in and the hash checks out;
      * the plan is then also attached to `request`, which the final answer is sealed for.
-     * A part for another machine or plan hash starts over.
+     * A part for another machine or plan hash starts over. A later key request of an
+     * approved plan (`plan: {h}` only, no part) is not a part: it returns `None` and leaves
+     * the parts collected so far as they are.
      */
 open func add(request: Request)throws  -> RequestPlan?  {
     return try  FfiConverterOptionTypeRequestPlan.lift(try rustCallWithError(FfiConverterTypeCoreError_lift) {
@@ -6143,7 +6147,7 @@ public func relayHeaders(keys: PhoneKeys, method: String, pathAndQuery: String, 
 }
 /**
  * Answers `old_words`: derives only the listed objects' keys under the retired words
- * (`old`) and the current ones (`k`).
+ * (`old`) and the current ones (`k`). Level 3 needs the number pick, as for `rewrap`.
  */
 public func sealOldWordsReply(oldRoot: Root, root: Root, keys: PhoneKeys, request: Request)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCoreError_lift) {
@@ -6230,7 +6234,8 @@ public func sealReportReply(keys: PhoneKeys, request: Request, ack: UInt64?, mes
 })
 }
 /**
- * Answers `rewrap`: the new key and the old key of every item.
+ * Answers `rewrap`: the new key and the old key of every item. A level 3 request without a
+ * right number pick is answered `no_match`, as in [`seal_reply`].
  */
 public func sealRewrapReply(oldRoot: Root, newRoot: Root, keys: PhoneKeys, request: Request)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCoreError_lift) {
@@ -6359,7 +6364,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sealctl_core_checksum_func_relay_headers() != 10374) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_sealctl_core_checksum_func_seal_old_words_reply() != 19665) {
+    if (uniffi_sealctl_core_checksum_func_seal_old_words_reply() != 19064) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_core_checksum_func_seal_plan_keys_reply() != 54880) {
@@ -6377,7 +6382,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sealctl_core_checksum_func_seal_report_reply() != 36332) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_sealctl_core_checksum_func_seal_rewrap_reply() != 19879) {
+    if (uniffi_sealctl_core_checksum_func_seal_rewrap_reply() != 50631) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_core_checksum_func_open_request() != 53283) {
@@ -6434,7 +6439,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sealctl_core_checksum_method_phonekeys_to_bytes() != 54641) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_sealctl_core_checksum_method_planassembler_add() != 46672) {
+    if (uniffi_sealctl_core_checksum_method_planassembler_add() != 26321) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_core_checksum_method_request_check_match() != 14510) {

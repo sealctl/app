@@ -1,4 +1,5 @@
 import EngineKit
+import Foundation
 import UserNotifications
 import Vault
 
@@ -7,12 +8,14 @@ import Vault
 /// the notification with the request's text and buttons. On any failure or timeout the push
 /// is delivered as the relay sent it.
 final class NotificationService: UNNotificationServiceExtension, @unchecked Sendable {
+    /// Read and cleared under `lock`: the handler's task and the time-out race to deliver once.
     private var handler: ((UNNotificationContent) -> Void)?
+    private let lock = NSLock()
     private var original: UNNotificationContent?
     private var work: Task<Void, Never>?
 
     override func didReceive(_ request: UNNotificationRequest, withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void) {
-        handler = contentHandler
+        lock.withLock { handler = contentHandler }
         original = request.content
         guard let content = request.content.mutableCopy() as? UNMutableNotificationContent else {
             contentHandler(request.content)
@@ -34,9 +37,12 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
     }
 
     private func deliver(_ content: UNNotificationContent?) {
-        guard let h = handler, let content else { return }
-        handler = nil
-        h(content)
+        guard let content else { return }
+        let h: ((UNNotificationContent) -> Void)? = lock.withLock {
+            defer { handler = nil }
+            return handler
+        }
+        h?(content)
     }
 }
 

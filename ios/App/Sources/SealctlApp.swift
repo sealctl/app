@@ -77,7 +77,13 @@ final class AppModel {
             files.removeAll()
             UserDefaults.standard.removeObject(forKey: "com.sealctl.installed")
         }
-        guard let db = try? Database(path: dbURL.path) else { return }
+        guard let db = try? Database(path: dbURL.path) else {
+            // For example launched in the background before the first unlock: the next
+            // foreground tries again.
+            Log.note("database open failed")
+            started = false
+            return
+        }
         try? (dbURL as NSURL).setResourceValue(URLFileProtection.completeUntilFirstUserAuthentication, forKey: .fileProtectionKey)
         let config = EngineConfig(relayURL: BuildConfig.relayURL, testDelaySecs: BuildConfig.testDelaySecs,
                                   sandboxPush: BuildConfig.sandboxPush, version: BuildConfig.version, build: BuildConfig.build)
@@ -111,12 +117,16 @@ struct SealctlApp: App {
                 }
         }
         .onChange(of: scenePhase) { _, phase in
-            guard let e = model.engine else { return }
+            guard let e = model.engine else {
+                if phase == .active { Task { await model.start() } }
+                return
+            }
             Task {
                 switch phase {
                 case .active:
                     await e.computePhase()
                     await e.onForeground()
+                    await AppDelegate.registerPendingToken(e)
                 case .background:
                     await e.onBackground()
                 default: break

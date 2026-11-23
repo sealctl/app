@@ -87,6 +87,8 @@ struct OnboardingFlow: View {
             await e.applyLocal(.setOnboardingStep(step: 0))
             await e.computePhase()
             await e.onForeground()
+            // The token came before the words: register it now that the phone keys exist.
+            await AppDelegate.registerPendingToken(e)
         }
     }
 }
@@ -586,6 +588,7 @@ private struct Restoring: View {
             empty = st.machines.allSatisfy(\.deleted) && st.places.isEmpty && st.answers.isEmpty
             loaded = true
             await e.registerPush()
+            await AppDelegate.registerPendingToken(e)
         }
     }
 }

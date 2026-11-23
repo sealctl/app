@@ -15,9 +15,27 @@ struct LeaveView: View {
     @SwiftUI.State private var error: String?
     @SwiftUI.State private var running = false
     @SwiftUI.State private var lostCard = false
+    /// A face or fingerprint was added or removed at this step (1 or 3): two card words, then a
+    /// new gate (9.6), then the step goes on.
+    @SwiftUI.State private var cardAt: Int?
 
     var body: some View {
         let e = model.engine!
+        if let at = cardAt {
+            CardWordsView(positions: 2, groups: 2, title: "Use your card", body: Texts.biometryChanged, onPassed: {
+                Task {
+                    await e.vault.resetGate()
+                    cardAt = nil
+                    if at == 1 { start(e) } else { confirm(e, pendingLeave(e)) }
+                }
+            }, onCancel: { cardAt = nil })
+        } else {
+            steps(e)
+        }
+    }
+
+    @ViewBuilder
+    private func steps(_ e: AppEngine) -> some View {
         let step = max(Int(e.local.leaveStep), 1)
         switch step {
         case 1:
@@ -28,16 +46,7 @@ struct LeaveView: View {
                 BodyText("Then this phone deletes your data on the relay and the copy of your words in iCloud Keychain.")
                 ErrorText(error)
             } bottom: {
-                PrimaryButton("Start") {
-                    Task {
-                        switch await e.vault.gate(reason: "Confirm leaving sealctl.") {
-                        case .passed: await go(e, 2)
-                        case .cancelled: break
-                        case .lockedOut: error = Texts.lockedOut(e.biometryName)
-                        default: error = Texts.noBiometrics(e.biometryName)
-                        }
-                    }
-                }
+                PrimaryButton("Start") { start(e) }
                 PlainButton("Cancel") { cancel(e) }
             }
         case 2:
@@ -55,7 +64,7 @@ struct LeaveView: View {
             } else {
                 CardWordsView(positions: 3, groups: 3, title: "Check your card first",
                               body: "After this, your paper card is the only copy of your words. Type three words from it.",
-                              onPassed: { Task { await go(e, 5) } }, onCancel: { lostCard = true })
+                              namesWrongWord: true, onPassed: { Task { await go(e, 5) } }, onCancel: { lostCard = true })
             }
         case 5:
             Page(onBack: nil) {
@@ -112,7 +121,7 @@ struct LeaveView: View {
 
     @ViewBuilder
     private func confirmStep(_ e: AppEngine) -> some View {
-        let pending = e.local.delayed.last { $0.what == "leave" && ($0.state == "waiting" || $0.state == "released") }
+        let pending = pendingLeave(e)
         Ticker { now in
             if let p = pending, Int64(p.releaseAt) > now {
                 DelayView(id: p.id, title: "Leaving sealctl")
@@ -137,12 +146,29 @@ struct LeaveView: View {
         }
     }
 
+    private func pendingLeave(_ e: AppEngine) -> DelayedAction? {
+        e.local.delayed.last { $0.what == "leave" && ($0.state == "waiting" || $0.state == "released") }
+    }
+
+    private func start(_ e: AppEngine) {
+        Task {
+            switch await e.vault.gate(reason: "Confirm leaving sealctl.") {
+            case .passed: await go(e, 2)
+            case .cancelled: break
+            case .lockedOut: error = Texts.lockedOut(e.biometryName)
+            case .changed: cardAt = 1
+            default: error = Texts.noBiometrics(e.biometryName)
+            }
+        }
+    }
+
     private func confirm(_ e: AppEngine, _ pending: DelayedAction?) {
         Task {
             switch await e.vault.gate(reason: "Confirm leaving sealctl.") {
             case .passed: break
             case .cancelled: return
             case .lockedOut: error = Texts.lockedOut(e.biometryName); return
+            case .changed: cardAt = 3; return
             default: error = Texts.noBiometrics(e.biometryName); return
             }
             if let pending {
@@ -182,6 +208,8 @@ private struct EachComputerView: View {
     let onSkip: (String) -> Void
     let onBack: () -> Void
     @SwiftUI.State private var skipping: String?
+    /// [Skip a computer] lists the machines still waiting (11.22).
+    @SwiftUI.State private var choosing = false
 
     var body: some View {
         let e = model.engine!
@@ -218,6 +246,13 @@ private struct EachComputerView: View {
                 .accessibilityElement(children: .combine)
             }
             if rows.isEmpty { MutedText("No computers are paired.") }
+            if choosing && skipping == nil {
+                BodyText("Which computer?")
+                ForEach(rows.filter { !$0.2 }, id: \.0.key) { m, _, _ in
+                    TextButton(m.name) { skipping = m.key; choosing = false }
+                }
+                TextButton("Cancel") { choosing = false }
+            }
             if let s = skipping {
                 BodyText("Skip \(e.state.machines.first { $0.key == s }?.name ?? "")? Use it when the computer is lost or already wiped. Anything it holds then opens only with your card.")
                 HStack(spacing: 20) {
@@ -227,7 +262,10 @@ private struct EachComputerView: View {
             }
         } bottom: {
             if rows.contains(where: { !$0.2 }) {
-                SecondaryButton("Skip a computer") { skipping = rows.first { !$0.2 }?.0.key }
+                SecondaryButton("Skip a computer") {
+                    let waiting = rows.filter { !$0.2 }
+                    if waiting.count == 1 { skipping = waiting[0].0.key } else { skipping = nil; choosing = true }
+                }
             }
             PrimaryButton("Continue", enabled: rows.allSatisfy(\.2), action: onContinue)
         }

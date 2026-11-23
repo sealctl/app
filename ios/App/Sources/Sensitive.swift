@@ -322,6 +322,10 @@ struct ReportView: View {
     }
 }
 
+extension Texts {
+    static let biometryChanged = "A face or fingerprint was added or removed on this phone. Type two words from your card first."
+}
+
 /// Typed words from the card (level 2 fallback, Leave sealctl). The words are opened behind
 /// Face ID or the passcode and checked inside the core; nothing typed is kept.
 struct CardWordsView: View {
@@ -330,6 +334,10 @@ struct CardWordsView: View {
     let groups: Int
     let title: String
     let body_: String?
+    /// Leave sealctl's card check names the wrong word (11.23). Where the card stands in for
+    /// biometrics, a wrong check says only that the words don't match, so each word can't be
+    /// guessed on its own.
+    let namesWrongWord: Bool
     let onPassed: () -> Void
     let onCancel: () -> Void
     @SwiftUI.State private var opened = false
@@ -339,8 +347,10 @@ struct CardWordsView: View {
     @SwiftUI.State private var prefix = ""
     @SwiftUI.State private var message: String?
 
-    init(positions: Int, groups: Int, title: String, body: String?, onPassed: @escaping () -> Void, onCancel: @escaping () -> Void) {
+    init(positions: Int, groups: Int, title: String, body: String?, namesWrongWord: Bool = false,
+         onPassed: @escaping () -> Void, onCancel: @escaping () -> Void) {
         self.positions = positions; self.groups = groups; self.title = title; self.body_ = body
+        self.namesWrongWord = namesWrongWord
         self.onPassed = onPassed; self.onCancel = onCancel
     }
 
@@ -393,7 +403,8 @@ struct CardWordsView: View {
                     })
                     PrimaryButton("Check", enabled: typed.allSatisfy { !$0.isEmpty }) {
                         if let wrong = pos.indices.first(where: { !words.matches(pos[$0], typed[$0]) }) {
-                            message = "That's not word \(pos[wrong]) on these words."
+                            message = namesWrongWord ? "That's not word \(pos[wrong]) on these words."
+                                : "These aren't the words on your card. Look at your card again."
                         } else {
                             words.release()
                             onPassed()

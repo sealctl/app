@@ -438,6 +438,8 @@ struct PhoneAction<Intro: View>: View {
     @SwiftUI.State private var done: String?
     /// The delay on screen stays until closed, also after a cancel.
     @SwiftUI.State private var delayId: String?
+    /// A face or fingerprint was added or removed: two card words come before a new gate (9.6).
+    @SwiftUI.State private var cardCheck = false
 
     init(what: String, reason: String, button: String, @ViewBuilder intro: () -> Intro, run: @escaping () async -> String?) {
         self.what = what; self.reason = reason; self.button = button; self.intro = intro(); self.run = run
@@ -452,6 +454,14 @@ struct PhoneAction<Intro: View>: View {
                     Gap(24)
                     BodyText(done)
                 } bottom: { PrimaryButton("Done") { router.pop() } }
+            } else if cardCheck {
+                CardWordsView(positions: 2, groups: 2, title: "Use your card", body: Texts.biometryChanged, onPassed: {
+                    Task {
+                        await e.vault.resetGate()
+                        cardCheck = false
+                        go(pending, e)
+                    }
+                }, onCancel: { cardCheck = false })
             } else if let id = delayId ?? pending.flatMap({ Int64($0.releaseAt) > now ? $0.id : nil }),
                       let d = e.local.delayed.first(where: { $0.id == id }),
                       (d.state == "waiting" && Int64(d.releaseAt) > now) || (d.state == "cancelled" && delayId == id) {
@@ -485,10 +495,7 @@ struct PhoneAction<Intro: View>: View {
             case .cancelled: return
             case .lockedOut: error = Texts.lockedOut(e.biometryName); return
             case .unavailable: error = Texts.noBiometrics(e.biometryName); return
-            case .changed:
-                error = "A face or fingerprint was added or removed. Check two words from your card first."
-                await e.vault.resetGate()
-                return
+            case .changed: cardCheck = true; return
             case .failed(let m): error = "Couldn't confirm (\(m))."; return
             }
             if let pending {

@@ -429,6 +429,7 @@ struct TimingTests {
         #expect(w.verdict.level == 3)
         // Decided at the desk: no delay when the request arrived.
         #expect(w.verdict.delaySecs == 0)
+        #expect(w.request.matchChoices().count == 3)
         #expect(w.request.checkMatch(pick: try await r.number()))
         await engine.onPlaceTransition(["p1"], entered: false)
         #expect(!engine.delayLifted())

@@ -25,12 +25,14 @@ Run: FAKE_MACHINE_BIN=... [SEALCTL_BIN=...] SEALCTL_RELAY=... SIM_UDID=... harne
 """
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # Short paths: the CLI's daemon keeps unix sockets under HOME (104-byte limit).
@@ -40,9 +42,37 @@ LOCK = threading.Lock()
 NEXT = [0]
 
 
+# harness.log is a CI artifact anyone can download. A line that could hold recovery words
+# (12 or more lowercase words of 3 to 8 letters, whatever separates or numbers them) or that
+# mentions a passphrase, password or words is never written. Fails closed: long prose goes too.
+WORDS = re.compile(r"(?<![A-Za-z])[a-z]{3,8}(?![A-Za-z])")
+SECRETISH = re.compile(r"pass(?:phrase|word)|mnemonic|recover|\bwords?\b|seed", re.IGNORECASE)
+
+
+def safe(line):
+    if len(WORDS.findall(line)) >= 12 or SECRETISH.search(line):
+        return "[line withheld: may hold words or a passphrase]"
+    return line
+
+
+def log(line):
+    """One stderr line stamped with UTC time to the millisecond, to line up with the xcresult."""
+    line = safe(line)
+    t = time.time()
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)) + ".%03dZ" % (int(t * 1000) % 1000)
+    sys.stderr.write(f"{stamp} {line}\n")
+    sys.stderr.flush()
+
+
+# Commands whose output is the secret itself: only their exit code is logged.
+QUIET = {"recover", "show", "--to", "export", "get", "words"}
+
+
 class Job:
-    def __init__(self, argv, env, stdin, cwd=None, tty=False):
+    def __init__(self, jid, argv, env, stdin, cwd=None, tty=False):
+        self.jid = jid
         self.tty = tty
+        self.quiet = any(a in QUIET for a in argv)
         self.out = []
         self.code = None
         self.proc = subprocess.Popen(argv, env=env, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -68,7 +98,10 @@ class Job:
         for line in self.proc.stdout:
             with LOCK:
                 self.out.append(line)
+            if not self.quiet:
+                log(f"job {self.jid}: {line.rstrip()[:200]}")
         self.code = self.proc.wait()
+        log(f"job {self.jid} exited with {self.code}" + (f" ({len(self.out)} lines not logged)" if self.quiet else ""))
 
     def state(self):
         with LOCK:
@@ -132,7 +165,8 @@ def start(spec):
     with LOCK:
         NEXT[0] += 1
         jid = str(NEXT[0])
-    JOBS[jid] = Job(argv, env, spec.get("stdin"), spec.get("cwd"), bool(spec.get("tty")))
+    log(f"job {jid} started: {spec.get('cmd')} {spec.get('home', '')} {' '.join(args[:3])}")
+    JOBS[jid] = Job(jid, argv, env, spec.get("stdin"), spec.get("cwd"), bool(spec.get("tty")))
     return jid
 
 
@@ -165,7 +199,10 @@ class Handler(BaseHTTPRequestHandler):
         return (self.headers.get("Host") or "").rsplit(":", 1)[0] in ("127.0.0.1", "localhost")
 
     def log_message(self, fmt, *args):
-        sys.stderr.write("harness: " + (fmt % args) + "\n")
+        # The tests poll /job/<id> every half second: job lines above say what happened.
+        if self.command == "GET" and self.path.startswith("/job/"):
+            return
+        log("harness: " + (fmt % args))
 
     def do_GET(self):
         if not self._from_test():
@@ -211,7 +248,7 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8790
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    print(f"harness on 127.0.0.1:{port}, homes in {ROOT}", flush=True)
+    log(f"harness on 127.0.0.1:{port}, homes in {ROOT}")
     # `pkill` (CI) sends SIGTERM: leave through the cleanup below.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     try:

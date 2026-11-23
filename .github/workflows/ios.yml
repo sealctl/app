@@ -178,16 +178,37 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/staging.xcresult" | grep -E "Test Case|error|failed|passed|skipped|\*\*" | tail -200
           pkill -f harness.py || true
 
+      - name: Attachments of failed UI tests
+        if: failure()
+        run: |
+          # The failed UI tests' attachments (the screenshot XCTest takes at a failure) as plain
+          # files in ios-results, so a failure can be read without Xcode. These runs use the fake
+          # relay and test phones only, and the artifact is kept 7 days, but screens that show
+          # or take recovery words are not all in the secure layer: failure-attachments.py keeps
+          # a test's files only when its failure shows a UI tree with no word screen, and deletes
+          # the rest (fails closed). Failed tests only; never the staging run's results.
+          [ -d "$RUNNER_TEMP/ui.xcresult" ] || exit 0
+          out="$RUNNER_TEMP/ui-failures"
+          mkdir -p "$out"
+          if xcrun xcresulttool export attachments --path "$RUNNER_TEMP/ui.xcresult" --output-path "$out" --only-failures; then
+            python3 -I ios/scripts/failure-attachments.py "$RUNNER_TEMP/ui.xcresult" "$out" || rm -rf "$out"
+          else
+            echo "::warning::xcresulttool could not export the attachments"
+            rm -rf "$out"
+          fi
+
       - name: Logs and results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-results
           retention-days: 7
-          # Never the staging run's results: they would name the private staging relay.
+          # No raw .xcresult bundles: they hold every failure screenshot and UI tree, words
+          # screens included (the workspace rule: a test phone's words are never in a file or
+          # screenshot). Failed UI tests' attachments come filtered in ui-failures. Never the
+          # staging run's results either: they would name the private staging relay.
           path: |
-            ${{ runner.temp }}/unit.xcresult
-            ${{ runner.temp }}/ui.xcresult
+            ${{ runner.temp }}/ui-failures
             ${{ runner.temp }}/fake-relay.log
             ${{ runner.temp }}/harness.log
             ${{ runner.temp }}/build-*.log

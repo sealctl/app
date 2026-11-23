@@ -56,12 +56,20 @@ pub fn place_sample(
 ) -> PlaceSampleResult {
     let today = local_date(sample.time, utc_offset_secs);
     let today_n = days_from_civil(&today).unwrap_or(0);
+    let recent = |date: &str| today_n - days_from_civil(date).unwrap_or(0) < SAMPLE_DAYS;
     for c in &mut candidates {
-        c.samples.retain(|s| {
-            today_n - days_from_civil(&local_date(s.time, utc_offset_secs)).unwrap_or(0)
-                < SAMPLE_DAYS
-        });
-        c.days = distinct_days(&c.samples, utc_offset_secs);
+        // Each sample's day is the local date it was taken on, kept in `days`: dating old
+        // samples again with today's UTC offset (after a change of daylight saving time or
+        // of time zone) could split one morning into two.
+        if c.days.is_empty() {
+            c.days = distinct_days(&c.samples, utc_offset_secs);
+        }
+        c.samples
+            .retain(|s| recent(&local_date(s.time, utc_offset_secs)));
+        c.days.retain(|d| recent(d));
+        if c.samples.is_empty() {
+            c.days.clear();
+        }
         recentre(c);
     }
     candidates.retain(|c| c.suppressed || !c.samples.is_empty());
@@ -91,19 +99,21 @@ pub fn place_sample(
                 };
             }
             c.samples.push(sample);
-            c.days = distinct_days(&c.samples, utc_offset_secs);
+            c.days.push(today.clone());
+            c.days.sort();
+            c.days.dedup();
             recentre(c);
             c.id.clone()
         }
         None => {
-            let mut c = PlaceCandidate {
+            let c = PlaceCandidate {
                 id: new_id,
                 lat: sample.lat,
                 lon: sample.lon,
                 samples: vec![sample],
+                days: vec![today],
                 ..PlaceCandidate::default()
             };
-            c.days = distinct_days(&c.samples, utc_offset_secs);
             let id = c.id.clone();
             candidates.push(c);
             id
@@ -191,6 +201,28 @@ mod tests {
             0,
             "x".into(),
         );
+        assert!(r.ready.is_none());
+    }
+
+    #[test]
+    fn a_change_of_utc_offset_does_not_add_mornings() {
+        // 2026-11-21T00:00:00Z.
+        let midnight = 1_795_219_200_000;
+        let h = 3_600_000;
+        let at = |t| s(52.2297, 21.0122, 20.0, t);
+        // Two first approvals on 2026-11-21 at UTC+1: 00:30 and 23:45.
+        let r = place_sample(Vec::new(), &[], at(midnight - h / 2), 3600, "a".into());
+        let r = place_sample(
+            r.candidates,
+            &[],
+            at(midnight + 22 * h + 45 * 60_000),
+            3600,
+            "b".into(),
+        );
+        assert_eq!(r.candidates[0].days, vec!["2026-11-21"]);
+        // Two days later the phone is at UTC+2 (daylight saving, or travel): still two days.
+        let r = place_sample(r.candidates, &[], at(midnight + 55 * h), 7200, "c".into());
+        assert_eq!(r.candidates[0].days, vec!["2026-11-21", "2026-11-23"]);
         assert!(r.ready.is_none());
     }
 

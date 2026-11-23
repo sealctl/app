@@ -992,7 +992,7 @@ Each machine row shows one state, from the machine's last status (`GET .../statu
 
 ### 11.9 Places
 
-**Learning.** At each first approval of the day with location permission, the app takes one location sample (10.3) and passes it to `place_sample`. A sample joins a candidate when it is within 100 m of the candidate's centre and its accuracy is 100 m or better. When a candidate has samples on 3 different days, the app asks once:
+**Learning.** At each first approval of the day with location permission, the app takes one location sample (10.3) and passes it to `place_sample`. A sample joins a candidate when it is within 100 m of the candidate's centre and its accuracy is 100 m or better. When a candidate has samples on 3 different days, the app asks once (a sample's day is the local date it was taken on, by the UTC offset at that time; a later change of daylight saving time or time zone does not date it again):
 
 > **Trust this place?**
 > You opened your machines here on 3 mornings: Nov 18, 19 and 21.

@@ -1055,7 +1055,7 @@ When the first `agent` card ever appears, the card shows one extra line under th
 > 4 requests declined
 > No key was written to disk.
 
-"Keys used" counts uses from replies and from machine reports. "Requests declined" counts Deny answers. The third line is a fixed statement of how sealctl works. No other figures, no price, no comparison.
+"Keys used" counts uses from replies and from machine reports. "Requests declined" counts Deny answers. Both count in the month by the phone's local time when the answer was given or the report reached the phone (the app passes its UTC offset to `answered`, `apply_status` and `apply_report`), so a use near midnight on the last day of a month counts in the same month whichever way it arrived. The third line is a fixed statement of how sealctl works. No other figures, no price, no comparison.
 
 **Log** grouped by day, newest first:
 

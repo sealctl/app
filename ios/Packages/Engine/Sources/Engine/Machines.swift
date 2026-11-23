@@ -72,7 +72,7 @@ extension AppEngine {
         guard let keys = await phoneKeys(), let list = try? await relay.status() else { return }
         for s in list where machine(s.machine) != nil {
             guard let st = try? openMachineStatus(keys: keys, machineKey: s.machine, sealed: s.sealed) else { continue }
-            _ = try? await db.run { try $0.applyStatus(machine: s.machine, status: st) }
+            _ = try? await db.run { try $0.applyStatus(machine: s.machine, status: st, utcOffsetSecs: utcOffset()) }
         }
         await refreshState()
     }

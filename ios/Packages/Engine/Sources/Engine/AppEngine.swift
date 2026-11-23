@@ -318,7 +318,7 @@ public final class AppEngine {
             _ = try? await db.run { try $0.seeRequest(id: item.id, machine: item.machine, expires: UInt64(item.time + 600_000)) }
             if let req = try? openRequest(keys: keys, relayMachineKey: item.machine, id: item.id, sealed: item.sealed) {
                 if item.outcome == "report" {
-                    let result = try? await db.run { try $0.applyReport(request: req) }
+                    let result = try? await db.run { try $0.applyReport(request: req, utcOffsetSecs: utcOffset()) }
                     if let h = result?.handback { reportArrived(h) }
                 } else {
                     let r = try? await db.run {

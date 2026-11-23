@@ -672,15 +672,17 @@ public protocol StoreProtocol: AnyObject, Sendable {
     func applyLocal(event: LocalEvent) throws  -> LocalState
     
     /**
-     * Records a `report` request: status, uses, inventory, hand-back.
+     * Records a `report` request: status, uses, inventory, hand-back. `utc_offset_secs` is
+     * the phone's UTC offset now, for the month the uses count in.
      */
-    func applyReport(request: Request) throws  -> ReportResult
+    func applyReport(request: Request, utcOffsetSecs: Int32) throws  -> ReportResult
     
     /**
      * Records a machine status (machine channel or `report`). A `seq` already seen is ignored
-     * except for its `ack`.
+     * except for its `ack`. The uses it reports count in this month by the phone's UTC offset
+     * now, `utc_offset_secs`, as answers do.
      */
-    func applyStatus(machine: String, status: MachineStatus) throws  -> ReportResult
+    func applyStatus(machine: String, status: MachineStatus, utcOffsetSecs: Int32) throws  -> ReportResult
     
     /**
      * Marks a pending request `answered`, `expired` or `ignored`.
@@ -856,29 +858,33 @@ open func applyLocal(event: LocalEvent)throws  -> LocalState  {
 }
     
     /**
-     * Records a `report` request: status, uses, inventory, hand-back.
+     * Records a `report` request: status, uses, inventory, hand-back. `utc_offset_secs` is
+     * the phone's UTC offset now, for the month the uses count in.
      */
-open func applyReport(request: Request)throws  -> ReportResult  {
+open func applyReport(request: Request, utcOffsetSecs: Int32)throws  -> ReportResult  {
     return try  FfiConverterTypeReportResult_lift(try rustCallWithError(FfiConverterTypeAppError_lift) {
         uniffiCallStatus in
     uniffi_sealctl_app_fn_method_store_apply_report(
             self.uniffiCloneHandle(),
-        FfiConverterTypeRequest_lower(request),uniffiCallStatus
+        FfiConverterTypeRequest_lower(request),
+        FfiConverterInt32.lower(utcOffsetSecs),uniffiCallStatus
     )
 })
 }
     
     /**
      * Records a machine status (machine channel or `report`). A `seq` already seen is ignored
-     * except for its `ack`.
+     * except for its `ack`. The uses it reports count in this month by the phone's UTC offset
+     * now, `utc_offset_secs`, as answers do.
      */
-open func applyStatus(machine: String, status: MachineStatus)throws  -> ReportResult  {
+open func applyStatus(machine: String, status: MachineStatus, utcOffsetSecs: Int32)throws  -> ReportResult  {
     return try  FfiConverterTypeReportResult_lift(try rustCallWithError(FfiConverterTypeAppError_lift) {
         uniffiCallStatus in
     uniffi_sealctl_app_fn_method_store_apply_status(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(machine),
-        FfiConverterTypeMachineStatus_lower(status),uniffiCallStatus
+        FfiConverterTypeMachineStatus_lower(status),
+        FfiConverterInt32.lower(utcOffsetSecs),uniffiCallStatus
     )
 })
 }
@@ -6828,10 +6834,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sealctl_app_checksum_method_store_apply_local() != 5748) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_sealctl_app_checksum_method_store_apply_report() != 21533) {
+    if (uniffi_sealctl_app_checksum_method_store_apply_report() != 59875) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_sealctl_app_checksum_method_store_apply_status() != 32556) {
+    if (uniffi_sealctl_app_checksum_method_store_apply_status() != 19917) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_method_store_close_request() != 56401) {

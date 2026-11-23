@@ -707,11 +707,16 @@ impl Store {
         Ok(AnsweredResult { first_of_day })
     }
 
-    /// Records a `report` request: status, uses, inventory, hand-back.
-    pub fn apply_report(&self, request: Arc<Request>) -> Result<ReportResult> {
+    /// Records a `report` request: status, uses, inventory, hand-back. `utc_offset_secs` is
+    /// the phone's UTC offset now, for the month the uses count in.
+    pub fn apply_report(
+        &self,
+        request: Arc<Request>,
+        utc_offset_secs: i32,
+    ) -> Result<ReportResult> {
         let machine = request.machine();
         let mut result = match request.status() {
-            Some(st) => self.apply_status(machine.clone(), st)?,
+            Some(st) => self.apply_status(machine.clone(), st, utc_offset_secs)?,
             None => ReportResult {
                 ack: None,
                 handback: None,
@@ -772,8 +777,14 @@ impl Store {
     }
 
     /// Records a machine status (machine channel or `report`). A `seq` already seen is ignored
-    /// except for its `ack`.
-    pub fn apply_status(&self, machine: String, status: MachineStatus) -> Result<ReportResult> {
+    /// except for its `ack`. The uses it reports count in this month by the phone's UTC offset
+    /// now, `utc_offset_secs`, as answers do.
+    pub fn apply_status(
+        &self,
+        machine: String,
+        status: MachineStatus,
+        utc_offset_secs: i32,
+    ) -> Result<ReportResult> {
         let now = self.now();
         let c = lock(&self.conn)?;
         let mut s: State = read_doc(&c, "state")?;
@@ -810,7 +821,7 @@ impl Store {
         }
         m.last_seen = Some(now);
         m.updated = bump(m.updated, now);
-        let month = local_month(now, 0);
+        let month = local_month(now, utc_offset_secs);
         let mut uses = 0;
         // A machine resends its log until it is acknowledged, so a later status repeats the
         // entries an earlier one carried: an entry already recorded before this status is
@@ -1539,6 +1550,38 @@ mod tests {
     }
 
     #[test]
+    fn uses_reported_by_a_machine_count_in_the_phone_s_month() {
+        use sealctl_core::wire::{LogEntry, MachineStatus};
+        let st = store();
+        let m = paired(&st);
+        // 23:30 on 2026-11-30 in UTC-5, 04:30 on 2026-12-01 UTC.
+        let t = 1_796_099_400_000;
+        assert_eq!(crate::day::local_date(t, -5 * 3600), "2026-11-30");
+        assert_eq!(crate::day::local_date(t, 0), "2026-12-01");
+        st.set_now(t);
+        let r = request_at(&m, "open", t, Vec::new());
+        st.answered(r, "one_tap".into(), true, false, None, -5 * 3600)
+            .unwrap();
+        st.apply_status(
+            m.id(),
+            MachineStatus {
+                seq: 1,
+                log: vec![LogEntry {
+                    time: t,
+                    command: "env".into(),
+                    names: vec!["A".into(), "B".into()],
+                    ..LogEntry::default()
+                }],
+                ..MachineStatus::default()
+            },
+            -5 * 3600,
+        )
+        .unwrap();
+        assert_eq!(st.summary("2026-11".into()).unwrap().keys_used, 3);
+        assert_eq!(st.summary("2026-12".into()).unwrap().keys_used, 0);
+    }
+
+    #[test]
     fn display_names_are_sanitised() {
         let mut m = machine(
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -1752,6 +1795,7 @@ mod tests {
                 log: first.clone(),
                 ..MachineStatus::default()
             },
+            0,
         )
         .unwrap();
         assert_eq!(st.usage(None, None, 100).unwrap().len(), 3);
@@ -1766,6 +1810,7 @@ mod tests {
                 log: second,
                 ..MachineStatus::default()
             },
+            0,
         )
         .unwrap();
         assert_eq!(st.usage(None, None, 100).unwrap().len(), 4);

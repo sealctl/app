@@ -444,7 +444,7 @@ class Engine(
             safe { store.closeRequest(r.id, "answered") }
             return
         }
-        val result = safe { store.applyReport(req) }
+        val result = safe { store.applyReport(req, offset()) }
         refreshState()
         val sealed = runCatching { sealReportReply(keys, req, result?.ack, emptyList()) }.getOrNull() ?: return
         post(r, sealed, null, userTapped = false)
@@ -853,7 +853,7 @@ class Engine(
         for (s in list) {
             if (machine(s.machine) == null) continue
             val st = runCatching { openMachineStatus(keys, s.machine, s.sealed) }.getOrNull() ?: continue
-            safe { store.applyStatus(s.machine, st) }
+            safe { store.applyStatus(s.machine, st, offset()) }
         }
         refreshState()
     }

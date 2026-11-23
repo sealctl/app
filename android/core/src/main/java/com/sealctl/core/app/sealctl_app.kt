@@ -805,9 +805,9 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_method_store_apply_local(`ptr`: Long,`event`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    external fun uniffi_sealctl_app_fn_method_store_apply_report(`ptr`: Long,`request`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_sealctl_app_fn_method_store_apply_report(`ptr`: Long,`request`: Long,`utcOffsetSecs`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    external fun uniffi_sealctl_app_fn_method_store_apply_status(`ptr`: Long,`machine`: RustBuffer.ByValue,`status`: RustBufferMachineStatus.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_sealctl_app_fn_method_store_apply_status(`ptr`: Long,`machine`: RustBuffer.ByValue,`status`: RustBufferMachineStatus.ByValue,`utcOffsetSecs`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_method_store_close_request(`ptr`: Long,`id`: RustBuffer.ByValue,`outcome`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -1059,10 +1059,10 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_sealctl_app_checksum_method_store_apply_local() and 0xFFFF) != 5748) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_sealctl_app_checksum_method_store_apply_report() and 0xFFFF) != 21533) {
+    if ((lib.uniffi_sealctl_app_checksum_method_store_apply_report() and 0xFFFF) != 59875) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_sealctl_app_checksum_method_store_apply_status() and 0xFFFF) != 32556) {
+    if ((lib.uniffi_sealctl_app_checksum_method_store_apply_status() and 0xFFFF) != 19917) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_method_store_close_request() and 0xFFFF) != 56401) {
@@ -1618,15 +1618,17 @@ public interface StoreInterface {
     fun `applyLocal`(`event`: LocalEvent): LocalState
     
     /**
-     * Records a `report` request: status, uses, inventory, hand-back.
+     * Records a `report` request: status, uses, inventory, hand-back. `utc_offset_secs` is
+     * the phone's UTC offset now, for the month the uses count in.
      */
-    fun `applyReport`(`request`: Request): ReportResult
+    fun `applyReport`(`request`: Request, `utcOffsetSecs`: kotlin.Int): ReportResult
     
     /**
      * Records a machine status (machine channel or `report`). A `seq` already seen is ignored
-     * except for its `ack`.
+     * except for its `ack`. The uses it reports count in this month by the phone's UTC offset
+     * now, `utc_offset_secs`, as answers do.
      */
-    fun `applyStatus`(`machine`: kotlin.String, `status`: MachineStatus): ReportResult
+    fun `applyStatus`(`machine`: kotlin.String, `status`: MachineStatus, `utcOffsetSecs`: kotlin.Int): ReportResult
     
     /**
      * Marks a pending request `answered`, `expired` or `ignored`.
@@ -1856,16 +1858,18 @@ open class Store: Disposable, AutoCloseable, StoreInterface
 
     
     /**
-     * Records a `report` request: status, uses, inventory, hand-back.
+     * Records a `report` request: status, uses, inventory, hand-back. `utc_offset_secs` is
+     * the phone's UTC offset now, for the month the uses count in.
      */
-    @Throws(AppException::class)override fun `applyReport`(`request`: Request): ReportResult {
+    @Throws(AppException::class)override fun `applyReport`(`request`: Request, `utcOffsetSecs`: kotlin.Int): ReportResult {
             return FfiConverterTypeReportResult.lift(
     callWithHandle {
     uniffiRustCallWithError(AppException) { _status ->
     UniffiLib.uniffi_sealctl_app_fn_method_store_apply_report(
         it,
         
-        FfiConverterTypeRequest.lower(`request`),_status)
+        FfiConverterTypeRequest.lower(`request`),
+        FfiConverterInt.lower(`utcOffsetSecs`),_status)
 }
     }
     )
@@ -1875,9 +1879,10 @@ open class Store: Disposable, AutoCloseable, StoreInterface
     
     /**
      * Records a machine status (machine channel or `report`). A `seq` already seen is ignored
-     * except for its `ack`.
+     * except for its `ack`. The uses it reports count in this month by the phone's UTC offset
+     * now, `utc_offset_secs`, as answers do.
      */
-    @Throws(AppException::class)override fun `applyStatus`(`machine`: kotlin.String, `status`: MachineStatus): ReportResult {
+    @Throws(AppException::class)override fun `applyStatus`(`machine`: kotlin.String, `status`: MachineStatus, `utcOffsetSecs`: kotlin.Int): ReportResult {
             return FfiConverterTypeReportResult.lift(
     callWithHandle {
     uniffiRustCallWithError(AppException) { _status ->
@@ -1885,7 +1890,8 @@ open class Store: Disposable, AutoCloseable, StoreInterface
         it,
         
         FfiConverterString.lower(`machine`),
-        FfiConverterTypeMachineStatus.lower(`status`),_status)
+        FfiConverterTypeMachineStatus.lower(`status`),
+        FfiConverterInt.lower(`utcOffsetSecs`),_status)
 }
     }
     )

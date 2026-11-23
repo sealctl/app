@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Runs the Swift packages' tests in CI: built first, then `swift test` under a pseudo-terminal,
 # so the test log is printed while the tests run (through a pipe it only comes at the end). A
-# package whose tests still run after LIMIT seconds (default 600) is sampled: every thread's
-# stack of the test process and the processes it started, and the tests that started but never
-# finished; then it fails. A hang names its test and where it waits, instead of holding the job.
+# package whose tests still run after LIMIT seconds (default 600) prints the tests that started
+# but never finished, the processes under `swift test` and every thread's stack of the test
+# process (lldb, or `sample`); then it fails. A hang names its test and where it waits instead
+# of holding the job.
 #   ios/scripts/package-tests.sh SealCore Vault Relay Engine DesignSystem
 # SWIFT_BUILD_FLAGS: extra `swift build` arguments (Command Line Tools need the Testing macro
 # plugin path: -Xswiftc -plugin-path -Xswiftc <CLT>/usr/lib/swift/host/plugins/testing).
@@ -34,9 +35,11 @@ for p in "$@"; do
     echo "Processes under swift test:"
     tree() { for c in $(pgrep -P "$1"); do ps -o pid=,ppid=,etime=,command= -p "$c" | cut -c1-220; tree "$c"; done; }
     tree "$pid"
+    # every thread's stack (CI runners allow sudo without a password); each tool gets a minute
     for t in $(pgrep -f '[P]ackageTests|[s]wiftpm-testing-helper'); do
-      echo "::group::sample $t"
-      sample "$t" 3 2>&1 | sed -n '/^Call graph:/,/^Total number in stack/p' | head -1500
+      echo "::group::stacks of $t"
+      sudo -n perl -e 'alarm 60; exec @ARGV' lldb --batch -p "$t" -o 'thread backtrace all' -o detach 2>&1 | head -3000 ||
+        sudo -n perl -e 'alarm 60; exec @ARGV' sample "$t" 2 -mayDie 2>&1 | head -3000
       echo "::endgroup::"
     done
     pkill -f '[P]ackageTests|[s]wiftpm-testing-helper'

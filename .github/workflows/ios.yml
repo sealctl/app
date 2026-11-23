@@ -166,7 +166,7 @@ jobs:
         timeout-minutes: 15
         env:
           SEALCTL_TEST_RELAY: ${{ env.FAKE_RELAY }}
-          LIMIT: 420
+          LIMIT: 300
         run: ios/scripts/package-tests.sh SealCore Vault Relay Engine DesignSystem
 
       - name: Unit tests on the simulator (vectors through the Swift bindings, vault, relay)

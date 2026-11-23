@@ -82,7 +82,7 @@ android {
     }
 }
 
-// Third-party notices (SPEC.md 11.19), shown in Settings → About → Licences: every Android
+// Third-party notices (SPEC.md 11.18), shown in Settings → About → Licences: every Android
 // library in the release build, from its Maven POM (name, version, licence), the NOTICE files the
 // libraries ship, the Apache-2.0 text, and the Rust crates (../notices/rust-crates.txt, made by
 // scripts/notices.sh with cargo-about). No plugin: the POMs resolve like any other artifact.

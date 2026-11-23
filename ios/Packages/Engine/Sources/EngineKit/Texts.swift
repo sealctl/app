@@ -200,6 +200,8 @@ public enum Texts {
     }
     public static func unlockToAnswer(_ name: String) -> String { "Unlock your iPhone to answer \(name)." }
     public static let unlockToAnswerShort = "Unlock your phone to answer."
+    /// A reply the relay did not take (SPEC.md 8.5, 11.20); the card keeps its buttons.
+    public static let answerNotSent = "Couldn't send your answer — try again."
     public static let hiddenPreview = "A machine is waiting for your phone."
 
     public static func agentName(_ a: String?) -> String {

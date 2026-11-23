@@ -39,6 +39,8 @@ class ReleaseWorker(context: Context, params: WorkerParameters) : CoroutineWorke
     override suspend fun doWork(): Result {
         val id = inputData.getString("id") ?: return Result.success()
         val what = inputData.getString("what") ?: "leave"
+        // A cancel from a computer may not have reached this phone yet: ask the relay first.
+        Graph.engine.refreshDelayed()
         val d = Graph.engine.local.value.delayed.firstOrNull { it.id == id }
         if (d == null || d.state == "cancelled") return Result.success()
         Notify.show(applicationContext, Notify.SENSITIVE, "ready-$id", Texts.ready(what), null, screen = "delayed:$id")

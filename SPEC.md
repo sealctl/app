@@ -389,7 +389,7 @@ The app never calls `licence`, `checkout` or `claim`.
 - The app sends the text `ping` every 30 seconds; the relay answers `pong`. No `pong` within 10 seconds means the socket is dead: close and reconnect.
 - The relay also pushes while the socket is open. The app ignores a push for a request it already handled through the socket and shows no notification for it in the foreground.
 - Reconnect after a drop: 1, 2, 4, 8, 16, then every 30 seconds, each with ±20% jitter. At most 60 upgrades an hour, since upgrades count towards the abuse limit.
-- When the app leaves the foreground the socket closes. iOS would suspend it anyway; Android closes it so it does not hold a connection in the background.
+- When the app leaves the foreground the socket closes. iOS would suspend it anyway; Android closes it so it does not hold a connection in the background. A foreground that ends before its work starts opens no socket and does not count as foreground, so requests then still show notifications.
 
 ### 8.4 Background: push
 
@@ -399,6 +399,12 @@ The app never calls `licence`, `checkout` or `claim`.
 ### 8.5 Replies
 
 - A reply is sent once per request. On a network error it is retried at 1, 2 and 4 seconds and then every 10 seconds until the request's `expires`.
+- A second answer while one is on its way (a notification action and the card at once, two notification actions, or a level 2 or 3 confirm and its Deny) sends nothing: the first answer goes.
+- `created` and `expires` are on the relay's clock. A phone clock ahead of the relay's by less than its 5-minute signature window raises no clock error, so the phone counts a request's time to `expires` plus the time between `created` and when it first saw the request, at most 5 minutes. A reply after the relay's own `expires` gets `404 gone`; the relay decides.
+- The card's timer and an answer on its way, at any level: the answer decides. When the relay takes it, it is recorded once, as answered; when it fails after the request's time, the card shows "stopped waiting". A tap after the request's time (the timer did not run, for example after the phone slept) sends nothing and shows "stopped waiting". Claiming a card for an answer and expiring it are one step each, so on Android, where the timer and the answer run on different threads, only one of them gets the card.
+- A try that got no answer or a `5xx` may still have reached the relay. When a later try gets `404 gone`, or the request's time runs out while trying, an allow is recorded as given (its use and the day, at the place it was decided; never as a remembered answer), the card shows "stopped waiting", and leaving that place locks the machine (11.9). The machine may have the keys, so the phone acts as if it does.
+- When a reply the person tapped does not go (a `4xx` other than `404 gone`, `429`, or it could not be sealed), the card keeps its buttons and shows "Couldn't send your answer — try again." The core seals a request once, so the app opens it again from the relay's text for the next tap. From a notification action, the request's notification comes back with that text as its body (on iPhone an action removes the notification); when the request list could not be fetched either, a notification "Waiting for your phone" with that text opens the app.
+- An answer keeps going when the person leaves the app at once: iPhone runs it inside `beginBackgroundTask`; Android runs it in the app's scope, not the screen's.
 - `404 gone` means the machine stopped waiting. The app records the request as expired and shows "dev@mbp.example.com stopped waiting." if the user is looking at it.
 - `429 rate_limited`: the app shows the limit banner with the reset time from `retryAfter` (and `scope` in the private log), and stops making calls until then except replies the user taps.
 
@@ -430,7 +436,7 @@ For every request, from the socket, a push or a list:
 3. Open the sealed request with the phone keys (`open_request`, 19.1). The core checks the machine's signature inside the request, the time and the protocol version. On failure, ignore and log.
 4. Build the context: is the phone unlocked (the root item can be read), the relay's `near` flag and the phone's network type, the current trusted place from region monitoring, the machine's day record, answers, whether a change of words is running.
 5. Call `decide(request, context)`. It returns Automatic, One tap or In the app, plus the reply options.
-6. Automatic: seal the reply with the root and post it, record the use, show nothing or a quiet note (10.1, 10.2). One tap: show the notification or, in the foreground, the approval card. In the app: show a notification that opens the right screen.
+6. Automatic: seal the reply with the root and post it, record the use, show nothing or a quiet note (10.1, 10.2). When the relay does not take that reply (anything but `404 gone`) or the root can't be read, the request goes to the person as One tap instead of waiting unseen. One tap: show the notification or, in the foreground, the approval card. In the app: show a notification that opens the right screen.
 7. After the answer, record usage, update inventory from the request's items, update the day record, take a place sample when this was the first approval of the day, and schedule a state upload.
 
 ### 9.2 Request kinds
@@ -569,7 +575,7 @@ Nothing about the machine, the agent, the key or the sealed request goes through
    - **with** the `com.apple.developer.usernotifications.filtering` entitlement: suppress the notification by delivering an empty `UNNotificationContent`; nothing shows;
    - **without** it: deliver a passive notification, "Opened dev@mbp.example.com at Desk." (`interruptionLevel = .passive`, no sound, no badge), which goes to Notification Center without lighting the screen. The app removes it the next time it runs.
 4. If One tap: rewrite the title and body (11.7), replace the category `SEALCTL_REQUEST` with the kind's category below, set `threadIdentifier` to the machine key, `userInfo` with the request id and `expires`, keep `interruptionLevel = .timeSensitive`, `relevanceScore = 1`.
-5. If the request is already gone (answered on another install, or expired): deliver a passive "dev@mbp.example.com stopped waiting." or, with the filtering entitlement, nothing.
+5. If the request is already gone (answered on another install, or expired), at the list or when its own reply gets `404 gone`: deliver a passive "dev@mbp.example.com stopped waiting." or, with the filtering entitlement, nothing.
 6. On any failure or timeout (`serviceExtensionTimeWillExpire`): deliver the push unchanged.
 
 **Categories and actions.**
@@ -1008,7 +1014,7 @@ Each machine row shows one state, from the machine's last status (`GET .../statu
 
 **Monitoring.** iOS: one `CLMonitor` named `places`, one `CLMonitor.CircularGeographicCondition` per place. Android: one geofence per place with `GEOFENCE_TRANSITION_ENTER | GEOFENCE_TRANSITION_EXIT`, `NEVER_EXPIRE`. The current inside or outside state is stored and copied to the extension snapshot.
 
-**Leaving.** On exit from a place, the app sends a lock message to every machine whose day began at that place and that is Open or was Open at its last report. The lock uses the phone keys only, so it works on a locked phone. Then it posts "You left Desk. Locked dev@mbp.example.com." (passive). The machine keeps the day's credit; that is the machine's job.
+**Leaving.** On exit from a place, the app sends a lock message to every machine whose day began at that place and that is Open or was Open at its last report. The lock uses the phone keys only, so it works on a locked phone. Then it posts "You left Desk. Locked dev@mbp.example.com." (passive). The machine keeps the day's credit; that is the machine's job. An allow decided at the place that is still on its way when the phone leaves is followed, once posted, by a lock to its machine, so the lock never reaches the machine before that answer; its day is not recorded as begun at the place. The app checks for an exit again once that answer's day record is in place: an exit from then on finds the day and locks the machine itself, and one before it is covered by the answer's own lock.
 
 **Places screen** (Settings, Places):
 
@@ -1295,6 +1301,7 @@ Erase removes this install's push device (`DELETE /v1/phones/{phone}/push/{devic
 | Card | Request gone | "dev@mbp.example.com stopped waiting." | [Close] |
 | Card | Unknown kind | "dev@mbp.example.com sent a request this app doesn't understand. Update the app." | Deny |
 | Card | Root unreadable at answer | "Unlock your phone to answer." | |
+| Card or level 2 and 3 screens | The reply did not go (8.5) | "Couldn't send your answer — try again." | The buttons stay |
 | Level 2 or 3 | No biometrics, or locked out | The texts of 9.6 | [Use my card] for level 2 |
 | Level 2 | Not near, no number | "dev@box.example.com isn't near this phone. Run the command at its terminal; this phone then asks for the number on its screen." | [Close] |
 | Level 2 or 3 | Held | "Sensitive requests from dev@mbp.example.com are held until 11:42 after a wrong number." | [Release now] |
@@ -1375,7 +1382,8 @@ The app unpairs the skipped machines, sends every machine a `notice`, calls `DEL
 
 [Done] runs Erase (11.19) without its question: this install's push device, every keychain item or Keystore key and file, the database and the snapshot. The app returns to Welcome with one line above it: "sealctl is gone from this phone. You can delete the app."
 
-- Each step is saved, so a closed app resumes at the step it left.
+- Each step is saved, so a closed app resumes at the step it left. [Done] leaves the step at 7 until Erase has removed the database, so an app closed during Erase opens at step 7 again.
+- From step 5 on, the app does not register its push device again, and coming to the foreground opens no socket and lists no requests: that would put this phone back on the relay after its data was deleted, or show banners for a relay that no longer knows it. Erase closes the socket without ending the app's foreground, so onboarding again opens it.
 - Without biometrics, step 3 is refused (9.6): leave from the card on each computer with `sealctl unseal --all --words`, then [Erase sealctl from this phone] (11.19). The relay data then expires after 730 days (6.5).
 - Another install with the same words finds its phone key gone after step 5 and shows "Your words were removed on another phone." [Erase this phone] [Restore].
 - Without a phone (lost), leaving works from the card alone: `sealctl unseal --all --words` on each computer. The website's "Leaving sealctl" page says so.
@@ -1444,7 +1452,7 @@ The screens for levels 2 and 3 (9.6). They are full-screen, never a sheet, and n
 - The same screen serves the actions on the phone: "Showing your words", "Deleting your relay data", "Leaving sealctl".
 - A banner on the Machines tab while any delay runs: "dev@mbp.example.com hands everything back at 11:00." [Show] [Cancel]. Cancel needs no biometrics: stopping is always allowed.
 - Cancelled here: "Cancelled. Nothing was handed back." Cancelled from a computer: "Cancelled from dev@box.example.com." The app then sends every machine a `notice` with `state: "cancelled"`.
-- For an action on the phone, at `releaseAt` a local notification says "Ready: open sealctl to finish …" (10.1). Opening it asks for biometrics, then calls `finish`; only on `200` does the action run. `409 cancelled`: "Cancelled from dev@box.example.com. Nothing happened." The finish is offered until the relay record expires, 15 minutes after `releaseAt`; after that: "This waited too long. Start again."
+- For an action on the phone, at `releaseAt` a local notification says "Ready: open sealctl to finish …" (10.1). A cancel removes it, however the phone hears of it (socket, push, the relay's list, `finish`); on Android the job that posts it asks the relay first. Opening it asks for biometrics, then calls `finish`; only on `200` does the action run. `409 cancelled`: "Cancelled from dev@box.example.com. Nothing happened." The finish is offered until the relay record expires, 15 minutes after `releaseAt`; after that: "This waited too long. Start again."
 - For `unseal --all`, nothing is needed from the phone when the hour ends: the computer fetches the approval from the relay.
 - Other installs with the same words show the delay too (from the relay's note) and can cancel it.
 - Notes, pushes and the relay's list can arrive in any order. Once the phone has recorded a delayed action as cancelled, finished, gone or expired, a later write from an older read (the list fetched just before a cancel note) never makes it wait again; only a known end (cancelled, with who cancelled, or finished) replaces "gone" or "expired". A cancelled plan approval stays cancelled, and a plan approval whose delayed action is cancelled is cancelled too, whichever of the two the phone recorded first (a cancel can arrive while the approval is still being posted); approving the same plan again is a new request with its own record.

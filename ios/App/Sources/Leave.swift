@@ -110,8 +110,9 @@ struct LeaveView: View {
                 PrimaryButton("Done") {
                     router.goodbye = true
                     Task {
-                        await go(e, 0, skipped: [])
                         router.reset()
+                        // Erase removes the saved step with the database: an app closed before
+                        // it ends opens at this step again, not as if nothing happened.
                         await e.erase(alsoBackup: true)
                     }
                 }

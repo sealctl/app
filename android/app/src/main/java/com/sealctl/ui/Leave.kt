@@ -197,7 +197,8 @@ fun LeaveScreen(activity: MainActivity) {
             PrimaryButton("Done", {
                 Ui.goodbye.value = true
                 Graph.engine.scope.launch {
-                    go(0, emptyList())
+                    // Erase removes the saved step with the database: an app closed before it
+                    // ends opens at this step again, not as if nothing happened.
                     erase(alsoBackup = true)
                 }
             })

@@ -147,7 +147,9 @@ fun SensitiveScreen(activity: MainActivity, requestId: String) {
                     }
                 }
                 val ok = engine.confirmSensitive(w)
-                step = if (!ok) { error = Texts.stoppedWaiting(name); SStep.Plan } else if (engine.delaySecs(w.verdict.delaySecs.toInt()) > 0) SStep.Delay else SStep.Done
+                // Still waiting: the reply did not go and can be confirmed again.
+                val still = engine.waiting.value.any { it.relay.id == w.relay.id && !it.expired }
+                step = if (!ok) { error = if (still) Texts.ANSWER_NOT_SENT else Texts.stoppedWaiting(name); SStep.Plan } else if (engine.delaySecs(w.verdict.delaySecs.toInt()) > 0) SStep.Delay else SStep.Done
             }
         }, onDeny = { deny() })
         SStep.CardWords -> CardWords(activity, positions = 2, groups = 2, title = "Use your card", onPassed = {

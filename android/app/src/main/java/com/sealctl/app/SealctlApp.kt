@@ -26,9 +26,11 @@ class SealctlApp : Application(), NotifyHost, PlacesHost {
         }
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
+                // Counted now: an onStop before this work runs leaves no socket open (SPEC.md 8.3).
+                val turn = engine.started()
                 engine.scope.launch {
                     engine.computePhase()
-                    engine.onForeground()
+                    engine.onForeground(turn)
                 }
             }
 

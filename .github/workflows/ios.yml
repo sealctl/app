@@ -150,6 +150,7 @@ jobs:
         run: |
           cargo build --release -p fake-relay -p fake-machine
           echo "FAKE_MACHINE_BIN=$PWD/target/release/fake-machine" >> "$GITHUB_ENV"
+          echo "FAKE_RELAY_BIN=$PWD/target/release/fake-relay" >> "$GITHUB_ENV"
           # The CLI at the same sealctl commit as the core the app is built on (Cargo.lock).
           rev=$(sed -n 's/.*sealctl?rev=[0-9a-f]*#\([0-9a-f]*\)".*/\1/p' Cargo.lock | head -1)
           git clone -q --filter=blob:none https://github.com/sealctl/sealctl "$RUNNER_TEMP/sealctl"
@@ -159,15 +160,14 @@ jobs:
           nohup target/release/fake-relay --bind 127.0.0.1:8787 > "$RUNNER_TEMP/fake-relay.log" 2>&1 &
           sleep 1 && curl -fsS "$FAKE_RELAY/v1/health"
 
+      # The test log is printed as the tests run; a package still running after LIMIT seconds
+      # prints the tests that never finished and every thread's stack, then fails.
       - name: Package tests on macOS (vectors, relay client, engine end to end)
+        timeout-minutes: 15
         env:
           SEALCTL_TEST_RELAY: ${{ env.FAKE_RELAY }}
-        run: |
-          for p in SealCore Vault Relay Engine DesignSystem; do
-            echo "::group::$p"
-            (cd "ios/Packages/$p" && swift test) || exit 1
-            echo "::endgroup::"
-          done
+          LIMIT: 300
+        run: ios/scripts/package-tests.sh SealCore Vault Relay Engine DesignSystem
 
       - name: Unit tests on the simulator (vectors through the Swift bindings, vault, relay)
         env:

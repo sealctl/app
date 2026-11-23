@@ -112,9 +112,9 @@ private struct Welcome: View {
             SecondaryButton("Restore", action: onRestore)
             HStack(spacing: 4) {
                 Text("No account.").foregroundStyle(Palette.muted)
-                Button("Privacy") { Links.open("https://sealctl.com/privacy") }
+                TextButton("Privacy") { Links.open("https://sealctl.com/privacy") }
                 Text("·").foregroundStyle(Palette.muted)
-                Button("Terms") { Links.open("https://sealctl.com/terms") }
+                TextButton("Terms") { Links.open("https://sealctl.com/terms") }
             }
             .font(.subheadline)
         }

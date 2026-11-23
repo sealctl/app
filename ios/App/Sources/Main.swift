@@ -137,26 +137,26 @@ struct MachinesTab: View {
         }
         if b.rateLimitedUntil > now { Banner(Texts.rateLimited(b.rateLimitedUntil)) }
         if b.clockSkew {
-            Banner(Texts.clock) { Button("Open settings") { Links.settings() } }
+            Banner(Texts.clock) { TextButton("Open settings") { Links.settings() } }
         }
         if b.signatureRefused { Banner(Texts.signature) }
         if !e.notificationsAllowed {
-            Banner(Texts.notificationsOff) { Button("Open settings") { Links.notificationSettings() } }
+            Banner(Texts.notificationsOff) { TextButton("Open settings") { Links.notificationSettings() } }
         }
         let change = e.local.delayed.filter { $0.state == "waiting" && Int64($0.releaseAt) > now }
         ForEach(change, id: \.id) { d in
             let name = d.machine.flatMap { e.machine($0) }.map(e.displayName) ?? "This phone"
             Banner(Texts.delayedAt(d.what, name: name, at: Int64(d.releaseAt)), tone: Palette.accentSoft) {
                 HStack(spacing: 16) {
-                    Button("Show") { router.push(.delayed(d.id)) }
-                    Button("Cancel") { Task { await e.cancelDelayed(d.id) } }
+                    TextButton("Show") { router.push(.delayed(d.id)) }
+                    TextButton("Cancel") { Task { await e.cancelDelayed(d.id) } }
                 }
             }
         }
         let live = e.waiting.filter { !$0.expired }
         if !live.isEmpty {
             Banner("\(live.count) waiting on this phone", tone: Palette.accentSoft) {
-                Button("Show") {
+                TextButton("Show") {
                     let w = live[0]
                     if w.verdict.asking == .inApp { router.push(.sensitive(w.id)) } else { e.focusRequest = w.id }
                 }

@@ -45,7 +45,7 @@ final class LeaveTests: SealctlTestCase {
             Bio.match()
             Thread.sleep(forTimeInterval: 1)
         }
-        XCTAssertTrue(fields.firstMatch.waitForExistence(timeout: 5), Env.scrub(String(app.debugDescription.prefix(3000))))
+        XCTAssertTrue(fields.firstMatch.waitForExistence(timeout: 5), uiTree(3000))
         let positions = (0..<fields.count).map { Int(fields.element(boundBy: $0).identifier.dropFirst(6))! }
         XCTAssertEqual(positions.count, 3)
         typeWords(positions.map { words[$0 - 1] }, fields: positions)

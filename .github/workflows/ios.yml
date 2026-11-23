@@ -21,11 +21,10 @@ on:
 permissions:
   contents: read
 
-# A newer commit cancels a pull request's run. On main a running run is never cancelled (the
-# UI tests take about an hour); GitHub keeps at most one pending run per group, so a merge
-# that arrives while another waits replaces the waiting one, and the latest commit is tested.
 concurrency:
-  group: ios-${{ github.event_name }}-${{ github.ref }}
+  # one run per pull request (a new push cancels the old run); push, schedule and manual runs
+  # get a group of their own, so a run on main is never cancelled or replaced
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -36,7 +35,40 @@ jobs:
   ios:
     runs-on: macos-26
     timeout-minutes: 180
+    permissions:
+      contents: read
+      pull-requests: read # the pull request's file list (UI tests step)
     steps:
+      # The free plan runs 5 macOS jobs at a time and the UI tests take about an hour. Only
+      # Dependabot's pull requests that change nothing but Cargo.toml / Cargo.lock skip them
+      # (the core, the packages and the unit tests still run). Every other pull request runs
+      # them when the app, the core, the tools, this workflow or the Cargo files change: a
+      # sealctl-core pin bump touches only the Cargo files but swaps the core the app runs on.
+      # Always on main and manual runs.
+      - name: What changed
+        id: changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            echo "ui=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename')
+          ui=false
+          while IFS= read -r f; do
+            case "$f" in
+              ios/*|shared/*|tools/*|scripts/*|.github/workflows/ios.yml) ui=true ;;
+              Cargo.toml|Cargo.lock|*/Cargo.toml) [ "$AUTHOR" = "dependabot[bot]" ] || ui=true ;;
+            esac
+          done <<< "$files"
+          echo "ui=$ui" >> "$GITHUB_OUTPUT"
+          echo "UI tests: $ui"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -147,6 +179,7 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/unit.xcresult" | tail -60
 
       - name: UI tests (fake relay, fake machine, sealctl CLI)
+        if: steps.changes.outputs.ui == 'true'
         env:
           ONLY: ${{ inputs.only }}
           TEST_RUNNER_SEALCTL_RELAY: ${{ env.FAKE_RELAY }}

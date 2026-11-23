@@ -763,13 +763,22 @@ impl Store {
             LocalEvent::ClearHold { machine } => l.holds.retain(|h| h.machine != machine),
             LocalEvent::PutPlan { mut plan } => {
                 // A cancelled approval stays cancelled: a write of the same approval (same
-                // request) made before the cancel was seen does not bring it back.
-                if l.plans.iter().any(|p| {
-                    p.machine == plan.machine
-                        && p.plan_hash == plan.plan_hash
-                        && p.request_id == plan.request_id
-                        && p.state == "cancelled"
-                }) {
+                // request) made before the cancel was seen does not bring it back, and an
+                // approval whose delayed action was already recorded as cancelled (the cancel
+                // came before the approval was stored) is stored cancelled.
+                let delay_cancelled = plan.delay_id.as_ref().is_some_and(|id| {
+                    l.delayed
+                        .iter()
+                        .any(|d| &d.id == id && d.state == "cancelled")
+                });
+                if delay_cancelled
+                    || l.plans.iter().any(|p| {
+                        p.machine == plan.machine
+                            && p.plan_hash == plan.plan_hash
+                            && p.request_id == plan.request_id
+                            && p.state == "cancelled"
+                    })
+                {
                     plan.state = "cancelled".into();
                 }
                 l.plans
@@ -780,16 +789,29 @@ impl Store {
                 });
             }
             LocalEvent::PutDelayed { mut action } => {
-                // A delayed action that ended (cancelled, finished, gone) stays ended: a write
-                // made from an older read (the relay's list fetched before a cancel note)
-                // does not make it wait again.
+                // A delayed action that ended (cancelled, finished, gone, expired) stays
+                // ended: a write made from an older read (the relay's list fetched before a
+                // cancel note) does not make it wait again. Only a known end (cancelled,
+                // finished) replaces an unknown one (gone, expired).
                 if let Some(d) = l
                     .delayed
                     .iter()
                     .find(|d| d.id == action.id && delayed_ended(&d.state))
                 {
-                    action.state = d.state.clone();
-                    action.cancelled_by = d.cancelled_by.clone().or(action.cancelled_by);
+                    if !(delayed_known_end(&action.state) && !delayed_known_end(&d.state)) {
+                        action.state = d.state.clone();
+                        action.cancelled_by = d.cancelled_by.clone().or(action.cancelled_by);
+                    }
+                }
+                // Its plan approval is cancelled with it, whichever of the two was stored first.
+                if action.state == "cancelled" {
+                    for p in l
+                        .plans
+                        .iter_mut()
+                        .filter(|p| p.delay_id.as_deref() == Some(action.id.as_str()))
+                    {
+                        p.state = "cancelled".into();
+                    }
                 }
                 l.delayed.retain(|d| d.id != action.id);
                 l.delayed.push(action);
@@ -1090,6 +1112,12 @@ impl Store {
 /// A delayed action's state from which it never waits again.
 fn delayed_ended(state: &str) -> bool {
     matches!(state, "cancelled" | "finished" | "gone" | "expired")
+}
+
+/// An end that says what happened (cancelled, and by whom; finished), rather than only that
+/// the relay no longer has the action.
+fn delayed_known_end(state: &str) -> bool {
+    matches!(state, "cancelled" | "finished")
 }
 
 /// Whether an allowed `open` with this outcome can be the first approval of a day: only an
@@ -1775,6 +1803,89 @@ mod tests {
             })
             .unwrap();
         assert!(l.holds.is_empty());
+    }
+
+    #[test]
+    fn a_cancelled_delay_cancels_its_plan_whichever_is_stored_first() {
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        st.set_now(t0);
+        let action = |id: &str, state: &str, by: Option<&str>| LocalEvent::PutDelayed {
+            action: DelayedAction {
+                id: id.into(),
+                what: "unseal_all".into(),
+                machine: Some("m".into()),
+                release_at: t0 + 2 * H,
+                expires: t0 + 2 * H + 15 * MIN,
+                state: state.into(),
+                cancelled_by: by.map(Into::into),
+            },
+        };
+        let plan = |id: &str, hash: &str| LocalEvent::PutPlan {
+            plan: PlanApprovalRecord {
+                machine: "m".into(),
+                request_id: id.into(),
+                plan_hash: hash.into(),
+                not_before: t0 + 2 * H,
+                state: "delayed".into(),
+                delay_id: Some(id.into()),
+                ..PlanApprovalRecord::default()
+            },
+        };
+        // The machine cancels while the reply is posted: the cancel is recorded before the
+        // approval is stored.
+        st.apply_local(action("d1", "cancelled", Some("m")))
+            .unwrap();
+        st.apply_local(action("d1", "waiting", None)).unwrap();
+        let l = st.apply_local(plan("d1", "h1")).unwrap();
+        assert_eq!(l.plans[0].state, "cancelled");
+        // The other order: the approval first, then the cancel.
+        st.apply_local(plan("d2", "h2")).unwrap();
+        let l = st
+            .apply_local(action("d2", "cancelled", Some("m")))
+            .unwrap();
+        let p = l.plans.iter().find(|p| p.request_id == "d2").unwrap();
+        assert_eq!(p.state, "cancelled");
+    }
+
+    #[test]
+    fn a_known_end_replaces_gone_but_nothing_makes_an_end_wait() {
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        st.set_now(t0);
+        let action = |state: &str, by: Option<&str>| LocalEvent::PutDelayed {
+            action: DelayedAction {
+                id: "d1".into(),
+                what: "unseal_all".into(),
+                machine: Some("m".into()),
+                release_at: t0 + 2 * H,
+                expires: t0 + 2 * H + 15 * MIN,
+                state: state.into(),
+                cancelled_by: by.map(Into::into),
+            },
+        };
+        // The relay's list no longer has it (gone), then the cancel note says who cancelled.
+        st.apply_local(action("gone", None)).unwrap();
+        let l = st.apply_local(action("cancelled", Some("m"))).unwrap();
+        assert_eq!(l.delayed[0].state, "cancelled");
+        assert_eq!(l.delayed[0].cancelled_by.as_deref(), Some("m"));
+        for (state, by) in [("waiting", None), ("gone", None), ("finished", None)] {
+            let l = st.apply_local(action(state, by)).unwrap();
+            assert_eq!(l.delayed[0].state, "cancelled");
+            assert_eq!(l.delayed[0].cancelled_by.as_deref(), Some("m"));
+        }
+        // Expired, then finished.
+        st.apply_local(LocalEvent::RemoveDelayed { id: "d1".into() })
+            .unwrap();
+        st.apply_local(action("expired", None)).unwrap();
+        assert_eq!(
+            st.apply_local(action("waiting", None)).unwrap().delayed[0].state,
+            "expired"
+        );
+        assert_eq!(
+            st.apply_local(action("finished", None)).unwrap().delayed[0].state,
+            "finished"
+        );
     }
 
     #[test]

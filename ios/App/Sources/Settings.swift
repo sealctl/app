@@ -130,7 +130,7 @@ struct AnswersView: View {
                     } else {
                         MutedText("Last used \(Texts.ago(Int64(a.lastUsed)))")
                     }
-                    Button("Remove") {
+                    TextButton("Remove") {
                         Task { await e.apply(.removeAnswer(agent: a.agent, keyName: a.keyName, repoId: a.repoId), upload: true) }
                     }
                     .foregroundStyle(Palette.accent)
@@ -185,19 +185,19 @@ struct PlacesView: View {
                     if removing == p.id {
                         BodyText("Remove \(p.name)? Machines opened here stay Open until their allowance ends.")
                         HStack {
-                            Button("Remove") { Task { await e.removePlace(p.id); removing = nil } }
-                            Button("Cancel") { removing = nil }
+                            TextButton("Remove") { Task { await e.removePlace(p.id); removing = nil } }
+                            TextButton("Cancel") { removing = nil }
                         }
                     } else if renaming == p.id {
                         TextField("Name", text: $newName).textFieldStyle(.roundedBorder)
                         HStack {
-                            Button("Rename") { Task { await e.renamePlace(p.id, newName); renaming = nil } }
-                            Button("Cancel") { renaming = nil }
+                            TextButton("Rename") { Task { await e.renamePlace(p.id, newName); renaming = nil } }
+                            TextButton("Cancel") { renaming = nil }
                         }
                     } else {
                         HStack(spacing: 20) {
-                            Button("Rename") { newName = p.name; renaming = p.id }
-                            Button("Remove") { removing = p.id }
+                            TextButton("Rename") { newName = p.name; renaming = p.id }
+                            TextButton("Remove") { removing = p.id }
                         }
                     }
                 }
@@ -289,7 +289,7 @@ struct DevicesView: View {
                                  (stale ? "Not updated since \(Texts.isoDate(d.updated))" : "updated \(Texts.ago(d.updated))"))
                                 .foregroundStyle(Palette.ink)
                             Spacer()
-                            Button("Remove") {
+                            TextButton("Remove") {
                                 Task {
                                     try? await e.relay.deletePush(d.device)
                                     list = try? await e.relay.listPush()
@@ -333,7 +333,7 @@ struct MachineDetailView: View {
                     if !v.detail.isEmpty { BodyText(v.detail) }
                     if let hold = e.local.holds.first(where: { $0.machine == key && Int64($0.until) > now }) {
                         Text(Texts.held(e.displayName(m), until: Int64(hold.until))).foregroundStyle(Palette.waiting)
-                        Button("Release now") {
+                        TextButton("Release now") {
                             Task {
                                 if await e.vault.gate(reason: "Confirm releasing \(e.displayName(m)).") == .passed {
                                     await e.releaseHold(key)
@@ -392,7 +392,7 @@ struct LostMachineView: View {
             HStack {
                 BodyText("1. Unpair it now.")
                 if let m, !m.deleted {
-                    Button("Unpair") { Task { await e.unpair(m) } }
+                    TextButton("Unpair") { Task { await e.unpair(m) } }
                 } else {
                     Text("Unpaired").foregroundStyle(Palette.muted)
                 }

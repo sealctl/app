@@ -13,6 +13,8 @@ private enum PairStep {
     case confirm(PairingOffer)
     case duplicate(PairingOffer, Machine)
     case cardWords(PairingOffer, String?)
+    /// Two card words before a new gate (9.6), then the prompt again.
+    case gateCard(PairingOffer, String?, GateResult)
     case done(String)
 }
 
@@ -81,6 +83,11 @@ struct PairingView: View {
                     }
                 }
             }, onCancel: { step = .confirm(offer) })
+        case .gateCard(let offer, let replaces, let why):
+            GateCardWordsView(why: why, onPassed: {
+                back(offer, replaces, e)
+                confirm(offer, replaces: replaces, e)
+            }, onCancel: { back(offer, replaces, e) })
         case .done(let name):
             Page(onBack: nil) {
                 Gap(24)
@@ -124,12 +131,23 @@ struct PairingView: View {
                 step = .cardWords(offer, replaces)
                 return
             }
-            switch await e.vault.gate(reason: "Confirm pairing \(shown(offer.name())).") {
+            let result = await e.vault.gate(reason: "Confirm pairing \(shown(offer.name())).")
+            switch result {
             case .passed: await register(offer, replaces, e)
             case .cancelled: break
-            case .changed, .lockedOut, .unavailable: step = .cardWords(offer, replaces)
+            case .changed, .noGate: step = .gateCard(offer, replaces, result)
+            case .lockedOut, .unavailable: step = .cardWords(offer, replaces)
             case .failed(let m): error = "Couldn't confirm (\(m))."
             }
+        }
+    }
+
+    /// Back to the screen that asked.
+    private func back(_ offer: PairingOffer, _ replaces: String?, _ e: AppEngine) {
+        if let k = replaces, let existing = e.machine(k) {
+            step = .duplicate(offer, existing)
+        } else {
+            step = .confirm(offer)
         }
     }
 

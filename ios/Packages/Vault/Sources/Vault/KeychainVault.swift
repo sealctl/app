@@ -119,6 +119,9 @@ public actor KeychainVault: Vault {
     // MARK: the gate (levels 2 and 3, SPEC.md 9.6)
 
     private static let gateMade = "com.sealctl.gate.made"
+    /// Set by `resetGate` once the card was passed, cleared when the new gate is made or on
+    /// erase. In memory only: a card passed in an earlier run of the app allows nothing.
+    private var newGateAllowed = false
 
     public func gate(reason: String) async -> GateResult {
         let ctx = LAContext()
@@ -129,6 +132,10 @@ public actor KeychainVault: Vault {
             if error?.code == LAError.biometryLockout.rawValue { return .lockedOut }
             return .unavailable
         }
+        // No gate yet: the card first, before any prompt (9.6).
+        let step = GateStep.of(itemExists: exists(Self.gateItem), made: defaults.bool(forKey: Self.gateMade),
+                               cardPassed: newGateAllowed)
+        if step == .cardFirst { return .noGate }
         do {
             guard try await ctx.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) else {
                 return .failed("denied")
@@ -151,7 +158,7 @@ public actor KeychainVault: Vault {
         }
         // An item that is there but can't be read was invalidated by an enrolment change. The
         // flag alone can't tell: UserDefaults go with the app, the keychain item stays (7.4).
-        if defaults.bool(forKey: Self.gateMade) || exists(Self.gateItem) { return .changed }
+        if step == .check { return .changed }
         return makeGate(ctx, readStatus: status)
     }
 
@@ -170,12 +177,14 @@ public actor KeychainVault: Vault {
             return .failed("gate \(readStatus)")
         }
         defaults.set(true, forKey: Self.gateMade)
+        newGateAllowed = false
         return .passed
     }
 
     public func resetGate() {
         delete(Self.gateItem)
         defaults.removeObject(forKey: Self.gateMade)
+        newGateAllowed = true
     }
 
     // MARK: iCloud Keychain copy
@@ -203,6 +212,7 @@ public actor KeychainVault: Vault {
     public func erase() {
         for s in [Self.words, Self.root, Self.phone, Self.gateItem, "com.sealctl.root.old", "com.sealctl.words.old"] { delete(s) }
         defaults.removeObject(forKey: Self.gateMade)
+        newGateAllowed = false
     }
 
     // MARK: plumbing

@@ -9,6 +9,7 @@ public actor MemoryVault: Vault {
     private var phone: Data?
     private var sync: Data?
     private var gateMade = false
+    private var cardPassed = false
     public var secure = true
     public var locked = false
     public var biometricsState: Biometrics = .available
@@ -64,18 +65,21 @@ public actor MemoryVault: Vault {
         gateReasons.append(reason)
         if biometricsState == .unavailable { return .unavailable }
         if biometricsState == .lockedOut { return .lockedOut }
+        // The same rule as the keychain vault (9.6): the first gate needs the card.
+        if GateStep.of(itemExists: false, made: gateMade, cardPassed: cardPassed) == .cardFirst { return .noGate }
         let r = nextGate
-        if r == .passed { gateMade = true }
+        if r == .passed && !gateMade { gateMade = true; cardPassed = false }
         return r
     }
 
-    public func resetGate() { gateMade = false; nextGate = .passed }
+    /// The card was passed: the next prompt makes the gate.
+    public func resetGate() { gateMade = false; cardPassed = true; nextGate = .passed }
 
     public func saveSyncBackup(_ item: Data) -> Bool { sync = item; return true }
     public func readSyncBackup() -> Data? { sync }
     public func deleteSyncBackup() { sync = nil }
 
     public func erase() {
-        words = nil; root = nil; phone = nil; gateMade = false
+        words = nil; root = nil; phone = nil; gateMade = false; cardPassed = false
     }
 }

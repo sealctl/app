@@ -62,7 +62,8 @@ private sealed class PairStep {
     data class Confirm(val offer: PairingOffer) : PairStep()
     data class Duplicate(val offer: PairingOffer, val existing: Machine) : PairStep()
     /** `back` is the step it came from, where an error after the card shows. */
-    data class CardWords(val offer: PairingOffer, val replaces: String?, val back: PairStep) : PairStep()
+    /** Two card words: instead of a biometric, or before a new gate when [gate] says why (9.6). */
+    data class CardWords(val offer: PairingOffer, val replaces: String?, val back: PairStep, val gate: GateResult? = null) : PairStep()
     data class Done(val name: String) : PairStep()
 }
 
@@ -97,7 +98,9 @@ fun PairingScreen(activity: MainActivity, route: Route.Pair) {
         when (val g = biometricGate(activity, "Confirm pairing ${Texts.shown(offer.name(), Texts.MAX_NAME)}.")) {
             GateResult.Passed -> register(offer, replaces)
             GateResult.Cancelled -> {}
-            GateResult.Changed, GateResult.LockedOut, GateResult.NoBiometrics -> step = PairStep.CardWords(offer, replaces, step)
+            // The card, then the prompt again, which makes the new gate.
+            GateResult.Changed, GateResult.NoGate -> step = PairStep.CardWords(offer, replaces, step, gate = g)
+            GateResult.LockedOut, GateResult.NoBiometrics -> step = PairStep.CardWords(offer, replaces, step)
             is GateResult.Failed -> error = g.message
         }
     }
@@ -139,7 +142,11 @@ fun PairingScreen(activity: MainActivity, route: Route.Pair) {
                 }
             }
         }
-        is PairStep.CardWords -> CardWords(activity, 2, 2, "Use your card", onPassed = {
+        is PairStep.CardWords -> if (s.gate != null) GateCardWords(activity, s.gate, onPassed = {
+            step = s.back
+            scope.launch { confirm(s.offer, s.replaces) }
+        }, onCancel = { step = s.back })
+        else CardWords(activity, 2, 2, "Use your card", onPassed = {
             engine.vault.resetGate()
             scope.launch {
                 register(s.offer, s.replaces)

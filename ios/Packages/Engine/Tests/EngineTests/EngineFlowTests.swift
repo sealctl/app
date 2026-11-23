@@ -151,6 +151,8 @@ struct EngineFlowTests {
         #expect(choices.contains(right))
         // One pick only: the core keeps the right number and counts the first answer.
         #expect(w.request.checkMatch(pick: right))
+        // The card before the first gate (SPEC.md 9.6).
+        await vault.resetGate()
         #expect(await vault.gate(reason: "Confirm handing back dev@mbp.example.com.") == .passed)
         #expect(await engine.confirmSensitive(w))
         var (code, out) = await m.waitAsync(r)
@@ -190,6 +192,8 @@ struct EngineFlowTests {
         let n1 = try await r.number()
         #expect(w.request.matchChoices().contains(n1))
         #expect(w.request.checkMatch(pick: n1))
+        // The card before the first gate (SPEC.md 9.6).
+        await vault.resetGate()
         #expect(await vault.gate(reason: "x") == .passed)
         #expect(await engine.confirmSensitive(w))
         let d = try #require(engine.local.delayed.first { $0.id == w.id })
@@ -222,6 +226,8 @@ struct EngineFlowTests {
         let n = try await r.number()
         #expect(w.request.matchChoices().contains(n))
         #expect(w.request.checkMatch(pick: n))
+        // The card before the first gate (SPEC.md 9.6).
+        await vault.resetGate()
         #expect(await vault.gate(reason: "x") == .passed)
         #expect(await engine.confirmSensitive(w))
         #expect(engine.local.plans.first { $0.requestId == w.id }?.state == "delayed")

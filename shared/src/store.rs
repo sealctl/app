@@ -753,7 +753,8 @@ impl Store {
             }
             LocalEvent::SetHold { mut hold } => {
                 // A hold only grows: a later wrong number never ends an earlier hold sooner.
-                // Only ClearHold (Release now, with biometrics) ends it early.
+                // Only ClearHold (Release now, with biometrics) ends it early. How far it
+                // reaches is capped below, after every change.
                 for h in l.holds.iter().filter(|h| h.machine == hold.machine) {
                     hold.until = hold.until.max(h.until);
                 }
@@ -843,6 +844,13 @@ impl Store {
                     l.last_download = now;
                 }
             }
+        }
+        // A hold never reaches more than its hour past now: one recorded while the clock ran
+        // ahead (until a year on) ends an hour after the next change once the clock is right,
+        // never sooner than an hour from now.
+        let cap = now.saturating_add(crate::decide::HOLD_MS);
+        for h in &mut l.holds {
+            h.until = h.until.min(cap);
         }
         write_doc(&c, "local", &l)?;
         Ok(l)
@@ -1782,6 +1790,7 @@ mod tests {
     fn a_later_wrong_number_never_shortens_a_hold() {
         let st = store();
         let t0 = MIDNIGHT + 9 * H;
+        st.set_now(t0);
         let hold = |until| LocalEvent::SetHold {
             hold: Hold {
                 machine: "m".into(),
@@ -1794,8 +1803,10 @@ mod tests {
         let l = st.apply_local(hold(t0 + H - 5 * MIN)).unwrap();
         assert_eq!(l.holds.len(), 1);
         assert_eq!(l.holds[0].until, t0 + H);
-        let l = st.apply_local(hold(t0 + 2 * H)).unwrap();
-        assert_eq!(l.holds[0].until, t0 + 2 * H);
+        // A wrong number half an hour on holds an hour from then.
+        st.set_now(t0 + 30 * MIN);
+        let l = st.apply_local(hold(t0 + H + 30 * MIN)).unwrap();
+        assert_eq!(l.holds[0].until, t0 + H + 30 * MIN);
         // Only a release ends it early.
         let l = st
             .apply_local(LocalEvent::ClearHold {
@@ -1803,6 +1814,38 @@ mod tests {
             })
             .unwrap();
         assert!(l.holds.is_empty());
+    }
+
+    #[test]
+    fn a_hold_recorded_while_the_clock_ran_ahead_ends_an_hour_after_it_is_right() {
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        let year = 365 * 24 * H;
+        // A wrong number while the phone's clock reads a year ahead.
+        st.set_now(t0 + year);
+        let l = st
+            .apply_local(LocalEvent::SetHold {
+                hold: Hold {
+                    machine: "m".into(),
+                    until: t0 + year + H,
+                },
+            })
+            .unwrap();
+        assert_eq!(l.holds[0].until, t0 + year + H);
+        // The clock is put right; the next change of the local records caps the hold at an
+        // hour from now: still held for that hour, not for a year.
+        st.set_now(t0 + 10 * MIN);
+        let l = st
+            .apply_local(LocalEvent::Synced {
+                rev: 1,
+                uploaded: false,
+            })
+            .unwrap();
+        assert_eq!(l.holds[0].until, t0 + 10 * MIN + H);
+        // A clock set back: the hold still lasts its full hour from when it is capped.
+        st.set_now(t0 - 2 * H);
+        let l = st.apply_local(LocalEvent::AgentNoteShown).unwrap();
+        assert_eq!(l.holds[0].until, t0 - H);
     }
 
     #[test]

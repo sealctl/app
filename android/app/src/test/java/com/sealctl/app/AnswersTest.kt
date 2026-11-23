@@ -1,7 +1,11 @@
 package com.sealctl.app
 
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.concurrent.thread
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -23,15 +27,57 @@ class AnswersTest {
     @Test
     fun oneAnswerPerRequestAtATime() {
         val f = InFlight()
-        assertTrue(f.start("r1"))
+        assertEquals("card", f.claim("r1") { "card" })
         // The card button while the notification action's answer is on its way.
-        assertFalse(f.start("r1"))
+        assertNull(f.claim("r1") { "card" })
         assertTrue("r1" in f)
-        assertTrue(f.start("r2"))
+        assertEquals("card", f.claim("r2") { "card" })
+        // A card that is gone is not claimed.
+        assertNull(f.claim("r3") { null })
+        assertFalse("r3" in f)
+        // The timer leaves a card with an answer on its way.
+        assertNull(f.unlessAnswering("r1") { "expired" })
         f.done("r1")
         assertFalse("r1" in f)
+        assertEquals("expired", f.unlessAnswering("r1") { "expired" })
         // A reply that did not go: the next tap answers.
-        assertTrue(f.start("r1"))
+        assertEquals("card", f.claim("r1") { "card" })
+    }
+
+    /** The timer on another thread while an answer claims the card: it waits, then leaves the card. */
+    @Test
+    fun theTimerWaitsForAClaimInProgress() {
+        val f = InFlight()
+        val expired = AtomicBoolean(false)
+        lateinit var timer: Thread
+        val claimed = f.claim("r1") {
+            timer = thread { f.unlessAnswering("r1") { expired.set(true); "expired" } }
+            timer.join(300)
+            // Held off while the answer checks the card and its time.
+            assertTrue(timer.isAlive)
+            "card"
+        }
+        timer.join()
+        assertEquals("card", claimed)
+        assertFalse(expired.get())
+    }
+
+    /** A tap on another thread while the timer expires the card: it waits, then finds it expired. */
+    @Test
+    fun aTapWaitsForAnExpiryInProgress() {
+        val f = InFlight()
+        val cardExpired = AtomicBoolean(false)
+        val claimed = AtomicReference<String?>("unset")
+        lateinit var tap: Thread
+        f.unlessAnswering("r1") {
+            tap = thread { claimed.set(f.claim("r1") { if (cardExpired.get()) null else "card" }) }
+            tap.join(300)
+            assertTrue(tap.isAlive)
+            cardExpired.set(true)
+            "expired"
+        }
+        tap.join()
+        assertNull(claimed.get())
     }
 
     @Test
@@ -47,5 +93,33 @@ class AnswersTest {
         val next = l.started()
         assertFalse(l.current(turn))
         assertTrue(l.current(next))
+
+        val sockets = sockets()
+        val t = sockets.started()
+        sockets.stopped()
+        assertFalse(sockets.open(t))
+        assertFalse(sockets.isOpen)
     }
+
+    /**
+     * Erase (from Settings, or Leave's Done) with the app on screen closes the socket; onboarding
+     * again in the same foreground opens it.
+     */
+    @Test
+    fun afterEraseOnboardingOpensTheSocket() {
+        var created = 0
+        val sockets = sockets { created++ }
+        val t = sockets.started()
+        assertTrue(sockets.open(t))
+        assertTrue(sockets.isOpen)
+        sockets.close()
+        assertFalse(sockets.isOpen)
+        // Onboarding.finish: onForeground() with the turn of now.
+        assertTrue(sockets.open(sockets.now()))
+        assertTrue(sockets.isOpen)
+        assertEquals(2, created)
+    }
+
+    private fun sockets(onCreate: () -> Unit = {}) =
+        ForegroundSocket(create = { onCreate(); Any() }, start = {}, stop = {})
 }

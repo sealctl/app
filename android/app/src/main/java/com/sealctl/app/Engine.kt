@@ -165,9 +165,15 @@ class Engine(
 
     private val assemblers = HashMap<String, PlanAssembler>()
     private val approvalLock = Mutex()
-    private var socket: PhoneSocket? = null
-    private val socketLock = Any()
-    private val lifecycle = Lifecycle()
+    private val sockets = ForegroundSocket(
+        create = {
+            PhoneSocket(relay, scope, onMessage = ::onSocketMessage, onConnected = {
+                scope.launch { catchUp() }
+            }, onState = { ok -> banners.value = banners.value.copy(relayDown = !ok && !banners.value.offline) })
+        },
+        start = { it.start() },
+        stop = { it.stop() },
+    )
     /** Requests whose answer is on its way (SPEC.md 8.5). */
     private val inFlight = InFlight()
     /** Exits from trusted places so far, to tell whether one came while an answer was on its way. */
@@ -267,7 +273,7 @@ class Engine(
 
     /** The app came to the foreground: the number to hand to [onForeground] (SPEC.md 8.3). */
     fun started(): Long {
-        val t = lifecycle.started()
+        val t = sockets.started()
         foreground.value = true
         return t
     }
@@ -276,18 +282,9 @@ class Engine(
      * Opens the socket and catches up, unless the app left the foreground since [turn] began:
      * a stop that came first leaves no socket open in the background.
      */
-    fun onForeground(turn: Long = lifecycle.now()) {
-        if (phase.value != Phase.Ready || phoneKeys() == null) return
-        synchronized(socketLock) {
-            if (!lifecycle.current(turn)) return
-            foreground.value = true
-            if (socket == null) {
-                socket = PhoneSocket(relay, scope, onMessage = ::onSocketMessage, onConnected = {
-                    scope.launch { catchUp() }
-                }, onState = { ok -> banners.value = banners.value.copy(relayDown = !ok && !banners.value.offline) })
-            }
-            socket?.start()
-        }
+    fun onForeground(turn: Long = sockets.now()) {
+        if (phase.value != Phase.Ready || relayDataDeleted || phoneKeys() == null) return
+        if (!sockets.open(turn) { foreground.value = true }) return
         scope.launch {
             // Cancels first: a plan whose delay was cancelled while away hands out no keys.
             refreshDelayed()
@@ -301,14 +298,18 @@ class Engine(
     }
 
     fun onBackground() {
-        lifecycle.stopped()
-        synchronized(socketLock) {
-            // Under the lock: an onForeground already past its check sets it back otherwise.
-            foreground.value = false
-            socket?.stop()
-            socket = null
-        }
+        // Under the socket's lock: an onForeground already past its check sets it back otherwise.
+        sockets.stopped { foreground.value = false }
     }
+
+    /** Erase: the socket closes, and the app, still on screen, keeps its turn (onboarding again opens it). */
+    fun closeSocket() = sockets.close()
+
+    /**
+     * Leave sealctl from step 5 on: the relay data is being deleted or is gone, so foreground
+     * work does not call the relay, which would only be refused or bring the phone back (SPEC.md 11.22).
+     */
+    private val relayDataDeleted: Boolean get() = local.value.leaveStep >= 5u
 
     private fun onSocketMessage(o: JsonObject) {
         when (o.str("type")) {
@@ -327,7 +328,7 @@ class Engine(
      * False when the relay could not be asked.
      */
     suspend fun catchUp(fromPush: Boolean = false): Boolean {
-        if (phoneKeys() == null) return false
+        if (relayDataDeleted || phoneKeys() == null) return false
         // A request seen after this was asked for may be newer than the list.
         val asked = System.currentTimeMillis()
         val list = try {
@@ -340,12 +341,16 @@ class Engine(
         val ids = list.map { it.id }.toSet()
         val now = System.currentTimeMillis()
         val gone = mutableSetOf<String>()
-        waiting.update { current ->
-            current.map {
-                if (it.relay.id !in ids && !it.expired && it.relay.id !in inFlight && (it.deadline < now || it.seenAt < asked)) {
-                    gone += it.relay.id
-                    it.copy(expired = true)
-                } else it
+        // No answer claims a card meanwhile: one on its way decides itself.
+        inFlight.withAnswering { answering ->
+            waiting.update { current ->
+                gone.clear()
+                current.map {
+                    if (it.relay.id !in ids && !it.expired && it.relay.id !in answering && (it.deadline < now || it.seenAt < asked)) {
+                        gone += it.relay.id
+                        it.copy(expired = true)
+                    } else it
+                }
             }
         }
         for (id in gone) Notify.cancel(context, id)
@@ -519,7 +524,7 @@ class Engine(
         val plan = Plans.forRequest(local.value.plans, local.value.delayed, r.machine, hash)?.takeIf { it.planHash == hash } ?: return
         val approval = PlanApproval(plan.machine, plan.planHash, plan.notBefore, plan.keys.map { com.sealctl.core.KeyRef(it.purpose, it.id) })
         val sealed = withRoot { root -> runCatching { sealPlanKeysReply(root, keys, req, approval) }.getOrNull() } ?: return
-        if (post(r, sealed, null, userTapped = false) == Sent.POSTED) {
+        if (post(r, sealed, null, userTapped = false).first == Sent.POSTED) {
             safe { store.answered(req, "in_session", true, false, currentPlace.value, offset()) }
             refreshState()
         }
@@ -538,9 +543,12 @@ class Engine(
      * it, or the answer closes the card when it fails after the deadline.
      */
     private fun expire(id: String) {
-        if (id in inFlight) return
-        val w = waiting.value.firstOrNull { it.relay.id == id && !it.expired } ?: return
-        waiting.update { list -> list.map { if (it.relay.id == id) it.copy(expired = true) else it } }
+        // One step with an answer's claim: of the two, only one gets the card.
+        val w = inFlight.unlessAnswering(id) {
+            val w = waiting.value.firstOrNull { it.relay.id == id && !it.expired } ?: return@unlessAnswering null
+            waiting.update { list -> list.map { if (it.relay.id == id) it.copy(expired = true) else it } }
+            w
+        } ?: return
         Notify.cancel(context, id)
         safe { store.closeRequest(id, "expired") }
         safe { store.answered(w.request, "expired", false, false, null, offset()) }
@@ -587,44 +595,68 @@ class Engine(
     suspend fun answer(id: String, option: ReplyOption): Boolean = answerOutcome(id, option) == Sent.POSTED
 
     private suspend fun answerOutcome(id: String, option: ReplyOption): Sent? {
-        val w = waiting.value.firstOrNull { it.relay.id == id && !it.expired } ?: return null
-        if (w.verdict.asking != Asking.ONE_TAP || option !in w.verdict.options) return null
-        if (System.currentTimeMillis() >= w.deadline) {
-            // The timer ran late (it stops while the phone sleeps): the card stops waiting.
-            expire(id)
-            return Sent.GONE
+        var late = false
+        // The card and its time are checked in the same step as the claim, against the timer.
+        val w = inFlight.claim(id) {
+            val w = waiting.value.firstOrNull { it.relay.id == id && !it.expired }
+            when {
+                w == null || w.verdict.asking != Asking.ONE_TAP || option !in w.verdict.options -> null
+                System.currentTimeMillis() >= w.deadline -> { late = true; null }
+                else -> w
+            }
         }
-        if (!inFlight.start(id)) return null
+        if (w == null) {
+            // The timer ran late (it stops while the phone sleeps): the card stops waiting.
+            if (late) { expire(id); return Sent.GONE }
+            return null
+        }
         // In the engine's scope: a screen that goes away does not stop the answer halfway.
         return scope.async {
-            try {
-                val mark = placeMark()
-                val (decision, outcome) = decisionFor(w, option)
-                val sent = send(w.request, w.relay, decision, outcome, allowed = option != ReplyOption.DENY,
+            val mark = placeMark()
+            val (decision, outcome) = decisionFor(w, option)
+            val sent = answerClaimed(w) {
+                send(w.request, w.relay, decision, outcome, allowed = option != ReplyOption.DENY,
                     remember = decision is Decision.Remember, decidedAt = mark)
-                inFlight.done(id)
-                when (sent) {
-                    Sent.POSTED -> {
-                        waiting.update { list -> list.filter { it.relay.id != id } }
-                        Notify.cancel(context, id)
-                        if (w.verdict.agentFirstUse) applyLocal(LocalEvent.AgentNoteShown)
-                        _toasts.tryEmit(Toast(Texts.afterAnswer(option, w)))
-                    }
-                    Sent.FAILED -> if (System.currentTimeMillis() >= w.deadline) expire(id) else {
-                        _toasts.tryEmit(Toast(Texts.ANSWER_NOT_SENT))
-                        // The timer may have fired while the answer was on its way, and left the card to it.
-                        scheduleExpiry(w)
-                    }
-                    // `404 gone` closed the card already; a reply still retrying at the deadline did not.
-                    Sent.GONE -> expire(id)
-                    // reply() said "Unlock your phone to answer."
-                    Sent.LOCKED -> scheduleExpiry(w)
-                }
-                sent
-            } finally {
-                inFlight.done(id)
             }
+            when (sent) {
+                Sent.POSTED -> {
+                    waiting.update { list -> list.filter { it.relay.id != id } }
+                    Notify.cancel(context, id)
+                    if (w.verdict.agentFirstUse) applyLocal(LocalEvent.AgentNoteShown)
+                    _toasts.tryEmit(Toast(Texts.afterAnswer(option, w)))
+                }
+                Sent.FAILED -> if (waiting.value.any { it.relay.id == id && !it.expired }) {
+                    _toasts.tryEmit(Toast(Texts.ANSWER_NOT_SENT))
+                }
+                // `404 gone` says "stopped waiting"; send() said "Unlock your phone to answer."
+                Sent.GONE, Sent.LOCKED -> {}
+            }
+            sent
         }.await()
+    }
+
+    /**
+     * Answers card [w], already claimed, with [body]. A reply that did not go closes the card
+     * when its time is up, or sets its timer again (it may have fired meanwhile) (SPEC.md 8.5).
+     */
+    private suspend fun answerClaimed(w: Waiting, body: suspend () -> Sent): Sent {
+        val id = w.relay.id
+        val sent = try { body() } finally { inFlight.done(id) }
+        if (sent != Sent.POSTED && waiting.value.any { it.relay.id == id && !it.expired }) {
+            if (sent == Sent.GONE || System.currentTimeMillis() >= w.deadline) expire(id) else scheduleExpiry(w)
+        }
+        return sent
+    }
+
+    /**
+     * Answers the card of [w] with [body], given the card as it is now (a reply that did not go
+     * opened its request again): one answer per request at a time. Null when the card is gone
+     * or an answer to it is on its way.
+     */
+    private suspend fun answerCard(w: Waiting, body: suspend (Waiting) -> Sent): Sent? {
+        val card = inFlight.claim(w.relay.id) { waiting.value.firstOrNull { it.relay.id == w.relay.id && !it.expired } }
+            ?: return null
+        return answerClaimed(card) { body(card) }
     }
 
     /**
@@ -700,61 +732,83 @@ class Engine(
             reopen(r, keys)
             return Sent.FAILED
         }
-        val sent = post(r, sealed, delaySecs, userTapped = true)
-        if (sent != Sent.POSTED) {
-            if (sent == Sent.FAILED) reopen(r, keys)
-            return sent
+        val (sent, unsure) = post(r, sealed, delaySecs, userTapped = true)
+        when {
+            sent == Sent.POSTED -> record(req, r, outcome, allowed, remember, mark)
+            sent == Sent.GONE && unsure && allowed -> {
+                // An earlier try may have reached the relay with only its response lost, so the
+                // machine may have this answer: it is recorded as given (not remembered), so that
+                // leaving the place locks its machine (fail closed). The card stops waiting.
+                safe { store.closeRequest(r.id, "expired") }
+                waiting.update { list -> list.map { if (it.relay.id == r.id) it.copy(expired = true) else it } }
+                Notify.cancel(context, r.id)
+                record(req, r, outcome, allowed, remember = false, mark = mark)
+            }
+            sent == Sent.FAILED -> reopen(r, keys)
         }
+        return sent
+    }
+
+    /** Records an answer the relay took (or may have taken): usage, the day and its place. */
+    private suspend fun record(req: Request, r: RelayRequest, outcome: String, allowed: Boolean, remember: Boolean, mark: PlaceMark) {
         // A place left while this was on its way: the day did not begin there after all.
-        val left = mark.place != null && placeExits.get() != mark.exits
-        val place = if (left) currentPlace.value else mark.place
+        val leftBefore = mark.place != null && placeExits.get() != mark.exits
+        val place = if (leftBefore) currentPlace.value else mark.place
         safe { store.answered(req, outcome, allowed, remember, place, offset()) }?.let { result ->
             if (result.firstOfDay) scope.launch { firstApprovalOfDay() }
         }
         refreshState()
         scheduleUpload(10_000)
-        // The lock that leaving sent may have reached the machine before this answer did.
-        if (left && allowed) machine(r.machine)?.let { lock(it, "place") }
-        return Sent.POSTED
+        // Read once the day is in `local`: an exit from here on finds the day and locks the
+        // machine itself. An exit before it could not, and a lock it sent may have reached the
+        // machine before this answer did (SPEC.md 11.9).
+        if (allowed && mark.place != null && placeExits.get() != mark.exits) machine(r.machine)?.let { lock(it, "place") }
     }
 
     /** The time a reply may still go, on this phone's clock. */
     private fun deadline(r: RelayRequest): Long = waiting.value.firstOrNull { it.relay.id == r.id }?.deadline
         ?: Answers.deadline(System.currentTimeMillis(), r.created, r.expires)
 
-    /** Posts a reply with the retries of SPEC.md 8.5, until the request's deadline. */
-    private suspend fun post(r: RelayRequest, sealed: String, delaySecs: Int?, userTapped: Boolean): Sent {
+    /**
+     * Posts a reply with the retries of SPEC.md 8.5, until the request's deadline. Also tells
+     * whether a try before the last may have reached the relay (no answer, or a `5xx`): a
+     * later `404 gone` may then be the relay saying it already has it.
+     */
+    private suspend fun post(r: RelayRequest, sealed: String, delaySecs: Int?, userTapped: Boolean): Pair<Sent, Boolean> {
         val backoff = listOf(1_000L, 2_000L, 4_000L)
         var attempt = 0
+        var unsure = false
         val until = deadline(r)
         while (System.currentTimeMillis() < until) {
             try {
                 relay.reply(r.id, sealed, delaySecs, userTapped)
                 relayOk()
-                return Sent.POSTED
+                return Sent.POSTED to unsure
             } catch (e: RelayException) {
                 if (e.code == "gone") {
                     safe { store.closeRequest(r.id, "expired") }
                     waiting.update { list -> list.map { if (it.relay.id == r.id) it.copy(expired = true) else it } }
                     Notify.cancel(context, r.id)
-                    return Sent.GONE
+                    return Sent.GONE to unsure
                 }
-                if (e is RateLimitedException || e.status in 400..499) { relayFailed(e); return Sent.FAILED }
+                if (e is RateLimitedException || e.status in 400..499) { relayFailed(e); return Sent.FAILED to unsure }
                 relayFailed(e)
+                unsure = true
             } catch (e: IOException) {
                 relayFailed(e)
+                unsure = true
             }
             delay(backoff.getOrElse(attempt) { 10_000L })
             attempt++
         }
-        return Sent.GONE
+        return Sent.GONE to unsure
     }
 
     // ---------- levels 2 and 3 ----------
 
     /** A wrong number: refuse with `no_match` and hold the machine for an hour. */
     suspend fun wrongNumber(w: Waiting) {
-        reply(w.request, w.relay, Decision.Refuse(RefuseReason.NO_MATCH), "denied", allowed = false)
+        answerCard(w) { c -> send(c.request, c.relay, Decision.Refuse(RefuseReason.NO_MATCH), "denied", allowed = false) }
         applyLocal(LocalEvent.SetHold(Hold(w.machine.key, (System.currentTimeMillis() + 3_600_000).toULong())))
         waiting.update { list -> list.filter { it.relay.id != w.relay.id } }
     }
@@ -763,14 +817,14 @@ class Engine(
 
     /** Denies a sensitive request (Deny, "I don't see a number"). */
     suspend fun deny(w: Waiting) {
-        reply(w.request, w.relay, Decision.Deny, "denied", allowed = false)
+        answerCard(w) { c -> send(c.request, c.relay, Decision.Deny, "denied", allowed = false) }
         waiting.update { list -> list.filter { it.relay.id != w.relay.id } }
         Notify.cancel(context, w.relay.id)
     }
 
     /** Refuses a sensitive request for a reason (no biometrics, unsupported). */
     suspend fun refuse(w: Waiting, err: RefuseReason) {
-        reply(w.request, w.relay, Decision.Refuse(err), "denied", allowed = false)
+        answerCard(w) { c -> send(c.request, c.relay, Decision.Refuse(err), "denied", allowed = false) }
         waiting.update { list -> list.filter { it.relay.id != w.relay.id } }
         Notify.cancel(context, w.relay.id)
     }
@@ -789,8 +843,10 @@ class Engine(
             RequestKind.UNSEAL -> {
                 val delay = delaySecs(w.verdict.delaySecs.toInt())
                 val notBefore = System.currentTimeMillis() + delay * 1000L
-                val ok = reply(w.request, w.relay, Decision.Plan(place, notBefore.toULong()), "confirmed", allowed = true,
-                    delaySecs = if (delay > 0) delay else null)
+                val ok = answerCard(w) { c ->
+                    send(c.request, c.relay, Decision.Plan(place, notBefore.toULong()), "confirmed", allowed = true,
+                        delaySecs = if (delay > 0) delay else null)
+                } == Sent.POSTED
                 if (ok) {
                     val plan = w.plan ?: w.request.plan()
                     applyLocal(LocalEvent.PutPlan(PlanApprovalRecord(
@@ -814,7 +870,7 @@ class Engine(
                 ok
             }
             RequestKind.KEYS -> {
-                val ok = reply(w.request, w.relay, Decision.Once(place), "confirmed", allowed = true)
+                val ok = answerCard(w) { c -> send(c.request, c.relay, Decision.Once(place), "confirmed", allowed = true) } == Sent.POSTED
                 if (ok) { waiting.update { list -> list.filter { it.relay.id != w.relay.id } }; Notify.cancel(context, w.relay.id) }
                 ok
             }
@@ -1111,7 +1167,7 @@ class Engine(
      * that would put this phone back on the relay (SPEC.md 11.22).
      */
     suspend fun registerPush(token: String? = null) {
-        if (!BuildConfig.HAS_FIREBASE || local.value.leaveStep >= 5u || phoneKeys() == null) return
+        if (!BuildConfig.HAS_FIREBASE || relayDataDeleted || phoneKeys() == null) return
         val t = token ?: runCatching { Push.token() }.getOrNull() ?: return
         val id = deviceId()
         try {

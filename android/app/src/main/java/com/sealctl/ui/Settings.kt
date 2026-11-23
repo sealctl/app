@@ -651,7 +651,7 @@ private suspend fun eraseNow(alsoBackup: Boolean) {
     val engine = Graph.engine
     runCatching { engine.relay.deletePush(engine.deviceId()) }
     if (alsoBackup) Graph.blockStore.delete()
-    engine.onBackground()
+    engine.closeSocket()
     engine.vault.erase()
     engine.forgetPhoneKeys()
     com.sealctl.app.safe { engine.store.erase() }

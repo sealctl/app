@@ -12,7 +12,7 @@ import Vault
 /// `open`, secrets with and without own approval, an agent's first use, `unseal` of one secret
 /// (level 2) and `unseal --all` (level 3) with the number, the delay, a cancel and the report.
 @MainActor
-@Suite(.enabled(if: testRelay != nil && cliBin != nil), .serialized)
+@Suite(.enabled(if: testRelay != nil && cliBin != nil), .serialized, .timeLimit(.minutes(7)))
 struct CLIFlowTests {
     let name = "pairtest@ci.example.com"
 
@@ -21,7 +21,7 @@ struct CLIFlowTests {
                _ choose: (Waiting) async throws -> Void) async throws -> (Int32, String) {
         let end = Date().addingTimeInterval(timeout)
         var seen: Set<String> = []
-        while run.process.isRunning && Date() < end {
+        while run.isRunning && Date() < end {
             await engine.catchUp()
             for w in engine.waiting where !w.expired && !seen.contains(w.id) {
                 seen.insert(w.id)
@@ -29,7 +29,7 @@ struct CLIFlowTests {
             }
             try await Task.sleep(for: .milliseconds(200))
         }
-        if run.process.isRunning { run.process.terminate() }
+        if run.isRunning { run.process.terminate() }
         return run.wait()
     }
 

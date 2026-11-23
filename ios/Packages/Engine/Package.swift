@@ -20,6 +20,6 @@ let package = Package(
     targets: [
         .target(name: "EngineKit", dependencies: ["SealCore", "Vault", "Relay"]),
         .target(name: "Engine", dependencies: ["EngineKit", "SealCore", "Vault", "Relay", "Places"]),
-        .testTarget(name: "EngineTests", dependencies: ["Engine", "EngineKit", "SealCore", "Vault", "Relay"]),
+        .testTarget(name: "EngineTests", dependencies: ["Engine", "EngineKit", "SealCore", "Vault", "Relay", "Places"]),
     ]
 )

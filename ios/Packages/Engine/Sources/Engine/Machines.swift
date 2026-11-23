@@ -193,6 +193,8 @@ extension AppEngine {
         if let c = currentPlace, ids.contains(c) { currentPlace = nil }
         writeSnapshot()
         guard entered == false else { return }
+        // An answer made at the place and still on its way locks its machine once it is posted.
+        placeExits += 1
         for id in ids {
             guard let place = state.places.first(where: { $0.id == id }) else { continue }
             var locked: [Machine] = []

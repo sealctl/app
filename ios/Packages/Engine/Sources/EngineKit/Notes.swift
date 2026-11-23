@@ -52,7 +52,7 @@ public enum Notes {
         content.body = t.body
         content.categoryIdentifier = category(w.verdict)
         content.threadIdentifier = w.machine.key
-        content.userInfo = ["type": "request", "id": w.relay.id, "expires": w.relay.expires, "machine": w.machine.key]
+        content.userInfo = ["type": "request", "id": w.relay.id, "expires": w.deadline, "machine": w.machine.key]
         content.interruptionLevel = .timeSensitive
         content.relevanceScore = 1
         content.sound = .default

@@ -662,6 +662,15 @@ public protocol StoreProtocol: AnyObject, Sendable {
     func answered(request: Request, outcome: String, allowed: Bool, remember: Bool, placeId: String?, utcOffsetSecs: Int32) throws  -> AnsweredResult
     
     /**
+     * [`Store::answered`] for an answer given earlier, at `answered_at` (Unix ms): what the
+     * iOS extension answered by itself, merged from its inbox when the app next runs, which
+     * can be hours later. The use counts at the time it was given: the usage entry, its
+     * month, the answer's last use and the inventory. A time after this phone's clock counts
+     * as now.
+     */
+    func answeredAt(request: Request, outcome: String, allowed: Bool, placeId: String?, utcOffsetSecs: Int32, answeredAt: UInt64) throws  -> AnsweredResult
+    
+    /**
      * Applies a change to the relay state and returns the new state.
      */
     func apply(event: Event) throws  -> State
@@ -676,6 +685,14 @@ public protocol StoreProtocol: AnyObject, Sendable {
      * the phone's UTC offset now, for the month the uses count in.
      */
     func applyReport(request: Request, utcOffsetSecs: Int32) throws  -> ReportResult
+    
+    /**
+     * [`Store::apply_report`] for a report the iOS extension acknowledged earlier, at
+     * `received_at` (Unix ms), merged from its inbox later: the status counts as reported
+     * then (an open session's time left runs from then), and its uses in that month. A time
+     * after this phone's clock counts as now.
+     */
+    func applyReportAt(request: Request, utcOffsetSecs: Int32, receivedAt: UInt64) throws  -> ReportResult
     
     /**
      * Records a machine status (machine channel or `report`). A `seq` already seen is ignored
@@ -832,6 +849,28 @@ open func answered(request: Request, outcome: String, allowed: Bool, remember: B
 }
     
     /**
+     * [`Store::answered`] for an answer given earlier, at `answered_at` (Unix ms): what the
+     * iOS extension answered by itself, merged from its inbox when the app next runs, which
+     * can be hours later. The use counts at the time it was given: the usage entry, its
+     * month, the answer's last use and the inventory. A time after this phone's clock counts
+     * as now.
+     */
+open func answeredAt(request: Request, outcome: String, allowed: Bool, placeId: String?, utcOffsetSecs: Int32, answeredAt: UInt64)throws  -> AnsweredResult  {
+    return try  FfiConverterTypeAnsweredResult_lift(try rustCallWithError(FfiConverterTypeAppError_lift) {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_method_store_answered_at(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeRequest_lower(request),
+        FfiConverterString.lower(outcome),
+        FfiConverterBool.lower(allowed),
+        FfiConverterOptionString.lower(placeId),
+        FfiConverterInt32.lower(utcOffsetSecs),
+        FfiConverterUInt64.lower(answeredAt),uniffiCallStatus
+    )
+})
+}
+    
+    /**
      * Applies a change to the relay state and returns the new state.
      */
 open func apply(event: Event)throws  -> State  {
@@ -868,6 +907,24 @@ open func applyReport(request: Request, utcOffsetSecs: Int32)throws  -> ReportRe
             self.uniffiCloneHandle(),
         FfiConverterTypeRequest_lower(request),
         FfiConverterInt32.lower(utcOffsetSecs),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * [`Store::apply_report`] for a report the iOS extension acknowledged earlier, at
+     * `received_at` (Unix ms), merged from its inbox later: the status counts as reported
+     * then (an open session's time left runs from then), and its uses in that month. A time
+     * after this phone's clock counts as now.
+     */
+open func applyReportAt(request: Request, utcOffsetSecs: Int32, receivedAt: UInt64)throws  -> ReportResult  {
+    return try  FfiConverterTypeReportResult_lift(try rustCallWithError(FfiConverterTypeAppError_lift) {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_method_store_apply_report_at(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeRequest_lower(request),
+        FfiConverterInt32.lower(utcOffsetSecs),
+        FfiConverterUInt64.lower(receivedAt),uniffiCallStatus
     )
 })
 }
@@ -6749,6 +6806,26 @@ public func machineDisplayName(machine: Machine) -> String  {
     )
 })
 }
+/**
+ * Opens a request that was already answered, against the time it was answered
+ * (`answered_at`, Unix ms) instead of the clock now: for recording what the iOS extension
+ * answered by itself (its inbox), which the app may merge hours later, after the signed time
+ * has left the 10-minute window. Everything else is checked as `open_request` checks it. Only
+ * for [`Store::answered_at`] and [`Store::apply_report_at`]; a request to answer is opened
+ * with `open_request`.
+ */
+public func openAnsweredRequest(keys: PhoneKeys, relayMachineKey: String, id: String, sealed: String, answeredAt: UInt64)throws  -> Request  {
+    return try  FfiConverterTypeRequest_lift(try rustCallWithError(FfiConverterTypeCoreError_lift) {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_func_open_answered_request(
+        FfiConverterTypePhoneKeys_lower(keys),
+        FfiConverterString.lower(relayMachineKey),
+        FfiConverterString.lower(id),
+        FfiConverterString.lower(sealed),
+        FfiConverterUInt64.lower(answeredAt),uniffiCallStatus
+    )
+})
+}
 
 private enum InitializationResult {
     case ok
@@ -6825,7 +6902,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sealctl_app_checksum_func_machine_display_name() != 42303) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sealctl_app_checksum_func_open_answered_request() != 53363) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sealctl_app_checksum_method_store_answered() != 64176) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sealctl_app_checksum_method_store_answered_at() != 28273) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_method_store_apply() != 40770) {
@@ -6835,6 +6918,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_method_store_apply_report() != 59875) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sealctl_app_checksum_method_store_apply_report_at() != 9905) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_method_store_apply_status() != 19917) {

@@ -256,7 +256,7 @@ The local database is one SQLite file:
 
 No secret is ever stored in the database. Places sit there protected by the OS file encryption.
 
-**iOS extension snapshot.** The app writes `nse-snapshot.bin` to the app group container after every change, atomically (write and rename). It holds what the NSE needs: machines (key, display name, tag), answers, trusted places with the current inside or outside state, days, the active-device flag. The NSE writes its own results as small files in `inbox/` (one per answered request); the app merges and deletes them at launch and on every foreground. Neither process holds a file lock while suspended.
+**iOS extension snapshot.** The app writes `nse-snapshot.bin` to the app group container after every change, atomically (write and rename). It holds what the NSE needs: machines (key, display name, tag), answers, trusted places with the current inside or outside state, days, the active-device flag. The NSE writes its own results as small files in `inbox/` (one per answered request, with the time it answered); the app merges and deletes them at launch and on every foreground. The app may run hours after the extension answered, when the request's signed time is long outside its 10-minute window, so it opens each item against the time it was answered (`open_answered_request`) and records it at that time (`answered_at`, `apply_report_at`): the use renews the answer it used, and the usage entry, its month, the inventory's last use and a report's session status count from then, not from the merge. Neither process holds a file lock while suspended.
 
 ### 6.5 Sync with the relay
 
@@ -1036,7 +1036,7 @@ Agent display names: `claude` "Claude Code", `codex` "Codex", `gemini` "Gemini C
 
 - Swipe or menu: [Remove]. Removing takes effect at the agent's next use, which asks again.
 - An answer unused for 80 days shows "Unused for 80 days. Removed in 10 days."
-- An answer unused for 90 days answers nothing from that moment, whether or not the daily prune has removed it yet, and whatever copy a merge brought back. A use allowed once does not renew it; "Allow for this session" (which remembers) does.
+- An answer unused for 90 days answers nothing from that moment, whether or not the daily prune has removed it yet, and whatever copy a merge brought back. A use allowed once does not renew it; "Allow for this session" (which remembers) does, and so does every use it answered by itself, the iOS extension's too (recorded at the time it was answered, 6.4).
 - Footer: "Agents ask once per key and repository. You at the keyboard are never asked inside an Open session. A file in a repository never grants anything."
 - Empty: "No answers yet. When you tap Allow on an agent's first use of a key, it's remembered here."
 
@@ -1055,7 +1055,7 @@ When the first `agent` card ever appears, the card shows one extra line under th
 > 4 requests declined
 > No key was written to disk.
 
-"Keys used" counts uses from replies and from machine reports. "Requests declined" counts Deny answers. Both count in the month by the phone's local time when the answer was given or the report reached the phone (the app passes its UTC offset to `answered`, `apply_status` and `apply_report`), so a use near midnight on the last day of a month counts in the same month whichever way it arrived. The third line is a fixed statement of how sealctl works. No other figures, no price, no comparison.
+"Keys used" counts uses from replies and from machine reports. "Requests declined" counts Deny answers. Both count in the month by the phone's local time when the answer was given or the report reached the phone (the app passes its UTC offset to `answered`, `apply_status` and `apply_report`; an answer the iOS extension gave counts in the month it was given, 6.4), so a use near midnight on the last day of a month counts in the same month whichever way it arrived. The third line is a fixed statement of how sealctl works. No other figures, no price, no comparison.
 
 **Log** grouped by day, newest first:
 

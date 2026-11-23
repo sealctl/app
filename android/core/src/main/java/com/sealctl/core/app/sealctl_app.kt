@@ -32,23 +32,29 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.ConcurrentHashMap
 import android.os.Build
 import androidx.annotation.RequiresApi
+import com.sealctl.core.CoreException
 import com.sealctl.core.Decision
+import com.sealctl.core.FfiConverterTypeCoreError
 import com.sealctl.core.FfiConverterTypeDecision
 import com.sealctl.core.FfiConverterTypeMachineStatus
+import com.sealctl.core.FfiConverterTypePhoneKeys
 import com.sealctl.core.FfiConverterTypePlace
 import com.sealctl.core.FfiConverterTypeRefuseReason
 import com.sealctl.core.FfiConverterTypeRequest
 import com.sealctl.core.FfiConverterTypeRequestKind
 import com.sealctl.core.FfiConverterTypeWords
 import com.sealctl.core.MachineStatus
+import com.sealctl.core.PhoneKeys
 import com.sealctl.core.Place
 import com.sealctl.core.RefuseReason
 import com.sealctl.core.Request
 import com.sealctl.core.RequestKind
 import com.sealctl.core.Words
 import java.util.concurrent.atomic.AtomicBoolean
+import com.sealctl.core.RustBuffer as RustBufferCoreError
 import com.sealctl.core.RustBuffer as RustBufferDecision
 import com.sealctl.core.RustBuffer as RustBufferMachineStatus
+import com.sealctl.core.RustBuffer as RustBufferPhoneKeys
 import com.sealctl.core.RustBuffer as RustBufferPlace
 import com.sealctl.core.RustBuffer as RustBufferRefuseReason
 import com.sealctl.core.RustBuffer as RustBufferRequest
@@ -738,13 +744,19 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_sealctl_app_checksum_func_machine_display_name(
     ): Int
+    external fun uniffi_sealctl_app_checksum_func_open_answered_request(
+    ): Int
     external fun uniffi_sealctl_app_checksum_method_store_answered(
+    ): Int
+    external fun uniffi_sealctl_app_checksum_method_store_answered_at(
     ): Int
     external fun uniffi_sealctl_app_checksum_method_store_apply(
     ): Int
     external fun uniffi_sealctl_app_checksum_method_store_apply_local(
     ): Int
     external fun uniffi_sealctl_app_checksum_method_store_apply_report(
+    ): Int
+    external fun uniffi_sealctl_app_checksum_method_store_apply_report_at(
     ): Int
     external fun uniffi_sealctl_app_checksum_method_store_apply_status(
     ): Int
@@ -801,11 +813,15 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_sealctl_app_fn_method_store_answered(`ptr`: Long,`request`: Long,`outcome`: RustBuffer.ByValue,`allowed`: Byte,`remember`: Byte,`placeId`: RustBuffer.ByValue,`utcOffsetSecs`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_sealctl_app_fn_method_store_answered_at(`ptr`: Long,`request`: Long,`outcome`: RustBuffer.ByValue,`allowed`: Byte,`placeId`: RustBuffer.ByValue,`utcOffsetSecs`: Int,`answeredAt`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_method_store_apply(`ptr`: Long,`event`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_method_store_apply_local(`ptr`: Long,`event`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_method_store_apply_report(`ptr`: Long,`request`: Long,`utcOffsetSecs`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_sealctl_app_fn_method_store_apply_report_at(`ptr`: Long,`request`: Long,`utcOffsetSecs`: Int,`receivedAt`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_method_store_apply_status(`ptr`: Long,`machine`: RustBuffer.ByValue,`status`: RustBufferMachineStatus.ByValue,`utcOffsetSecs`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -871,6 +887,8 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_sealctl_app_fn_func_machine_display_name(`machine`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_sealctl_app_fn_func_open_answered_request(`keys`: Long,`relayMachineKey`: RustBuffer.ByValue,`id`: RustBuffer.ByValue,`sealed`: RustBuffer.ByValue,`answeredAt`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Long
     external fun ffi_sealctl_app_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun ffi_sealctl_app_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1050,7 +1068,13 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_sealctl_app_checksum_func_machine_display_name() and 0xFFFF) != 42303) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_sealctl_app_checksum_func_open_answered_request() and 0xFFFF) != 53363) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_sealctl_app_checksum_method_store_answered() and 0xFFFF) != 64176) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_sealctl_app_checksum_method_store_answered_at() and 0xFFFF) != 28273) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_method_store_apply() and 0xFFFF) != 40770) {
@@ -1060,6 +1084,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_method_store_apply_report() and 0xFFFF) != 59875) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_sealctl_app_checksum_method_store_apply_report_at() and 0xFFFF) != 9905) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_method_store_apply_status() and 0xFFFF) != 19917) {
@@ -1608,6 +1635,15 @@ public interface StoreInterface {
     fun `answered`(`request`: Request, `outcome`: kotlin.String, `allowed`: kotlin.Boolean, `remember`: kotlin.Boolean, `placeId`: kotlin.String?, `utcOffsetSecs`: kotlin.Int): AnsweredResult
     
     /**
+     * [`Store::answered`] for an answer given earlier, at `answered_at` (Unix ms): what the
+     * iOS extension answered by itself, merged from its inbox when the app next runs, which
+     * can be hours later. The use counts at the time it was given: the usage entry, its
+     * month, the answer's last use and the inventory. A time after this phone's clock counts
+     * as now.
+     */
+    fun `answeredAt`(`request`: Request, `outcome`: kotlin.String, `allowed`: kotlin.Boolean, `placeId`: kotlin.String?, `utcOffsetSecs`: kotlin.Int, `answeredAt`: kotlin.ULong): AnsweredResult
+    
+    /**
      * Applies a change to the relay state and returns the new state.
      */
     fun `apply`(`event`: Event): State
@@ -1622,6 +1658,14 @@ public interface StoreInterface {
      * the phone's UTC offset now, for the month the uses count in.
      */
     fun `applyReport`(`request`: Request, `utcOffsetSecs`: kotlin.Int): ReportResult
+    
+    /**
+     * [`Store::apply_report`] for a report the iOS extension acknowledged earlier, at
+     * `received_at` (Unix ms), merged from its inbox later: the status counts as reported
+     * then (an open session's time left runs from then), and its uses in that month. A time
+     * after this phone's clock counts as now.
+     */
+    fun `applyReportAt`(`request`: Request, `utcOffsetSecs`: kotlin.Int, `receivedAt`: kotlin.ULong): ReportResult
     
     /**
      * Records a machine status (machine channel or `report`). A `seq` already seen is ignored
@@ -1822,6 +1866,33 @@ open class Store: Disposable, AutoCloseable, StoreInterface
 
     
     /**
+     * [`Store::answered`] for an answer given earlier, at `answered_at` (Unix ms): what the
+     * iOS extension answered by itself, merged from its inbox when the app next runs, which
+     * can be hours later. The use counts at the time it was given: the usage entry, its
+     * month, the answer's last use and the inventory. A time after this phone's clock counts
+     * as now.
+     */
+    @Throws(AppException::class)override fun `answeredAt`(`request`: Request, `outcome`: kotlin.String, `allowed`: kotlin.Boolean, `placeId`: kotlin.String?, `utcOffsetSecs`: kotlin.Int, `answeredAt`: kotlin.ULong): AnsweredResult {
+            return FfiConverterTypeAnsweredResult.lift(
+    callWithHandle {
+    uniffiRustCallWithError(AppException) { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_method_store_answered_at(
+        it,
+        
+        FfiConverterTypeRequest.lower(`request`),
+        FfiConverterString.lower(`outcome`),
+        FfiConverterBoolean.lower(`allowed`),
+        FfiConverterOptionalString.lower(`placeId`),
+        FfiConverterInt.lower(`utcOffsetSecs`),
+        FfiConverterULong.lower(`answeredAt`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Applies a change to the relay state and returns the new state.
      */
     @Throws(AppException::class)override fun `apply`(`event`: Event): State {
@@ -1870,6 +1941,29 @@ open class Store: Disposable, AutoCloseable, StoreInterface
         
         FfiConverterTypeRequest.lower(`request`),
         FfiConverterInt.lower(`utcOffsetSecs`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * [`Store::apply_report`] for a report the iOS extension acknowledged earlier, at
+     * `received_at` (Unix ms), merged from its inbox later: the status counts as reported
+     * then (an open session's time left runs from then), and its uses in that month. A time
+     * after this phone's clock counts as now.
+     */
+    @Throws(AppException::class)override fun `applyReportAt`(`request`: Request, `utcOffsetSecs`: kotlin.Int, `receivedAt`: kotlin.ULong): ReportResult {
+            return FfiConverterTypeReportResult.lift(
+    callWithHandle {
+    uniffiRustCallWithError(AppException) { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_method_store_apply_report_at(
+        it,
+        
+        FfiConverterTypeRequest.lower(`request`),
+        FfiConverterInt.lower(`utcOffsetSecs`),
+        FfiConverterULong.lower(`receivedAt`),_status)
 }
     }
     )
@@ -6982,6 +7076,21 @@ public object FfiConverterSequenceTypeReplyOption: FfiConverterRustBuffer<List<R
 
 
 
+object CoreExceptionExternalErrorHandler : UniffiRustCallStatusErrorHandler<CoreException> {
+    override fun lift(error_buf: RustBuffer.ByValue): CoreException =
+        com.sealctl.core.CoreException.ErrorHandler.lift(
+            RustBufferCoreError.ByValue().apply {
+                capacity = error_buf.capacity
+                len = error_buf.len
+                data = error_buf.data
+            }
+        )
+}
+
+
+
+
+
 
 
 
@@ -7288,6 +7397,30 @@ public object FfiConverterSequenceTypeReplyOption: FfiConverterRustBuffer<List<R
     
         
         FfiConverterTypeMachine.lower(`machine`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Opens a request that was already answered, against the time it was answered
+         * (`answered_at`, Unix ms) instead of the clock now: for recording what the iOS extension
+         * answered by itself (its inbox), which the app may merge hours later, after the signed time
+         * has left the 10-minute window. Everything else is checked as `open_request` checks it. Only
+         * for [`Store::answered_at`] and [`Store::apply_report_at`]; a request to answer is opened
+         * with `open_request`.
+         */
+    @Throws(CoreException::class) fun `openAnsweredRequest`(`keys`: PhoneKeys, `relayMachineKey`: kotlin.String, `id`: kotlin.String, `sealed`: kotlin.String, `answeredAt`: kotlin.ULong): Request {
+            return FfiConverterTypeRequest.lift(
+    uniffiRustCallWithError(CoreExceptionExternalErrorHandler) { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_func_open_answered_request(
+    
+        
+        FfiConverterTypePhoneKeys.lower(`keys`),
+        FfiConverterString.lower(`relayMachineKey`),
+        FfiConverterString.lower(`id`),
+        FfiConverterString.lower(`sealed`),
+        FfiConverterULong.lower(`answeredAt`),_status)
 }
     )
     }

@@ -242,6 +242,302 @@ impl Store {
     fn set_now(&self, t: u64) {
         self.fake_now.store(t, std::sync::atomic::Ordering::SeqCst);
     }
+
+    /// [`Store::answered`] given at `at`, recorded `now`.
+    #[allow(clippy::too_many_arguments)]
+    fn record_answer(
+        &self,
+        request: &Request,
+        outcome: &str,
+        allowed: bool,
+        remember: bool,
+        place_id: Option<String>,
+        utc_offset_secs: i32,
+        at: u64,
+        now: u64,
+    ) -> Result<AnsweredResult> {
+        let c = lock(&self.conn)?;
+        let mut s: State = read_doc(&c, "state")?;
+        let mut l: LocalState = read_doc(&c, "local")?;
+        let machine = request.machine();
+        let ctx = request.ctx().unwrap_or_default();
+        let fp = s
+            .words
+            .as_ref()
+            .map(|w| w.fingerprint.clone())
+            .unwrap_or_default();
+
+        if let Some(p) = l.pending.iter_mut().find(|p| p.id == request.id()) {
+            p.outcome = if outcome == "expired" {
+                "expired"
+            } else {
+                "answered"
+            }
+            .into();
+            p.seen = p.seen.max(now);
+        }
+        let entry = UsageEntry {
+            time: at,
+            machine: machine.clone(),
+            key: subject_label(request),
+            agent: ctx.agent.clone(),
+            repo: ctx.repo.as_ref().map(|r| r.name.clone()),
+            command: Some(ctx.command.clone()).filter(|c| !c.is_empty()),
+            outcome: outcome.to_owned(),
+        };
+        insert_usage(&c, &entry)?;
+        let month = local_month(at, utc_offset_secs);
+        let declined = u64::from(outcome == "denied");
+        let keys = if allowed {
+            request.items().len().max(1) as u64
+        } else {
+            0
+        };
+        add_to_summary(&mut s, month, &machine, keys, declined, now);
+
+        if allowed {
+            for u in request.uses() {
+                for name in &u.names {
+                    let existing = s.answers.iter_mut().find(|a| {
+                        !a.deleted
+                            && a.agent == u.agent
+                            && a.repo_id == u.repository
+                            && &a.key_name == name
+                    });
+                    match existing {
+                        // An answer past its 90 days (not pruned yet) is renewed only when this
+                        // answer remembers; a use allowed once leaves it to expire.
+                        Some(a) if remember || crate::prune::answer_live(a, at) => {
+                            a.last_used = a.last_used.max(at);
+                            a.updated = bump(a.updated, now);
+                        }
+                        Some(_) => {}
+                        None if remember => {
+                            let updated = bump_over(
+                                s.answers
+                                    .iter()
+                                    .filter(|a| {
+                                        a.agent == u.agent
+                                            && a.repo_id == u.repository
+                                            && &a.key_name == name
+                                    })
+                                    .map(|a| a.updated),
+                                0,
+                                now,
+                            );
+                            s.answers.push(RememberedAnswer {
+                                agent: u.agent.clone(),
+                                key_name: name.clone(),
+                                repo_id: u.repository.clone(),
+                                repo_name: ctx
+                                    .repo
+                                    .as_ref()
+                                    .filter(|r| r.id == u.repository)
+                                    .map(|r| r.name.clone())
+                                    .unwrap_or_else(|| {
+                                        u.repository.rsplit('/').next().unwrap_or("").to_owned()
+                                    }),
+                                created: at,
+                                last_used: at,
+                                updated,
+                                deleted: false,
+                            })
+                        }
+                        None => {}
+                    }
+                }
+            }
+            for item in request.items() {
+                upsert_inventory(&mut s, item_inventory(&item, &machine, at, &fp), at, now);
+            }
+        }
+
+        let mut first_of_day = false;
+        // Only a person's answer begins a day. An answer given by itself (`automatic`, or a
+        // plan's later part) needed a day that was active when it was decided; recorded after
+        // that day ended (the reply took a while to post, or the extension's answer is merged
+        // later), it must not begin a new one without a tap.
+        if allowed && request.kind() == RequestKind::Open && answer_begins_day(outcome) {
+            let active = l
+                .days
+                .iter()
+                .find(|d| d.machine == machine)
+                .is_some_and(|d| crate::decide::day_active(d, at, utc_offset_secs));
+            if !active {
+                first_of_day = true;
+                l.days.retain(|d| d.machine != machine);
+                l.days.push(DayRecord {
+                    machine: machine.clone(),
+                    first_approval: at,
+                    place_id,
+                    ends: day_end(at, utc_offset_secs),
+                });
+            }
+        }
+        l.dirty = true;
+        let s = normalise(s);
+        write_doc(&c, "state", &s)?;
+        write_doc(&c, "local", &l)?;
+        Ok(AnsweredResult { first_of_day })
+    }
+
+    /// [`Store::apply_report`] received at `at`, recorded `now`.
+    fn record_report(
+        &self,
+        request: &Request,
+        utc_offset_secs: i32,
+        at: u64,
+        now: u64,
+    ) -> Result<ReportResult> {
+        let machine = request.machine();
+        let mut result = match request.status() {
+            Some(st) => self.record_status(machine.clone(), st, utc_offset_secs, at, now)?,
+            None => ReportResult {
+                ack: None,
+                handback: None,
+            },
+        };
+        if let Some(hb) = request.handback() {
+            let c = lock(&self.conn)?;
+            let mut s: State = read_doc(&c, "state")?;
+            let name = s.machine(&machine).map(display_name).unwrap_or_default();
+            let report = HandbackReport {
+                id: format!("{}:{}", machine, hb.hash),
+                machine: machine.clone(),
+                machine_name: name,
+                what: "unseal".into(),
+                plan_hash: hb.hash.clone(),
+                items: hb
+                    .items
+                    .iter()
+                    .map(|i| ReportItem {
+                        kind: i.kind.clone(),
+                        name: i.name.clone(),
+                        to: i.to.clone(),
+                        state: i.state.clone(),
+                    })
+                    .collect(),
+                run: hb.run.clone(),
+                time: at,
+                updated: now,
+            };
+            let report = HandbackReport {
+                updated: bump_over(
+                    s.reports
+                        .iter()
+                        .filter(|r| r.id == report.id)
+                        .map(|r| r.updated),
+                    0,
+                    now,
+                ),
+                ..report
+            };
+            s.reports.retain(|r| r.id != report.id);
+            s.reports.push(report.clone());
+            let mut l: LocalState = read_doc(&c, "local")?;
+            // A cancelled approval stays cancelled, whatever report arrives after the cancel.
+            for p in l.plans.iter_mut().filter(|p| {
+                p.machine == machine && p.plan_hash == hb.hash && p.state != "cancelled"
+            }) {
+                p.state = "done".into();
+            }
+            l.dirty = true;
+            write_doc(&c, "state", &normalise(s))?;
+            write_doc(&c, "local", &l)?;
+            result.handback = Some(report);
+        }
+        Ok(result)
+    }
+
+    /// [`Store::apply_status`] received at `at`, recorded `now`.
+    fn record_status(
+        &self,
+        machine: String,
+        status: MachineStatus,
+        utc_offset_secs: i32,
+        at: u64,
+        now: u64,
+    ) -> Result<ReportResult> {
+        let c = lock(&self.conn)?;
+        let mut s: State = read_doc(&c, "state")?;
+        let fp = s
+            .words
+            .as_ref()
+            .map(|w| w.fingerprint.clone())
+            .unwrap_or_default();
+        let Some(m) = s
+            .machines
+            .iter_mut()
+            .find(|m| m.key == machine && !m.deleted)
+        else {
+            return Err(AppError::NotFound);
+        };
+        let seen = m.last_status.as_ref().map_or(0, |st| st.seq);
+        if status.seq != 0 && status.seq <= seen {
+            return Ok(ReportResult {
+                ack: Some(status.seq),
+                handback: None,
+            });
+        }
+        if let Some(st) = &status.state {
+            m.last_status = Some(SessionStatus {
+                session: st.session.clone(),
+                left: st.left,
+                stop: st.stop,
+                place: st.place.clone(),
+                reported_at: at,
+                seq: status.seq,
+            });
+        } else if let Some(prev) = m.last_status.as_mut() {
+            prev.seq = status.seq;
+        }
+        m.last_seen = Some(m.last_seen.unwrap_or(0).max(at));
+        m.updated = bump(m.updated, now);
+        let month = local_month(at, utc_offset_secs);
+        let mut uses = 0;
+        // A machine resends its log until it is acknowledged, so a later status repeats the
+        // entries an earlier one carried: an entry already recorded before this status is
+        // skipped (two equal entries inside one status are both kept).
+        let before: i64 =
+            c.query_row("SELECT COALESCE(MAX(id), 0) FROM usage", [], |r| r.get(0))?;
+        for e in &status.log {
+            let entry = UsageEntry {
+                time: if e.time > 0 { e.time } else { at },
+                machine: machine.clone(),
+                key: e
+                    .names
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| e.command.clone()),
+                agent: e.agent.clone(),
+                repo: e
+                    .repository
+                    .as_ref()
+                    .map(|r| r.rsplit('/').next().unwrap_or(r).to_owned()),
+                command: Some(e.command.clone()).filter(|c| !c.is_empty()),
+                outcome: "in_session".into(),
+            };
+            if e.time > 0 && usage_recorded(&c, &entry, before)? {
+                continue;
+            }
+            insert_usage(&c, &entry)?;
+            uses += e.names.len().max(1) as u64;
+        }
+        if uses > 0 {
+            add_to_summary(&mut s, month, &machine, uses, 0, now);
+        }
+        for item in &status.inventory {
+            upsert_inventory(&mut s, item_inventory(item, &machine, at, &fp), at, now);
+        }
+        write_doc(&c, "state", &normalise(s))?;
+        let mut l: LocalState = read_doc(&c, "local")?;
+        l.dirty = true;
+        write_doc(&c, "local", &l)?;
+        Ok(ReportResult {
+            ack: Some(status.seq),
+            handback: None,
+        })
+    }
 }
 
 fn lock(m: &Mutex<Connection>) -> Result<std::sync::MutexGuard<'_, Connection>> {
@@ -299,7 +595,8 @@ fn bump_over(held: impl Iterator<Item = u64>, given: u64, now: u64) -> u64 {
     bump(held.fold(given, u64::max), now)
 }
 
-fn item_inventory(item: &RequestItem, machine: &str, now: u64, fp: &str) -> InventoryItem {
+/// An inventory item used at `at`; [`upsert_inventory`] stamps `updated`.
+fn item_inventory(item: &RequestItem, machine: &str, at: u64, fp: &str) -> InventoryItem {
     let o = item.object.clone().unwrap_or_default();
     InventoryItem {
         purpose: item.purpose.clone(),
@@ -309,22 +606,23 @@ fn item_inventory(item: &RequestItem, machine: &str, now: u64, fp: &str) -> Inve
         machine: machine.to_owned(),
         path: o.path,
         size: o.size,
-        first_use: now,
-        last_use: now,
+        first_use: at,
+        last_use: at,
         stale: false,
-        updated: now,
+        updated: at,
         deleted: false,
     }
 }
 
-fn upsert_inventory(state: &mut State, mut item: InventoryItem, now: u64) {
+/// Records a use at `at` of an inventory item, changed `now`.
+fn upsert_inventory(state: &mut State, mut item: InventoryItem, at: u64, now: u64) {
     match state
         .inventory
         .iter_mut()
         .find(|i| i.purpose == item.purpose && i.id == item.id && i.machine == item.machine)
     {
         Some(existing) => {
-            existing.last_use = now;
+            existing.last_use = existing.last_use.max(at);
             existing.stale = false;
             existing.deleted = false;
             if !item.path.is_empty() {
@@ -341,7 +639,10 @@ fn upsert_inventory(state: &mut State, mut item: InventoryItem, now: u64) {
             }
             existing.updated = bump(existing.updated, now);
         }
-        None => state.inventory.push(item),
+        None => state.inventory.push(InventoryItem {
+            updated: now,
+            ..item
+        }),
     }
 }
 
@@ -587,129 +888,43 @@ impl Store {
         utc_offset_secs: i32,
     ) -> Result<AnsweredResult> {
         let now = self.now();
-        let c = lock(&self.conn)?;
-        let mut s: State = read_doc(&c, "state")?;
-        let mut l: LocalState = read_doc(&c, "local")?;
-        let machine = request.machine();
-        let ctx = request.ctx().unwrap_or_default();
-        let fp = s
-            .words
-            .as_ref()
-            .map(|w| w.fingerprint.clone())
-            .unwrap_or_default();
+        self.record_answer(
+            &request,
+            &outcome,
+            allowed,
+            remember,
+            place_id,
+            utc_offset_secs,
+            now,
+            now,
+        )
+    }
 
-        if let Some(p) = l.pending.iter_mut().find(|p| p.id == request.id()) {
-            p.outcome = if outcome == "expired" {
-                "expired"
-            } else {
-                "answered"
-            }
-            .into();
-            p.seen = p.seen.max(now);
-        }
-        let entry = UsageEntry {
-            time: now,
-            machine: machine.clone(),
-            key: subject_label(&request),
-            agent: ctx.agent.clone(),
-            repo: ctx.repo.as_ref().map(|r| r.name.clone()),
-            command: Some(ctx.command.clone()).filter(|c| !c.is_empty()),
-            outcome: outcome.clone(),
-        };
-        insert_usage(&c, &entry)?;
-        let month = local_month(now, utc_offset_secs);
-        let declined = u64::from(outcome == "denied");
-        let keys = if allowed {
-            request.items().len().max(1) as u64
-        } else {
-            0
-        };
-        add_to_summary(&mut s, month, &machine, keys, declined, now);
-
-        if allowed {
-            for u in request.uses() {
-                for name in &u.names {
-                    let existing = s.answers.iter_mut().find(|a| {
-                        !a.deleted
-                            && a.agent == u.agent
-                            && a.repo_id == u.repository
-                            && &a.key_name == name
-                    });
-                    match existing {
-                        // An answer past its 90 days (not pruned yet) is renewed only when this
-                        // answer remembers; a use allowed once leaves it to expire.
-                        Some(a) if remember || crate::prune::answer_live(a, now) => {
-                            a.last_used = now;
-                            a.updated = bump(a.updated, now);
-                        }
-                        Some(_) => {}
-                        None if remember => {
-                            let updated = bump_over(
-                                s.answers
-                                    .iter()
-                                    .filter(|a| {
-                                        a.agent == u.agent
-                                            && a.repo_id == u.repository
-                                            && &a.key_name == name
-                                    })
-                                    .map(|a| a.updated),
-                                0,
-                                now,
-                            );
-                            s.answers.push(RememberedAnswer {
-                                agent: u.agent.clone(),
-                                key_name: name.clone(),
-                                repo_id: u.repository.clone(),
-                                repo_name: ctx
-                                    .repo
-                                    .as_ref()
-                                    .filter(|r| r.id == u.repository)
-                                    .map(|r| r.name.clone())
-                                    .unwrap_or_else(|| {
-                                        u.repository.rsplit('/').next().unwrap_or("").to_owned()
-                                    }),
-                                created: now,
-                                last_used: now,
-                                updated,
-                                deleted: false,
-                            })
-                        }
-                        None => {}
-                    }
-                }
-            }
-            for item in request.items() {
-                upsert_inventory(&mut s, item_inventory(&item, &machine, now, &fp), now);
-            }
-        }
-
-        let mut first_of_day = false;
-        // Only a person's answer begins a day. An answer given by itself (`automatic`, or a
-        // plan's later part) needed a day that was active when it was decided; recorded after
-        // that day ended (the reply took a while to post, or the extension's answer is merged
-        // later), it must not begin a new one without a tap.
-        if allowed && request.kind() == RequestKind::Open && answer_begins_day(&outcome) {
-            let active = l
-                .days
-                .iter()
-                .find(|d| d.machine == machine)
-                .is_some_and(|d| crate::decide::day_active(d, now, utc_offset_secs));
-            if !active {
-                first_of_day = true;
-                l.days.retain(|d| d.machine != machine);
-                l.days.push(DayRecord {
-                    machine: machine.clone(),
-                    first_approval: now,
-                    place_id,
-                    ends: day_end(now, utc_offset_secs),
-                });
-            }
-        }
-        l.dirty = true;
-        let s = normalise(s);
-        write_doc(&c, "state", &s)?;
-        write_doc(&c, "local", &l)?;
-        Ok(AnsweredResult { first_of_day })
+    /// [`Store::answered`] for an answer given earlier, at `answered_at` (Unix ms): what the
+    /// iOS extension answered by itself, merged from its inbox when the app next runs, which
+    /// can be hours later. The use counts at the time it was given: the usage entry, its
+    /// month, the answer's last use and the inventory. A time after this phone's clock counts
+    /// as now.
+    pub fn answered_at(
+        &self,
+        request: Arc<Request>,
+        outcome: String,
+        allowed: bool,
+        place_id: Option<String>,
+        utc_offset_secs: i32,
+        answered_at: u64,
+    ) -> Result<AnsweredResult> {
+        let now = self.now();
+        self.record_answer(
+            &request,
+            &outcome,
+            allowed,
+            false,
+            place_id,
+            utc_offset_secs,
+            answered_at.min(now),
+            now,
+        )
     }
 
     /// Records a `report` request: status, uses, inventory, hand-back. `utc_offset_secs` is
@@ -719,65 +934,22 @@ impl Store {
         request: Arc<Request>,
         utc_offset_secs: i32,
     ) -> Result<ReportResult> {
-        let machine = request.machine();
-        let mut result = match request.status() {
-            Some(st) => self.apply_status(machine.clone(), st, utc_offset_secs)?,
-            None => ReportResult {
-                ack: None,
-                handback: None,
-            },
-        };
-        if let Some(hb) = request.handback() {
-            let now = self.now();
-            let c = lock(&self.conn)?;
-            let mut s: State = read_doc(&c, "state")?;
-            let name = s.machine(&machine).map(display_name).unwrap_or_default();
-            let report = HandbackReport {
-                id: format!("{}:{}", machine, hb.hash),
-                machine: machine.clone(),
-                machine_name: name,
-                what: "unseal".into(),
-                plan_hash: hb.hash.clone(),
-                items: hb
-                    .items
-                    .iter()
-                    .map(|i| ReportItem {
-                        kind: i.kind.clone(),
-                        name: i.name.clone(),
-                        to: i.to.clone(),
-                        state: i.state.clone(),
-                    })
-                    .collect(),
-                run: hb.run.clone(),
-                time: now,
-                updated: now,
-            };
-            let report = HandbackReport {
-                updated: bump_over(
-                    s.reports
-                        .iter()
-                        .filter(|r| r.id == report.id)
-                        .map(|r| r.updated),
-                    0,
-                    now,
-                ),
-                ..report
-            };
-            s.reports.retain(|r| r.id != report.id);
-            s.reports.push(report.clone());
-            let mut l: LocalState = read_doc(&c, "local")?;
-            // A cancelled approval stays cancelled, whatever report arrives after the cancel.
-            for p in l.plans.iter_mut().filter(|p| {
-                p.machine == machine && p.plan_hash == hb.hash && p.state != "cancelled"
-            }) {
-                p.state = "done".into();
-            }
-            l.dirty = true;
-            write_doc(&c, "state", &normalise(s))?;
-            write_doc(&c, "local", &l)?;
-            result.handback = Some(report);
-        }
-        Ok(result)
+        let now = self.now();
+        self.record_report(&request, utc_offset_secs, now, now)
+    }
+
+    /// [`Store::apply_report`] for a report the iOS extension acknowledged earlier, at
+    /// `received_at` (Unix ms), merged from its inbox later: the status counts as reported
+    /// then (an open session's time left runs from then), and its uses in that month. A time
+    /// after this phone's clock counts as now.
+    pub fn apply_report_at(
+        &self,
+        request: Arc<Request>,
+        utc_offset_secs: i32,
+        received_at: u64,
+    ) -> Result<ReportResult> {
+        let now = self.now();
+        self.record_report(&request, utc_offset_secs, received_at.min(now), now)
     }
 
     /// Records a machine status (machine channel or `report`). A `seq` already seen is ignored
@@ -790,85 +962,7 @@ impl Store {
         utc_offset_secs: i32,
     ) -> Result<ReportResult> {
         let now = self.now();
-        let c = lock(&self.conn)?;
-        let mut s: State = read_doc(&c, "state")?;
-        let fp = s
-            .words
-            .as_ref()
-            .map(|w| w.fingerprint.clone())
-            .unwrap_or_default();
-        let Some(m) = s
-            .machines
-            .iter_mut()
-            .find(|m| m.key == machine && !m.deleted)
-        else {
-            return Err(AppError::NotFound);
-        };
-        let seen = m.last_status.as_ref().map_or(0, |st| st.seq);
-        if status.seq != 0 && status.seq <= seen {
-            return Ok(ReportResult {
-                ack: Some(status.seq),
-                handback: None,
-            });
-        }
-        if let Some(st) = &status.state {
-            m.last_status = Some(SessionStatus {
-                session: st.session.clone(),
-                left: st.left,
-                stop: st.stop,
-                place: st.place.clone(),
-                reported_at: now,
-                seq: status.seq,
-            });
-        } else if let Some(prev) = m.last_status.as_mut() {
-            prev.seq = status.seq;
-        }
-        m.last_seen = Some(now);
-        m.updated = bump(m.updated, now);
-        let month = local_month(now, utc_offset_secs);
-        let mut uses = 0;
-        // A machine resends its log until it is acknowledged, so a later status repeats the
-        // entries an earlier one carried: an entry already recorded before this status is
-        // skipped (two equal entries inside one status are both kept).
-        let before: i64 =
-            c.query_row("SELECT COALESCE(MAX(id), 0) FROM usage", [], |r| r.get(0))?;
-        for e in &status.log {
-            let entry = UsageEntry {
-                time: if e.time > 0 { e.time } else { now },
-                machine: machine.clone(),
-                key: e
-                    .names
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| e.command.clone()),
-                agent: e.agent.clone(),
-                repo: e
-                    .repository
-                    .as_ref()
-                    .map(|r| r.rsplit('/').next().unwrap_or(r).to_owned()),
-                command: Some(e.command.clone()).filter(|c| !c.is_empty()),
-                outcome: "in_session".into(),
-            };
-            if e.time > 0 && usage_recorded(&c, &entry, before)? {
-                continue;
-            }
-            insert_usage(&c, &entry)?;
-            uses += e.names.len().max(1) as u64;
-        }
-        if uses > 0 {
-            add_to_summary(&mut s, month, &machine, uses, 0, now);
-        }
-        for item in &status.inventory {
-            upsert_inventory(&mut s, item_inventory(item, &machine, now, &fp), now);
-        }
-        write_doc(&c, "state", &normalise(s))?;
-        let mut l: LocalState = read_doc(&c, "local")?;
-        l.dirty = true;
-        write_doc(&c, "local", &l)?;
-        Ok(ReportResult {
-            ack: Some(status.seq),
-            handback: None,
-        })
+        self.record_status(machine, status, utc_offset_secs, now, now)
     }
 
     /// The usage log, newest first, optionally for one machine or key.
@@ -1049,6 +1143,24 @@ pub fn display_name(m: &Machine) -> String {
 #[uniffi::export]
 pub fn machine_display_name(machine: Machine) -> String {
     display_name(&machine)
+}
+
+/// Opens a request that was already answered, against the time it was answered
+/// (`answered_at`, Unix ms) instead of the clock now: for recording what the iOS extension
+/// answered by itself (its inbox), which the app may merge hours later, after the signed time
+/// has left the 10-minute window. Everything else is checked as `open_request` checks it. Only
+/// for [`Store::answered_at`] and [`Store::apply_report_at`]; a request to answer is opened
+/// with `open_request`.
+#[uniffi::export]
+pub fn open_answered_request(
+    keys: Arc<sealctl_core::PhoneKeys>,
+    relay_machine_key: String,
+    id: String,
+    sealed: String,
+    answered_at: u64,
+) -> std::result::Result<Arc<Request>, sealctl_core::CoreError> {
+    sealctl_core::request::open_request_at(&keys, &relay_machine_key, &id, &sealed, answered_at)
+        .map(Arc::new)
 }
 
 fn apply_event(s: &mut State, event: Event, now: u64) -> Result<()> {
@@ -1261,6 +1373,36 @@ mod tests {
         request_with(machine, why, t, |b| b.uses = uses)
     }
 
+    thread_local! {
+        /// This test phone's keys.
+        static KEYS: Arc<sealctl_core::PhoneKeys> = Arc::new(sealctl_core::PhoneKeys::from_root(
+            &sealctl_core::Root::from_words(&sealctl_core::Words::generate().unwrap()),
+        ));
+    }
+
+    /// A request of `why` signed by `machine` at `t`, as the relay carries it: (id, sealed).
+    fn sealed_with(
+        machine: &sealctl_core::machine::MachineKeys,
+        why: &str,
+        t: u64,
+        f: impl FnOnce(&mut sealctl_core::wire::RequestBody),
+    ) -> (String, String) {
+        use sealctl_core::request::{new_request_id, seal_request};
+        let keys = KEYS.with(Arc::clone);
+        let phone = sealctl_core::PhonePublic::from_b64u(&keys.public_id(), &keys.box_public_key())
+            .unwrap();
+        let id = new_request_id().unwrap();
+        let mut body = sealctl_core::wire::RequestBody {
+            v: 1,
+            t,
+            why: why.into(),
+            ..Default::default()
+        };
+        f(&mut body);
+        let sealed = seal_request(machine, &phone, &id, body).unwrap();
+        (id, sealed.sealed)
+    }
+
     /// [`request_at`] with the body set up by `f`.
     fn request_with(
         machine: &sealctl_core::machine::MachineKeys,
@@ -1268,24 +1410,8 @@ mod tests {
         t: u64,
         f: impl FnOnce(&mut sealctl_core::wire::RequestBody),
     ) -> Arc<Request> {
-        use sealctl_core::request::{new_request_id, open_request_at, seal_request};
-        use sealctl_core::{PhoneKeys, PhonePublic, Root, Words};
-        thread_local! {
-            static KEYS: PhoneKeys = PhoneKeys::from_root(&Root::from_words(&Words::generate().unwrap()));
-        }
-        KEYS.with(|keys| {
-            let phone = PhonePublic::from_b64u(&keys.public_id(), &keys.box_public_key()).unwrap();
-            let id = new_request_id().unwrap();
-            let mut body = sealctl_core::wire::RequestBody {
-                v: 1,
-                t,
-                why: why.into(),
-                ..Default::default()
-            };
-            f(&mut body);
-            let sealed = seal_request(machine, &phone, &id, body).unwrap();
-            Arc::new(open_request_at(keys, &machine.id(), &id, &sealed.sealed, t).unwrap())
-        })
+        let (id, sealed) = sealed_with(machine, why, t, f);
+        open_answered_request(KEYS.with(Arc::clone), machine.id(), id, sealed, t).unwrap()
     }
 
     fn paired(st: &Store) -> sealctl_core::machine::MachineKeys {
@@ -1347,6 +1473,142 @@ mod tests {
             .unwrap();
         assert!(tap.first_of_day);
         assert_eq!(day_of(&st, &m.id()).unwrap().first_approval, morning);
+    }
+
+    #[test]
+    fn an_answer_the_extension_gave_counts_when_its_inbox_is_merged_late() {
+        use sealctl_core::wire::AgentUse;
+        let st = store();
+        let m = paired(&st);
+        let t0 = MIDNIGHT + 9 * H;
+        st.set_now(t0);
+        st.apply(Event::RememberAnswer {
+            answer: RememberedAnswer {
+                agent: "claude".into(),
+                key_name: "K".into(),
+                repo_id: "r".into(),
+                ..RememberedAnswer::default()
+            },
+        })
+        .unwrap();
+        // 89 days on, the extension answers the agent's use by itself; the app runs again
+        // five hours later and merges the inbox.
+        let used = t0 + 89 * 24 * H;
+        let (id, sealed) = sealed_with(&m, "agent", used, |b| {
+            b.uses = vec![AgentUse {
+                agent: "claude".into(),
+                repository: "r".into(),
+                names: vec!["K".into()],
+            }];
+        });
+        let merged = used + 5 * H;
+        st.set_now(merged);
+        // Opened against the clock now, the signed time is long outside its window.
+        assert!(matches!(
+            KEYS.with(|k| sealctl_core::request::open_request_at(k, &m.id(), &id, &sealed, merged)),
+            Err(sealctl_core::CoreError::Expired)
+        ));
+        let req = open_answered_request(KEYS.with(Arc::clone), m.id(), id, sealed, used).unwrap();
+        let r = st
+            .answered_at(req, "automatic".into(), true, Some("desk".into()), 0, used)
+            .unwrap();
+        assert!(!r.first_of_day);
+        // The use renews the answer, and counts when it was made.
+        let a = st.snapshot().unwrap().answers[0].clone();
+        assert_eq!(a.last_used, used);
+        let u = st.usage(None, None, 10).unwrap();
+        assert_eq!((u[0].time, u[0].outcome.as_str()), (used, "automatic"));
+        assert_eq!(st.summary(local_month(used, 0)).unwrap().keys_used, 1);
+        // So it still answers by itself past the 90 days from its first remembering.
+        assert!(crate::prune::answer_live(&a, t0 + 100 * 24 * H));
+        assert!(!st.prune(t0 + 100 * 24 * H).unwrap().answers[0].deleted);
+        // An answer time after the phone's clock counts as now.
+        let r = request_at(&m, "open", merged + H, Vec::new());
+        st.answered_at(r, "automatic".into(), true, None, 0, merged + H)
+            .unwrap();
+        assert_eq!(st.usage(None, None, 1).unwrap()[0].time, merged);
+    }
+
+    #[test]
+    fn a_report_the_extension_acknowledged_counts_from_when_it_came() {
+        use sealctl_core::wire::{LogEntry, SessionState};
+        let st = store();
+        let m = paired(&st);
+        let came = MIDNIGHT + 9 * H;
+        // An open session with 10 minutes left, reported at 09:00 and merged at 11:00.
+        let r = request_with(&m, "report", came, |b| {
+            b.seq = Some(7);
+            b.state = Some(SessionState {
+                session: "open".into(),
+                left: Some(600),
+                ..SessionState::default()
+            });
+            b.log = vec![LogEntry {
+                command: "env".into(),
+                names: vec!["A".into()],
+                ..LogEntry::default()
+            }];
+            b.handback = Some(sealctl_core::wire::Handback {
+                hash: "h".into(),
+                ..Default::default()
+            });
+        });
+        st.set_now(came - H);
+        for (hash, state) in [("h", "approved"), ("h2", "cancelled")] {
+            st.apply_local(LocalEvent::PutPlan {
+                plan: PlanApprovalRecord {
+                    machine: m.id(),
+                    request_id: hash.into(),
+                    plan_hash: hash.into(),
+                    not_before: came - H,
+                    state: state.into(),
+                    ..PlanApprovalRecord::default()
+                },
+            })
+            .unwrap();
+        }
+        st.set_now(came + 2 * H);
+        let res = st.apply_report_at(r, 0, came).unwrap();
+        assert_eq!(res.ack, Some(7));
+        assert_eq!(res.handback.unwrap().time, came);
+        let mach = st.snapshot().unwrap().machine(&m.id()).cloned().unwrap();
+        // The session's time left runs from 09:00: it is not shown open at 11:00.
+        let status = mach.last_status.unwrap();
+        assert_eq!(status.reported_at, came);
+        assert_eq!(mach.last_seen, Some(came));
+        assert_eq!(st.usage(None, None, 1).unwrap()[0].time, came);
+        // With a status in the same report, the hand-back still marks its plan done.
+        let l = st.local().unwrap();
+        let state = |h: &str| {
+            l.plans
+                .iter()
+                .find(|p| p.plan_hash == h)
+                .unwrap()
+                .state
+                .clone()
+        };
+        assert_eq!(
+            (state("h"), state("h2")),
+            ("done".into(), "cancelled".into())
+        );
+        // The same hand-back for a cancelled plan, with a status, leaves it cancelled.
+        let r = request_with(&m, "report", came + MIN, |b| {
+            b.seq = Some(8);
+            b.state = Some(SessionState {
+                session: "locked".into(),
+                ..SessionState::default()
+            });
+            b.handback = Some(sealctl_core::wire::Handback {
+                hash: "h2".into(),
+                ..Default::default()
+            });
+        });
+        assert_eq!(st.apply_report(r, 0).unwrap().ack, Some(8));
+        let l = st.local().unwrap();
+        assert_eq!(
+            l.plans.iter().find(|p| p.plan_hash == "h2").unwrap().state,
+            "cancelled"
+        );
     }
 
     #[test]

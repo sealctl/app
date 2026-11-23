@@ -310,20 +310,24 @@ public final class AppEngine {
 
     // MARK: the extension's inbox (6.4)
 
-    /// Records what the extension answered by itself while the app was not running.
+    /// Records what the extension answered by itself while the app was not running. The app
+    /// may run hours later, after the signed time has left its 10-minute window, so each item
+    /// is opened and recorded at the time the extension answered it.
     func takeInbox() async {
         guard let keys = await phoneKeys() else { return }
         for item in files.takeInbox() {
             answeredIds.insert(item.id)
             _ = try? await db.run { try $0.seeRequest(id: item.id, machine: item.machine, expires: UInt64(item.time + 600_000)) }
-            if let req = try? openRequest(keys: keys, relayMachineKey: item.machine, id: item.id, sealed: item.sealed) {
+            let at = UInt64(max(item.time, 0))
+            if let req = try? openAnsweredRequest(keys: keys, relayMachineKey: item.machine, id: item.id,
+                                                  sealed: item.sealed, answeredAt: at) {
                 if item.outcome == "report" {
-                    let result = try? await db.run { try $0.applyReport(request: req, utcOffsetSecs: utcOffset()) }
+                    let result = try? await db.run { try $0.applyReportAt(request: req, utcOffsetSecs: utcOffset(), receivedAt: at) }
                     if let h = result?.handback { reportArrived(h) }
                 } else {
                     let r = try? await db.run {
-                        try $0.answered(request: req, outcome: item.outcome, allowed: item.allowed, remember: false,
-                                        placeId: item.placeId, utcOffsetSecs: utcOffset())
+                        try $0.answeredAt(request: req, outcome: item.outcome, allowed: item.allowed,
+                                          placeId: item.placeId, utcOffsetSecs: utcOffset(), answeredAt: at)
                     }
                     if r?.firstOfDay == true { Task { await self.firstApprovalOfDay() } }
                 }

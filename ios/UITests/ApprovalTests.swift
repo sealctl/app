@@ -46,6 +46,9 @@ final class ApprovalTests: SealctlTestCase {
         see("Agents ask once for each key in each repository.")
         tap("Allow")
         XCTAssertEqual(job.wait(30).0, 0)
+        // The answer covers the named key; the key it comes in needs an Open session, as for
+        // `keys` (SPEC 9.3), so the machine reports one first.
+        XCTAssertEqual(Harness.machine("m1", ["status", "--state", "open", "--left", "7200"]).wait(20).0, 0)
         XCTAssertEqual(Harness.machine("m1", agent).wait(30).0, 0)
 
         tab("Settings")

@@ -82,7 +82,12 @@ enum Cmd {
         count: Option<usize>,
     },
     /// Delayed approvals: `list` or `cancel <id>`.
-    Delayed { action: String, id: Option<String> },
+    Delayed {
+        action: String,
+        /// Request ids are base64url and can start with `-`.
+        #[arg(allow_hyphen_values = true)]
+        id: Option<String>,
+    },
     /// Unpairs this machine and forgets the phone.
     Unpair,
     /// Prints the machine id, tag and paired phone.

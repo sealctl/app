@@ -194,14 +194,15 @@ pub fn place_settled(place: TrustedPlace, now: u64) -> bool {
     !place.deleted && (!place.manual || now >= place.created.saturating_add(MANUAL_PLACE_SETTLE_MS))
 }
 
-/// Whether every agent use has a live answer.
+/// Whether every agent use has a live answer. A use that names no key has none.
 fn uses_answered(uses: &[(String, String, Vec<String>)], answers: &[RememberedAnswer]) -> bool {
     uses.iter().all(|(agent, repo, names)| {
-        names.iter().all(|n| {
-            answers
-                .iter()
-                .any(|a| !a.deleted && &a.agent == agent && &a.repo_id == repo && &a.key_name == n)
-        })
+        !names.is_empty()
+            && names.iter().all(|n| {
+                answers.iter().any(|a| {
+                    !a.deleted && &a.agent == agent && &a.repo_id == repo && &a.key_name == n
+                })
+            })
     })
 }
 
@@ -302,7 +303,11 @@ pub fn decide_facts(f: &RequestFacts, ctx: &DecideContext) -> Verdict {
             RequestKind::Agent => {
                 v.options = vec![Allow, AllowOnce, Deny];
                 v.agent_first_use = true;
-                if uses_answered(&f.uses, &ctx.answers) && !f.uses.is_empty() {
+                // An answer covers the named keys only; any other keys follow the `keys` rule.
+                if uses_answered(&f.uses, &ctx.answers)
+                    && !f.uses.is_empty()
+                    && (!f.has_keys || ctx.session_open)
+                {
                     v.asking = Asking::Automatic;
                     v.agent_first_use = false;
                     v.automatic = Some(Decision::Session { place });
@@ -496,6 +501,20 @@ mod tests {
         assert_eq!(v.asking, Asking::Automatic);
         let v = decide_facts(&with_use(facts(RequestKind::Agent, 1), "OTHER"), &ctx());
         assert_eq!((v.asking, v.agent_first_use), (Asking::OneTap, true));
+        // A use that names no key is not an answered one.
+        let mut f = facts(RequestKind::Agent, 1);
+        f.uses = vec![("claude".into(), "github.com/acme/shop".into(), vec![])];
+        assert_eq!(decide_facts(&f, &ctx()).asking, Asking::OneTap);
+        f.has_keys = false;
+        assert_eq!(decide_facts(&f, &ctx()).asking, Asking::OneTap);
+        // Keys on an answered `agent` need an Open session, as `keys` does.
+        let mut c = ctx();
+        c.session_open = false;
+        let f = with_use(facts(RequestKind::Agent, 1), "OPENAI_API_KEY");
+        assert_eq!(decide_facts(&f, &c).asking, Asking::OneTap);
+        let mut f = f;
+        f.has_keys = false;
+        assert_eq!(decide_facts(&f, &c).asking, Asking::Automatic);
         assert_eq!(
             v.options,
             vec![

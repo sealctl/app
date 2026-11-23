@@ -15,14 +15,18 @@ and drives the booted simulator with `xcrun simctl openurl` and `xcrun simctl pu
   POST /stop/<id>
   POST /openurl  {"url": "..."}
   POST /push     {"payload": {...}}
-  POST /reset    stops every job and deletes the homes
+  POST /reset    stops every job and the CLI's daemons, and deletes the homes
   GET  /health
+
+Requests from a browser (an Origin or Sec-Fetch-* header, a Host other than the loopback
+address) and request bodies that are not application/json are refused.
 
 Run: FAKE_MACHINE_BIN=... [SEALCTL_BIN=...] SEALCTL_RELAY=... SIM_UDID=... harness.py [port]
 """
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -78,6 +82,33 @@ def home(name):
     return path
 
 
+def cli_env(h):
+    """The CLI's environment for the home `h`, as in sealctl's scripts/pair-test.sh."""
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "SEALCTL_SSH_DIR", "SSH_AUTH_SOCK", "CI")}
+    env.update(HOME=h, SEALCTL_NO_SERVICE="1", SEALCTL_AGENT="0")
+    return env
+
+
+def stop_jobs():
+    """Stops every job, then the daemons the CLI started (they run in their own process group)."""
+    for job in list(JOBS.values()):
+        if job.code is None:
+            job.proc.terminate()
+    JOBS.clear()
+    cli = os.environ.get("SEALCTL_BIN")
+    if not cli or not os.path.isdir(ROOT):
+        return
+    for entry in os.listdir(ROOT):
+        h = os.path.join(ROOT, entry, "home")
+        if entry.startswith("cli-") and os.path.isdir(h):
+            try:
+                subprocess.run([cli, "daemon", "--stop"], env=cli_env(h), cwd=h, stdin=subprocess.DEVNULL,
+                               capture_output=True, timeout=30)
+            except (OSError, subprocess.SubprocessError):
+                pass
+
+
 def start(spec):
     relay = spec.get("relay") or os.environ["SEALCTL_RELAY"]
     args = [str(a) for a in spec.get("args", [])]
@@ -88,9 +119,8 @@ def start(spec):
         h = os.path.join(home("cli-" + spec.get("home", "c1")), "home")
         os.makedirs(h, exist_ok=True)
         os.chmod(h, 0o700)
-        env = {k: v for k, v in os.environ.items()
-               if k not in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "SEALCTL_SSH_DIR", "SSH_AUTH_SOCK", "CI")}
-        env.update(HOME=h, SEALCTL_RELAY=relay, SEALCTL_NO_SERVICE="1", SEALCTL_AGENT="0")
+        env = cli_env(h)
+        env["SEALCTL_RELAY"] = relay
         env.update({k: str(v) for k, v in spec.get("env", {}).items() if k.startswith("SEALCTL_")})
         argv = [os.environ["SEALCTL_BIN"]] + args
         if spec.get("tty"):
@@ -123,12 +153,23 @@ class Handler(BaseHTTPRequestHandler):
 
     def _body(self):
         n = int(self.headers.get("Content-Length") or 0)
+        if n and self.headers.get_content_type() != "application/json":
+            raise ValueError("the body must be application/json")
         return json.loads(self.rfile.read(n) or b"{}")
+
+    def _from_test(self):
+        """Only the tests' own calls: no browser (which always sends Origin on a POST, and
+        Sec-Fetch-* in current versions), and the loopback Host (not a name rebound to it)."""
+        if self.headers.get("Origin") is not None or any(k.lower().startswith("sec-fetch-") for k in self.headers):
+            return False
+        return (self.headers.get("Host") or "").rsplit(":", 1)[0] in ("127.0.0.1", "localhost")
 
     def log_message(self, fmt, *args):
         sys.stderr.write("harness: " + (fmt % args) + "\n")
 
     def do_GET(self):
+        if not self._from_test():
+            return self._send(403, {"error": "forbidden"})
         if self.path == "/health":
             return self._send(200, {"ok": True, "cli": bool(os.environ.get("SEALCTL_BIN")),
                                     "relay": os.environ.get("SEALCTL_RELAY", "")})
@@ -138,6 +179,8 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
+        if not self._from_test():
+            return self._send(403, {"error": "forbidden"})
         try:
             if self.path == "/job":
                 return self._send(200, {"id": start(self._body())})
@@ -156,10 +199,7 @@ class Handler(BaseHTTPRequestHandler):
                 os.unlink(f.name)
                 return self._send(200, r)
             if self.path == "/reset":
-                for job in JOBS.values():
-                    if job.code is None:
-                        job.proc.terminate()
-                JOBS.clear()
+                stop_jobs()
                 for entry in os.listdir(ROOT):
                     shutil.rmtree(os.path.join(ROOT, entry), ignore_errors=True)
                 return self._send(200, {"ok": True})
@@ -172,10 +212,12 @@ if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8790
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     print(f"harness on 127.0.0.1:{port}, homes in {ROOT}", flush=True)
+    # `pkill` (CI) sends SIGTERM: leave through the cleanup below.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     try:
         server.serve_forever()
     finally:
-        for job in JOBS.values():
-            if job.code is None:
-                job.proc.terminate()
+        # Free the port first: the daemon stops below can take a while, and CI starts the next harness on it.
+        server.server_close()
+        stop_jobs()
         shutil.rmtree(ROOT, ignore_errors=True)

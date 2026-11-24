@@ -7034,7 +7034,9 @@ public func placeKind(placesOn: Bool, currentPlace: String?) -> Place  {
 }
 /**
  * Whether a trusted place also lifts the level 3 delay at `now`: a learned place at once, a place
- * added by hand 24 hours after it was added. Every other comfort of a place starts at once.
+ * added by hand 24 hours after it was added. Every other comfort of a place starts at once. A
+ * place added by hand with `created` 0 was added while the clock was stale and its 24 hours
+ * have not started (the store stamps it once the clock is fresh, SPEC.md 8.1).
  */
 public func placeSettled(place: TrustedPlace, now: UInt64) -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
@@ -7194,7 +7196,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sealctl_app_checksum_func_place_kind() != 46517) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_sealctl_app_checksum_func_place_settled() != 36074) {
+    if (uniffi_sealctl_app_checksum_func_place_settled() != 45654) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_func_merge_state() != 39551) {

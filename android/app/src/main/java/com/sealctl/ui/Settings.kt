@@ -274,8 +274,12 @@ fun PlacesScreen(activity: MainActivity) {
         }
         for (p in state.places.filter { !it.deleted }) SurfaceCard {
             Text(p.name, fontWeight = FontWeight.SemiBold, color = Sealctl.colors.ink)
-            Muted("trusted since ${Texts.isoDate(p.created.toLong())}" + if (current == p.id) " · You're here" else "")
-            if (p.manual && p.created.toLong() + 86_400_000 > System.currentTimeMillis())
+            // created 0: added by hand while the clock could not be checked (SPEC.md 8.1)
+            val since = if (p.created == 0uL) "trusted just now" else "trusted since ${Texts.isoDate(p.created.toLong())}"
+            Muted(since + if (current == p.id) " · You're here" else "")
+            if (p.manual && p.created == 0uL)
+                Muted("Skips the two-hour wait 24 hours after your phone next reaches sealctl")
+            else if (p.manual && p.created.toLong() + 86_400_000 > System.currentTimeMillis())
                 Muted("Skips the two-hour wait from ${Texts.time(p.created.toLong() + 86_400_000)} tomorrow")
             if (removing == p.id) {
                 Body("Remove ${p.name}? Machines opened here stay Open until their allowance ends.")

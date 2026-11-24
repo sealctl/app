@@ -1091,7 +1091,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_sealctl_app_checksum_func_place_kind() and 0xFFFF) != 46517) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_sealctl_app_checksum_func_place_settled() and 0xFFFF) != 36074) {
+    if ((lib.uniffi_sealctl_app_checksum_func_place_settled() and 0xFFFF) != 45654) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_func_merge_state() and 0xFFFF) != 39551) {
@@ -7652,7 +7652,9 @@ object CoreExceptionExternalErrorHandler : UniffiRustCallStatusErrorHandler<Core
 
         /**
          * Whether a trusted place also lifts the level 3 delay at `now`: a learned place at once, a place
-         * added by hand 24 hours after it was added. Every other comfort of a place starts at once.
+         * added by hand 24 hours after it was added. Every other comfort of a place starts at once. A
+         * place added by hand with `created` 0 was added while the clock was stale and its 24 hours
+         * have not started (the store stamps it once the clock is fresh, SPEC.md 8.1).
          */ fun `placeSettled`(`place`: TrustedPlace, `now`: kotlin.ULong): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     uniffiRustCall() { _status ->

@@ -202,8 +202,12 @@ struct PlacesView: View {
             ForEach(places, id: \.id) { p in
                 SurfaceCard {
                     Text(p.name).fontWeight(.semibold).foregroundStyle(Palette.ink)
-                    MutedText("trusted since \(Texts.isoDate(Int64(p.created)))" + (e.currentPlace == p.id ? " · You're here" : ""))
-                    if p.manual && Int64(p.created) + 86_400_000 > nowMs() {
+                    // created 0: added by hand while the clock could not be checked (SPEC.md 8.1)
+                    MutedText((p.created == 0 ? "trusted just now" : "trusted since \(Texts.isoDate(Int64(p.created)))")
+                              + (e.currentPlace == p.id ? " · You're here" : ""))
+                    if p.manual && p.created == 0 {
+                        MutedText("Skips the two-hour wait 24 hours after your phone next reaches sealctl")
+                    } else if p.manual && Int64(p.created) + 86_400_000 > nowMs() {
                         MutedText("Skips the two-hour wait from \(Texts.time(Int64(p.created) + 86_400_000)) tomorrow")
                     }
                     if removing == p.id {

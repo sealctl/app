@@ -791,8 +791,11 @@ impl Store {
     pub fn apply(&self, event: Event) -> Result<State> {
         let c = lock(&self.conn)?;
         let mut s: State = read_doc(&c, "state")?;
-        let now = self.now(&c);
-        apply_event(&mut s, event, now)?;
+        let clock = self.clock_in(&c);
+        apply_event(&mut s, event, clock)?;
+        if clock.fresh {
+            stamp_hand_added_places(&mut s, clock.now);
+        }
         let s = normalise(s);
         write_doc(&c, "state", &s)?;
         let mut l: LocalState = read_doc(&c, "local")?;
@@ -1185,7 +1188,16 @@ impl Store {
             return Ok(self.clock_in(&c));
         }
         write_doc(&c, CLOCK, &RelayClock::learned(relay_ms, &self.boot()))?;
-        Ok(self.clock_in(&c))
+        let clock = self.clock_in(&c);
+        // places added by hand while the clock was stale start their 24 hours now
+        let mut s: State = read_doc(&c, "state")?;
+        if clock.fresh && stamp_hand_added_places(&mut s, clock.now) {
+            write_doc(&c, "state", &normalise(s))?;
+            let mut l: LocalState = read_doc(&c, "local")?;
+            l.dirty = true;
+            write_doc(&c, "local", &l)?;
+        }
+        Ok(clock)
     }
 
     /// The relay accepted a call signed with `signed_ms` (the `Sealctl-Time` sent, in ms):
@@ -1303,7 +1315,24 @@ pub fn open_answered_request(
         .map(Arc::new)
 }
 
-fn apply_event(s: &mut State, event: Event, now: u64) -> Result<()> {
+/// Stamps `created` on the live places added by hand that have none (added while the clock was
+/// stale), so their 24 hours start on a fresh clock (SPEC.md 8.1, 9.6). Returns whether any was.
+fn stamp_hand_added_places(s: &mut State, now: u64) -> bool {
+    let mut changed = false;
+    for p in s
+        .places
+        .iter_mut()
+        .filter(|p| p.manual && !p.deleted && p.created == 0)
+    {
+        p.created = now;
+        p.updated = bump(p.updated, now);
+        changed = true;
+    }
+    changed
+}
+
+fn apply_event(s: &mut State, event: Event, clock: ClockNow) -> Result<()> {
+    let now = clock.now;
     match event {
         Event::PairMachine {
             mut machine,
@@ -1413,7 +1442,10 @@ fn apply_event(s: &mut State, event: Event, now: u64) -> Result<()> {
                 place.updated,
                 now,
             );
-            if place.created == 0 {
+            // A place added by hand starts its 24 hours only on a fresh clock: a stale one can
+            // be days behind, and the place would be settled as soon as the clock is fresh.
+            // Until then `created` stays 0 (see stamp_hand_added_places).
+            if place.created == 0 && (clock.fresh || !place.manual) {
                 place.created = now;
             }
             if place.radius <= 0.0 {
@@ -2672,6 +2704,72 @@ mod tests {
         assert!(st.place_settled_now(place.clone()).unwrap());
         let v = decide_facts(&unseal(3), &ctx_now(&st, Some(&place)));
         assert_eq!(v.delay_secs, 0);
+    }
+
+    #[test]
+    fn a_place_added_by_hand_on_a_stale_clock_starts_its_day_once_the_clock_is_fresh() {
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        reach_relay(&st, t0);
+        // After a reboot the clock is stale; two days later, offline, the clock is set back.
+        st.reboot(5 * MIN);
+        st.set_system_clock(t0 - 5 * H);
+        assert!(!st.clock_now().unwrap().fresh);
+        // The stale clock reads the last relay time, two days old: the place is not stamped.
+        let place = hand_added(&st);
+        assert_eq!(place.created, 0);
+        assert!(!st.place_settled_now(place).unwrap());
+        // The relay is reached two days on: the place's 24 hours start then, not before.
+        reach_relay(&st, t0 + 48 * H);
+        let place = st
+            .snapshot()
+            .unwrap()
+            .places
+            .into_iter()
+            .find(|p| p.id == "home")
+            .unwrap();
+        assert_eq!(place.created, t0 + 48 * H);
+        assert!(st.local().unwrap().dirty);
+        assert!(!st.place_settled_now(place.clone()).unwrap());
+        let v = decide_facts(&unseal(3), &ctx_now(&st, Some(&place)));
+        assert_eq!(v.delay_secs, DELAY_SECS);
+        // A day later on the fresh clock it lifts the delay.
+        st.pass(24 * H);
+        assert!(st.place_settled_now(place).unwrap());
+    }
+
+    #[test]
+    fn a_learned_place_is_stamped_at_once_and_one_added_by_hand_when_the_relay_is_reached() {
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        st.set_now(t0);
+        let place = hand_added(&st);
+        assert_eq!(place.created, 0);
+        // A learned place is stamped whatever the clock.
+        let learned = st
+            .apply(Event::AddPlace {
+                place: TrustedPlace {
+                    id: "work".into(),
+                    name: "Work".into(),
+                    radius: 150.0,
+                    ..TrustedPlace::default()
+                },
+            })
+            .unwrap()
+            .places
+            .into_iter()
+            .find(|p| p.id == "work")
+            .unwrap();
+        assert_eq!(learned.created, t0);
+        reach_relay(&st, t0 + H);
+        let home = st
+            .snapshot()
+            .unwrap()
+            .places
+            .into_iter()
+            .find(|p| p.id == "home")
+            .unwrap();
+        assert_eq!(home.created, t0 + H);
     }
 
     #[test]

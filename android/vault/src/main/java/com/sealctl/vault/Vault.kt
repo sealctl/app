@@ -3,6 +3,7 @@ package com.sealctl.vault
 import android.app.KeyguardManager
 import android.content.Context
 import android.os.Build
+import android.os.SystemClock
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
@@ -167,10 +168,11 @@ class Vault(private val context: Context) {
     }
 
     /**
-     * Set by [resetGate] once the card was passed, cleared when the new gate is made or on
-     * erase. Kept in memory only: a card passed in an earlier run of the app allows nothing.
+     * Set by [resetGate] once the card was passed; taken by the one prompt that follows, and
+     * only within [GateAllowance.WINDOW_MS] of the card. Kept in memory only: a card passed in an
+     * earlier run of the app allows nothing.
      */
-    @Volatile private var newGateAllowed = false
+    private val newGate = GateAllowance { SystemClock.elapsedRealtime() }
 
     /**
      * A cipher on `sealctl.gate` for a strong-biometric-only prompt. The gate file holds 32
@@ -183,7 +185,9 @@ class Vault(private val context: Context) {
         val existing = existingKey(GATE_KEY)
         val gate = file(GATE)
         return try {
-            when (gateStep(existing != null, gate.exists(), newGateAllowed)) {
+            val hasGate = existing != null && gate.exists()
+            // The card's allowance goes to this one prompt: cancelled or failed, the card again.
+            when (gateStep(existing != null, gate.exists(), !hasGate && newGate.take())) {
                 GateStep.CHECK -> {
                     val raw = gate.readBytes()
                     Gate(Cipher.getInstance(GCM).apply { init(Cipher.DECRYPT_MODE, existing, GCMParameterSpec(128, raw, 0, IV)) }, false)
@@ -204,7 +208,6 @@ class Vault(private val context: Context) {
         if (gate.creating) {
             val secret = ByteArray(32).also { SecureRandom().nextBytes(it) }
             atomicWrite(GATE, gate.cipher.iv + gate.cipher.doFinal(secret))
-            newGateAllowed = false
             true
         } else {
             val raw = file(GATE).readBytes()
@@ -221,7 +224,7 @@ class Vault(private val context: Context) {
     fun resetGate() {
         deleteKey(GATE_KEY)
         file(GATE).delete()
-        newGateAllowed = true
+        newGate.allow()
     }
 
     private fun KeyGenParameterSpec.Builder.gateAuth() {
@@ -239,7 +242,7 @@ class Vault(private val context: Context) {
 
     /** Deletes every key and file (Erase sealctl from this phone). */
     fun erase() {
-        newGateAllowed = false
+        newGate.clear()
         for (alias in listOf(ROOT_KEY, WORDS_KEY, DEVICE_KEY, GATE_KEY)) deleteKey(alias)
         for (f in listOf(ROOT, WORDS, PHONE, GATE, "root.old.bin", "words.old.bin")) file(f).delete()
     }
@@ -342,5 +345,34 @@ class Vault(private val context: Context) {
         const val WORDS_KEY = "sealctl.words"
         const val DEVICE_KEY = "sealctl.device"
         const val GATE_KEY = "sealctl.gate"
+    }
+}
+
+/**
+ * The allowance two words from the card give for making a new gate (SPEC.md 9.6): for the one
+ * biometric prompt that follows, and only within [WINDOW_MS] of the card on [now] (a clock
+ * since boot), so a card passed and then left does not let a face enrolled later make the gate.
+ */
+class GateAllowance(private val now: () -> Long) {
+    private var until = 0L
+
+    @Synchronized fun allow() {
+        until = now() + WINDOW_MS
+    }
+
+    /** Whether the card allows a new gate now; true at most once per [allow]. */
+    @Synchronized fun take(): Boolean {
+        val ok = until != 0L && now() < until
+        until = 0L
+        return ok
+    }
+
+    @Synchronized fun clear() {
+        until = 0L
+    }
+
+    companion object {
+        /** Two minutes from the card to the prompt. */
+        const val WINDOW_MS = 120_000L
     }
 }

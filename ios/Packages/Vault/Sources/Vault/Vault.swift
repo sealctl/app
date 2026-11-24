@@ -33,6 +33,25 @@ public enum GateStep: Sendable, Equatable {
     }
 }
 
+/// The allowance two words from the card give for making a new gate (SPEC.md 9.6): for the one
+/// prompt that follows, and only within `window` seconds of the card, so a card passed and then
+/// left does not let a face enrolled later make the gate.
+public struct GateAllowance: Sendable, Equatable {
+    /// Two minutes from the card to the prompt.
+    public static let window: TimeInterval = 120
+    private var until: TimeInterval?
+
+    public init() {}
+
+    public mutating func allow(now: TimeInterval) { until = now + Self.window }
+
+    /// Whether the card allows a new gate at `now`; true at most once per `allow`.
+    public mutating func take(now: TimeInterval) -> Bool {
+        defer { until = nil }
+        return until.map { now < $0 } ?? false
+    }
+}
+
 /// The outcome of the words prompt (Face ID, Touch ID or the passcode).
 public enum OwnerAuth: Sendable, Equatable {
     case passed

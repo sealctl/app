@@ -66,9 +66,12 @@ public actor MemoryVault: Vault {
         if biometricsState == .unavailable { return .unavailable }
         if biometricsState == .lockedOut { return .lockedOut }
         // The same rule as the keychain vault (9.6): the first gate needs the card.
-        if GateStep.of(itemExists: false, made: gateMade, cardPassed: cardPassed) == .cardFirst { return .noGate }
+        // The card allows the one prompt that follows it, whatever that prompt answers.
+        let step = GateStep.of(itemExists: false, made: gateMade, cardPassed: !gateMade && cardPassed)
+        if step == .cardFirst { return .noGate }
+        if step == .make { cardPassed = false }
         let r = nextGate
-        if r == .passed && !gateMade { gateMade = true; cardPassed = false }
+        if r == .passed { gateMade = true }
         return r
     }
 

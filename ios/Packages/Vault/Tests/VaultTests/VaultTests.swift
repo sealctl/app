@@ -74,6 +74,28 @@ struct MemoryVaultTests {
         #expect(await v.gate(reason: "x") == .unavailable)
     }
 
+    /// The card allows the one prompt that follows it: a cancelled prompt means the card again,
+    /// and a card left for longer than the window allows nothing (9.6).
+    @Test func theCardAllowsOnePrompt() async throws {
+        let v = MemoryVault()
+        try await v.saveAll(words: try Words.generate())
+        await v.resetGate()
+        await v.set(nextGate: .cancelled)
+        #expect(await v.gate(reason: "x") == .cancelled)
+        await v.set(nextGate: .passed)
+        #expect(await v.gate(reason: "x") == .noGate)
+        var card = GateAllowance()
+        let before = card.take(now: 10)
+        card.allow(now: 10)
+        let first = card.take(now: 11), second = card.take(now: 12)
+        card.allow(now: 10)
+        let late = card.take(now: 10 + GateAllowance.window)
+        #expect(!before)
+        #expect(first)
+        #expect(!second)
+        #expect(!late)
+    }
+
     @Test func gateSteps() {
         #expect(GateStep.of(itemExists: false, made: false, cardPassed: false) == .cardFirst)
         #expect(GateStep.of(itemExists: false, made: false, cardPassed: true) == .make)

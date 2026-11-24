@@ -601,6 +601,7 @@ extension TimingTests {
         let r = try m.start(["request", "--kind", "unseal", "--all", "--match", "--plan", "volume:safe:volume:vol-1"])
         let w = try await firstRequest(engine, r)
         #expect(w.verdict.level == 3)
+        #expect(w.request.matchChoices().count == 3)
         #expect(w.request.checkMatch(pick: try await r.number()))
         #expect(await engine.confirmSensitive(w))
         #expect(engine.local.delayed.first { $0.id == w.id }?.state == "waiting")

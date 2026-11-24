@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -38,8 +39,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -49,7 +52,10 @@ import com.sealctl.app.MainActivity
 import com.sealctl.app.Route
 import com.sealctl.app.Texts
 import com.sealctl.app.Ui
+import com.sealctl.core.app.ActivityRow
+import com.sealctl.core.app.ActivityTone
 import com.sealctl.core.app.Asking
+import com.sealctl.core.app.activityRow
 import com.sealctl.designsystem.Banner
 import com.sealctl.designsystem.MachineState
 import com.sealctl.designsystem.Mono
@@ -228,18 +234,35 @@ fun ActivityList(machine: String?) {
         Muted("Nothing yet. Every use of your keys shows here.")
         return
     }
-    var day = ""
-    for (e in entries) {
-        val d = Texts.mediumDate(e.time.toLong())
-        if (d != day) { day = d; SectionLabel(d) }
-        val name = engine.machine(e.machine)?.let { engine.displayName(it) } ?: e.machine.take(8)
-        val outcome = when (e.outcome) {
-            "one_tap" -> "One tap"; "automatic" -> "Answered by itself"; "in_session" -> "In session"
-            "once" -> "Allowed once"; "denied" -> "Denied"; "expired" -> "Expired"; "confirmed" -> "Confirmed"; else -> e.outcome
+    val rows = remember(entries, state) {
+        entries.map { e -> Texts.time(e.time.toLong()) to activityRow(e, engine.machine(e.machine)) }
+    }
+    for ((d, day) in entries.indices.groupBy { Texts.mediumDate(entries[it].time.toLong()) }) {
+        SectionLabel(d)
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            for (i in day) ActivityLine(rows[i].first, rows[i].second)
         }
-        val parts = listOfNotNull(Texts.time(e.time.toLong()), e.key.ifEmpty { null }, e.agent, e.repo, e.command)
-            .map { Texts.shown(it, Texts.MAX_LINE) } + listOf(name, outcome)
-        Mono(parts.joinToString(" · "), size = 13, color = Sealctl.colors.ink2)
+    }
+}
+
+/** One use (11.12): the time, what was used and the outcome, then the details in muted text. */
+@Composable
+fun ActivityLine(time: String, row: ActivityRow) {
+    val c = Sealctl.colors
+    Row(Modifier.fillMaxWidth().clearAndSetSemantics { contentDescription = Texts.activityLabel(time, row) }) {
+        Text(time, Modifier.alignByBaseline().widthIn(min = 44.dp).padding(end = 8.dp), color = c.ink2, fontSize = 14.sp, style = TextStyle(fontFeatureSettings = "tnum"))
+        Column(Modifier.weight(1f).alignByBaseline()) {
+            Row {
+                Text(row.subject, Modifier.weight(1f).alignByBaseline(), color = c.ink, fontSize = 15.sp)
+                Text(
+                    row.outcome,
+                    Modifier.padding(start = 8.dp).alignByBaseline(),
+                    color = when (row.tone) { ActivityTone.DECLINED -> c.accent; ActivityTone.MUTED -> c.muted; ActivityTone.NORMAL -> c.ink2 },
+                    fontSize = 14.sp,
+                )
+            }
+            if (row.details.isNotEmpty()) Text(Texts.activityDetails(row), color = c.muted, fontSize = 13.sp)
+        }
     }
 }
 
@@ -258,11 +281,11 @@ fun InventoryList(machine: String?) {
         for (i in list) {
             SurfaceCard {
                 val purpose = when (i.purpose) { "secrets" -> "Secret store"; "secret" -> "Own-approval secret"; "volume" -> "Volume"; "backup" -> "Backup"; else -> i.purpose }
-                com.sealctl.designsystem.Line(com.sealctl.designsystem.plain(purpose, FontWeight.SemiBold), com.sealctl.designsystem.plain(" "), com.sealctl.designsystem.code("${i.id.take(4)}…${i.id.takeLast(2)}", size = 14), com.sealctl.designsystem.plain(" · words "), com.sealctl.designsystem.code(i.words, size = 14), color = Sealctl.colors.ink)
+                com.sealctl.designsystem.Line(com.sealctl.designsystem.plain(purpose, FontWeight.SemiBold), com.sealctl.designsystem.plain(" "), com.sealctl.designsystem.code("${i.id.take(4)}…${i.id.takeLast(2)}", size = 14), com.sealctl.designsystem.plain(" · seed "), com.sealctl.designsystem.code(i.words, size = 14), color = Sealctl.colors.ink)
                 if (i.path.isNotEmpty()) Mono(listOfNotNull(i.path, if (i.size > 0u) "${i.size.toLong() / 1000} KB" else null).joinToString(" · "), size = 13, color = Sealctl.colors.ink2)
                 Muted("First used ${Texts.isoDate(i.firstUse.toLong())} · last used ${Texts.ago(i.lastUse.toLong())}")
                 if (i.stale) Text("Not seen since ${Texts.isoDate(i.lastUse.toLong())}", color = Sealctl.colors.waiting)
-                if (current != null && i.words != current) Text("Words ${i.words} (retired)", color = Sealctl.colors.muted)
+                if (current != null && i.words != current) Text("Seed ${i.words} (retired)", color = Sealctl.colors.muted)
             }
         }
     }

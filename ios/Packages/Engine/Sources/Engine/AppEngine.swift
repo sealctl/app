@@ -193,7 +193,7 @@ public final class AppEngine {
 
     static let installedKey = "com.sealctl.installed"
 
-    /// "Continue with words 7Hq3" after a reinstall: keep the items and bring the state back.
+    /// "Continue with seed 7Hq3" after a reinstall: keep the items and bring the state back.
     public func continueAfterReinstall() async -> Bool {
         guard await vault.authenticateOwner(reason: "Face ID protects showing and changing your 24 words.") == .passed else {
             return false

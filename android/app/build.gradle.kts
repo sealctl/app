@@ -72,6 +72,9 @@ android {
         unitTests {
             isIncludeAndroidResources = true
             isReturnDefaultValues = true
+            // The Activity rows come from the shared crate: the host build of libsealctl_app
+            // (cargo build -p sealctl-app), loaded through JNA as in :relay.
+            all { it.systemProperty("jna.library.path", rootProject.file("../target/debug").absolutePath) }
         }
     }
 
@@ -233,6 +236,7 @@ dependencies {
     implementation(libs.camerax.view)
     implementation(libs.zxing.cpp)
 
+    testImplementation("net.java.dev.jna:jna:${libs.versions.jna.get()}")
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)
 

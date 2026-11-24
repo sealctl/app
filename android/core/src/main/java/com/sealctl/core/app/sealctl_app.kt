@@ -706,6 +706,8 @@ internal object IntegrityCheckingUniffiLib {
     internal fun ensureInitialized() = Unit
     external fun uniffi_sealctl_app_checksum_func_app_rules_version(
     ): Int
+    external fun uniffi_sealctl_app_checksum_func_activity_row(
+    ): Int
     external fun uniffi_sealctl_app_checksum_func_card_choices(
     ): Int
     external fun uniffi_sealctl_app_checksum_func_card_positions(
@@ -875,6 +877,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_app_rules_version(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_sealctl_app_fn_func_activity_row(`entry`: RustBuffer.ByValue,`machine`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_card_choices(`words`: Long,`position`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_card_positions(`count`: Int,`groups`: Int,uniffi_out_err: UniffiRustCallStatus, 
@@ -1041,6 +1045,9 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_sealctl_app_checksum_func_app_rules_version() and 0xFFFF) != 4703) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_sealctl_app_checksum_func_activity_row() and 0xFFFF) != 46249) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_func_card_choices() and 0xFFFF) != 45350) {
@@ -2424,6 +2431,71 @@ public object FfiConverterTypeStore: FfiConverter<Store, Long> {
 
     override fun write(value: Store, buf: ByteBuffer) {
         buf.putLong(lower(value))
+    }
+}
+
+
+
+/**
+ * One row of the Activity log.
+ */
+data class ActivityRow (
+    /**
+     * What was used: "web-relay-token", "Volume safe", "Secret store a7c3…42",
+     * "Seal volume safe".
+     */
+    var `subject`: kotlin.String
+    , 
+    /**
+     * "One tap", "In session", "Denied", …
+     */
+    var `outcome`: kotlin.String
+    , 
+    /**
+     * The outcome's colour.
+     */
+    var `tone`: ActivityTone
+    , 
+    /**
+     * The second line, in order and without empty parts: the project (secrets), the agent,
+     * the repository, the command and the machine. The apps join them with " · ".
+     */
+    var `details`: List<kotlin.String>
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeActivityRow: FfiConverterRustBuffer<ActivityRow> {
+    override fun read(buf: ByteBuffer): ActivityRow {
+        return ActivityRow(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterTypeActivityTone.read(buf),
+            FfiConverterSequenceString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ActivityRow) = (
+            FfiConverterString.allocationSize(value.`subject`) +
+            FfiConverterString.allocationSize(value.`outcome`) +
+            FfiConverterTypeActivityTone.allocationSize(value.`tone`) +
+            FfiConverterSequenceString.allocationSize(value.`details`)
+    )
+
+    override fun write(value: ActivityRow, buf: ByteBuffer) {
+            FfiConverterString.write(value.`subject`, buf)
+            FfiConverterString.write(value.`outcome`, buf)
+            FfiConverterTypeActivityTone.write(value.`tone`, buf)
+            FfiConverterSequenceString.write(value.`details`, buf)
     }
 }
 
@@ -4810,6 +4882,16 @@ data class UsageEntry (
      * `one_tap`, `automatic`, `in_session`, `once`, `denied`, `expired`, `confirmed`.
      */
     var `outcome`: kotlin.String
+    , 
+    /**
+     * What `key` names, for the Activity row ([`crate::activity`]): the request's
+     * `ctx.subject` kind (`secret`, `volume`, `backup`, `ssh`, `machine`), `secret` for a
+     * secret name, or the item's purpose when `key` is `"<purpose> <id>"`. `None` for entries
+     * written before it was recorded and for uses a machine reports from a session
+     * (`in_session`, always secret names). Left out of the JSON when `None`, so a reported
+     * entry stays equal to the one recorded before (the duplicate check compares the JSON).
+     */
+    var `kind`: kotlin.String?
     
 ){
     
@@ -4833,6 +4915,7 @@ public object FfiConverterTypeUsageEntry: FfiConverterRustBuffer<UsageEntry> {
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
         )
     }
 
@@ -4843,7 +4926,8 @@ public object FfiConverterTypeUsageEntry: FfiConverterRustBuffer<UsageEntry> {
             FfiConverterOptionalString.allocationSize(value.`agent`) +
             FfiConverterOptionalString.allocationSize(value.`repo`) +
             FfiConverterOptionalString.allocationSize(value.`command`) +
-            FfiConverterString.allocationSize(value.`outcome`)
+            FfiConverterString.allocationSize(value.`outcome`) +
+            FfiConverterOptionalString.allocationSize(value.`kind`)
     )
 
     override fun write(value: UsageEntry, buf: ByteBuffer) {
@@ -4854,6 +4938,7 @@ public object FfiConverterTypeUsageEntry: FfiConverterRustBuffer<UsageEntry> {
             FfiConverterOptionalString.write(value.`repo`, buf)
             FfiConverterOptionalString.write(value.`command`, buf)
             FfiConverterString.write(value.`outcome`, buf)
+            FfiConverterOptionalString.write(value.`kind`, buf)
     }
 }
 
@@ -5134,6 +5219,53 @@ public object FfiConverterTypeWordsInfo: FfiConverterRustBuffer<WordsInfo> {
             FfiConverterULong.write(value.`updated`, buf)
     }
 }
+
+
+
+/**
+ * How the outcome is coloured.
+ */
+
+enum class ActivityTone {
+    
+    /**
+     * Allowed or confirmed: the secondary ink.
+     */
+    NORMAL,
+    /**
+     * Denied: the declined (accent) colour.
+     */
+    DECLINED,
+    /**
+     * Expired: muted.
+     */
+    MUTED;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeActivityTone: FfiConverterRustBuffer<ActivityTone> {
+    override fun read(buf: ByteBuffer) = try {
+        ActivityTone.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: ActivityTone) = 4UL
+
+    override fun write(value: ActivityTone, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
 
 
 
@@ -6499,6 +6631,38 @@ public object FfiConverterOptionalTypeHold: FfiConverterRustBuffer<Hold?> {
 /**
  * @suppress
  */
+public object FfiConverterOptionalTypeMachine: FfiConverterRustBuffer<Machine?> {
+    override fun read(buf: ByteBuffer): Machine? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeMachine.read(buf)
+    }
+
+    override fun allocationSize(value: Machine?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeMachine.allocationSize(value)
+        }
+    }
+
+    override fun write(value: Machine?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeMachine.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterOptionalTypePlaceCandidate: FfiConverterRustBuffer<PlaceCandidate?> {
     override fun read(buf: ByteBuffer): PlaceCandidate? {
         if (buf.get().toInt() == 0) {
@@ -7397,6 +7561,22 @@ object CoreExceptionExternalErrorHandler : UniffiRustCallStatusErrorHandler<Core
     UniffiLib.uniffi_sealctl_app_fn_func_app_rules_version(
     
         _status)
+}
+    )
+    }
+    
+
+        /**
+         * The Activity row of `entry`; `machine` is the paired machine it came from, `None` when it
+         * is not (or no longer) paired.
+         */ fun `activityRow`(`entry`: UsageEntry, `machine`: Machine?): ActivityRow {
+            return FfiConverterTypeActivityRow.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_func_activity_row(
+    
+        
+        FfiConverterTypeUsageEntry.lower(`entry`),
+        FfiConverterOptionalTypeMachine.lower(`machine`),_status)
 }
     )
     }

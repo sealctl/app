@@ -22,7 +22,7 @@ struct SettingsTab: View {
             SectionLabel("Words")
             if let w = s.words {
                 HStack(spacing: 0) {
-                    Text("Words ").foregroundStyle(Palette.ink2)
+                    Text("Seed ").foregroundStyle(Palette.ink2)
                     MonoText(w.fingerprint, weight: .semibold)
                     Text(" · written on \(w.writtenOn) · next check \(addDays(date: w.lastCheck ?? w.writtenOn, days: 365))")
                         .foregroundStyle(Palette.ink2)

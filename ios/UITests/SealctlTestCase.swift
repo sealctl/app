@@ -217,7 +217,7 @@ class SealctlTestCase: XCTestCase {
             if page < 3 { tap("Next") }
         }
         see("Now fill in the card")
-        see("Words fingerprint:")
+        see("Seed fingerprint:")
         tap("I've written all 24")
         for k in 1...3 {
             see("Check your card · \(k) of 3")
@@ -284,7 +284,7 @@ class SealctlTestCase: XCTestCase {
         tap("Restore")
         see("Type your 24 words")
         typeWords(Env.vectorWords)
-        see("These are words", 20)
+        see("This is seed", 20)
         see("Does your card say qHWf?")
         tap("Yes")
         faceID(then: "Found your backup", 30)

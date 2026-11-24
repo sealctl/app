@@ -339,6 +339,7 @@ impl Store {
             repo: ctx.repo.as_ref().map(|r| r.name.clone()),
             command: Some(ctx.command.clone()).filter(|c| !c.is_empty()),
             outcome: outcome.to_owned(),
+            kind: subject_kind(request),
         };
         insert_usage(&c, &entry)?;
         let month = local_month(at, utc_offset_secs);
@@ -571,6 +572,8 @@ impl Store {
                     .map(|r| r.rsplit('/').next().unwrap_or(r).to_owned()),
                 command: Some(e.command.clone()).filter(|c| !c.is_empty()),
                 outcome: "in_session".into(),
+                // the JSON of a resent entry must equal what an earlier version stored
+                kind: None,
             };
             if e.time > 0 && usage_recorded(&c, &entry, before)? {
                 continue;
@@ -747,6 +750,20 @@ pub fn subject_label(request: &Request) -> String {
         return format!("{} {}", i.purpose, i.id);
     }
     String::new()
+}
+
+/// What [`subject_label`] names, in the same order: the subject's kind (`secret`, `volume`,
+/// `backup`, `ssh`, `machine`), `secret` for a secret name, the item's purpose for
+/// `"<purpose> <id>"`, or `None` when the label is empty.
+pub fn subject_kind(request: &Request) -> Option<String> {
+    let ctx = request.ctx().unwrap_or_default();
+    if let Some(s) = ctx.subject.as_ref().filter(|s| !s.name.is_empty()) {
+        return Some(s.kind.clone()).filter(|k| !k.is_empty());
+    }
+    if !ctx.names.is_empty() || request.uses().first().is_some_and(|u| !u.names.is_empty()) {
+        return Some("secret".into());
+    }
+    request.items().first().map(|i| i.purpose.clone())
 }
 
 #[uniffi::export]
@@ -2452,6 +2469,82 @@ mod tests {
         .unwrap();
         assert_eq!(st.usage(None, None, 100).unwrap().len(), 4);
         assert_eq!(total(&st), 4);
+    }
+
+    #[test]
+    fn the_usage_log_records_what_its_key_names() {
+        use sealctl_core::wire::{AgentUse, RequestContext, RequestItem, Subject};
+        let st = store();
+        let m = paired(&st);
+        let t = TEST_EPOCH_MS - 60_000;
+        let ctx = |subject: Option<(&str, &str)>, cmd: &str| {
+            Some(RequestContext {
+                command: cmd.into(),
+                subject: subject.map(|(k, n)| Subject {
+                    kind: k.into(),
+                    name: n.into(),
+                }),
+                ..RequestContext::default()
+            })
+        };
+        let item = |p: &str| RequestItem {
+            purpose: p.into(),
+            id: "a7c3e9f1-2b4d-4e6f-8a0c-1d3e5f7a9b42".into(),
+            ..RequestItem::default()
+        };
+        let cases: Vec<(Arc<Request>, &str, Option<&str>)> = vec![
+            (
+                request_with(&m, "keys", t, |b| {
+                    b.ctx = ctx(Some(("volume", "safe")), "");
+                    b.keys = vec![item("volume")];
+                }),
+                "safe",
+                Some("volume"),
+            ),
+            (
+                request_with(&m, "keys", t + 1, |b| {
+                    b.lvl = Some(2);
+                    b.ctx = ctx(Some(("machine", "seal")), "seal volume safe x");
+                    b.keys = vec![item("volume")];
+                }),
+                "seal",
+                Some("machine"),
+            ),
+            (
+                request_with(&m, "open", t + 2, |b| {
+                    b.ctx = ctx(None, "sealctl unseal");
+                    b.keys = vec![item("secrets")];
+                }),
+                "secrets a7c3e9f1-2b4d-4e6f-8a0c-1d3e5f7a9b42",
+                Some("secrets"),
+            ),
+            (
+                request_at(
+                    &m,
+                    "agent",
+                    t + 3,
+                    vec![AgentUse {
+                        agent: "claude".into(),
+                        repository: "r".into(),
+                        names: vec!["shop/K".into()],
+                    }],
+                ),
+                "shop/K",
+                Some("secret"),
+            ),
+        ];
+        for (req, key, kind) in cases {
+            st.answered(req, "once".into(), true, false, None, 0)
+                .unwrap();
+            let u = st.usage(None, None, 1).unwrap().remove(0);
+            assert_eq!((u.key.as_str(), u.kind.as_deref()), (key, kind));
+        }
+        // Without a kind, the JSON is what versions before it wrote: a session's use a machine
+        // reports again is still found as already recorded.
+        let old = r#"{"time":1,"machine":"m","key":"safe","agent":null,"repo":null,"command":null,"outcome":"once"}"#;
+        let e: UsageEntry = serde_json::from_str(old).unwrap();
+        assert_eq!(e.kind, None);
+        assert_eq!(serde_json::to_string(&e).unwrap(), old);
     }
 
     #[test]

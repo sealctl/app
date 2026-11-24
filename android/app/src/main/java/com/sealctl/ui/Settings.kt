@@ -82,7 +82,7 @@ fun SettingsTab() {
         SectionLabel("Words")
         if (words != null) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Body("Words "); Mono(words.fingerprint, weight = FontWeight.SemiBold)
+                Body("Seed "); Mono(words.fingerprint, weight = FontWeight.SemiBold)
                 Body(" · written on ${words.writtenOn} · next check ${com.sealctl.core.app.addDays(words.lastCheck ?: words.writtenOn, 365)}")
             }
         }

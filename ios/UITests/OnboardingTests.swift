@@ -17,7 +17,7 @@ final class OnboardingTests: SealctlTestCase {
         see("Type your 24 words")
         see("Four letters are enough. Each word completes itself.")
         typeWords(Env.vectorWords)
-        see("These are words", 20)
+        see("This is seed", 20)
         see("Does your card say qHWf?")
         tap("No, check again")
         see("Type your 24 words")

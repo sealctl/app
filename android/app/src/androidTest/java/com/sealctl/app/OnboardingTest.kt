@@ -52,7 +52,7 @@ class OnboardingTest {
                 rule.waitForIdle()
             }
         }
-        waitFor("These are words")
+        waitFor("This is seed")
         rule.onNodeWithText("Does your card say qHWf?").assertIsDisplayed()
         rule.onNodeWithText("No, check again").performClick()
         rule.onNodeWithText("Type your 24 words").assertIsDisplayed()

@@ -303,6 +303,16 @@ public enum Texts {
         }
     }
 
+    // MARK: Activity (11.12)
+
+    /// The second line of an Activity row (`activityRow` in the shared crate makes the parts).
+    public static func activityDetails(_ row: ActivityRow) -> String { row.details.joined(separator: " · ") }
+
+    /// One label for an Activity row, read in order: time, what was used, outcome, details.
+    public static func activityLabel(_ time: String, _ row: ActivityRow) -> String {
+        ([time, row.subject, row.outcome] + row.details).joined(separator: ", ")
+    }
+
     // MARK: formatting
 
     public static func time(_ ms: Int64) -> String {

@@ -242,7 +242,11 @@ struct ActivityList: View {
                 let order = entries.map { Texts.mediumDate(Int64($0.time)) }.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
                 ForEach(order, id: \.self) { day in
                     SectionLabel(day)
-                    ForEach(Array((days[day] ?? []).enumerated()), id: \.offset) { _, u in row(u, e) }
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(Array((days[day] ?? []).enumerated()), id: \.offset) { _, u in
+                            ActivityLine(time: Texts.time(Int64(u.time)), row: activityRow(entry: u, machine: e.machine(u.machine)))
+                        }
+                    }
                 }
             }
         }
@@ -265,22 +269,40 @@ struct ActivityList: View {
         f.setLocalizedDateFormatFromTemplate("MMMM")
         return f.string(from: d)
     }
+}
 
-    private func row(_ u: UsageEntry, _ e: AppEngine) -> some View {
-        let name = e.machine(u.machine).map(e.displayName) ?? String(u.machine.prefix(8))
-        let outcome: String = switch u.outcome {
-        case "one_tap": "One tap"
-        case "automatic": "Answered by itself"
-        case "in_session": "In session"
-        case "once": "Allowed once"
-        case "denied": "Denied"
-        case "expired": "Expired"
-        case "confirmed": "Confirmed"
-        default: u.outcome
+/// One use (11.12): the time, what was used and the outcome, then the details in muted text.
+struct ActivityLine: View {
+    let time: String
+    let row: ActivityRow
+    @ScaledMetric(relativeTo: .subheadline) private var timeWidth: CGFloat = 52
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
+            Text(verbatim: time).font(.subheadline).monospacedDigit().foregroundStyle(Palette.ink2)
+                .frame(width: timeWidth, alignment: .leading)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(verbatim: row.subject).foregroundStyle(Palette.ink)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Text(verbatim: row.outcome).font(.subheadline).foregroundStyle(tone)
+                }
+                if !row.details.isEmpty {
+                    Text(verbatim: Texts.activityDetails(row)).font(.footnote).foregroundStyle(Palette.muted)
+                }
+            }
         }
-        let parts = [Texts.time(Int64(u.time))] + [u.key.nonEmpty, u.agent, u.repo, u.command].compactMap { $0 }.map { shown($0, Texts.maxLine) } + [name, outcome]
-        return MonoText(parts.joined(separator: " · "), style: .footnote, color: Palette.ink2)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(verbatim: Texts.activityLabel(time, row)))
+    }
+
+    private var tone: Color {
+        switch row.tone {
+        case .declined: Palette.accent
+        case .muted: Palette.muted
+        case .normal: Palette.ink2
+        }
     }
 }
 
@@ -305,7 +327,7 @@ struct InventoryList: View {
                         HStack(spacing: 4) {
                             Text(purposeName(i.purpose)).fontWeight(.semibold).foregroundStyle(Palette.ink)
                             MonoText("\(i.id.prefix(4))…\(i.id.suffix(2))", style: .subheadline)
-                            Text("· words").foregroundStyle(Palette.ink2)
+                            Text("· seed").foregroundStyle(Palette.ink2)
                             MonoText(i.words, style: .subheadline)
                         }
                         .accessibilityElement(children: .combine)
@@ -315,7 +337,7 @@ struct InventoryList: View {
                         }
                         MutedText("First used \(Texts.isoDate(Int64(i.firstUse))) · last used \(Texts.ago(Int64(i.lastUse)))")
                         if i.stale { Text("Not seen since \(Texts.isoDate(Int64(i.lastUse)))").foregroundStyle(Palette.waiting) }
-                        if let current, i.words != current { Text("Words \(i.words) (retired)").foregroundStyle(Palette.muted) }
+                        if let current, i.words != current { Text("Seed \(i.words) (retired)").foregroundStyle(Palette.muted) }
                     }
                 }
             }

@@ -315,8 +315,9 @@ public actor RelayClient {
         return o["by"].string
     }
 
-    public func cancelDelayed(_ id: String) async throws {
-        try await call("POST", "\(try await phone())/delayed/\(id)/cancel", userTapped: true)
+    /// `userTapped`: the person tapped Cancel; false for a cancel the app sends again.
+    public func cancelDelayed(_ id: String, userTapped: Bool = true) async throws {
+        try await call("POST", "\(try await phone())/delayed/\(id)/cancel", userTapped: userTapped)
     }
 
     @discardableResult

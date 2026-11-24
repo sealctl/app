@@ -176,6 +176,8 @@ class Engine(
     )
     /** Requests whose answer is on its way (SPEC.md 8.5). */
     private val inFlight = InFlight()
+    /** Cancels sent again from the relay's list, and what the relay answered (SPEC.md 11.23). */
+    private val cancelResends = CancelResends()
     /** Exits from trusted places so far, to tell whether one came while an answer was on its way. */
     private val placeExits = AtomicInteger(0)
     private var uploadJob: Job? = null
@@ -900,8 +902,9 @@ class Engine(
                 if (d.state == "cancelled") delayedCancelled(d.id, d.by)
                 else applyLocal(LocalEvent.PutDelayed(mine.copy(state = d.state)))
             } else if (Plans.cancelAgain(mine, d.state)) {
-                // Cancelled here while the relay did not answer: it still holds the record.
-                runCatching { relay.cancelDelayed(d.id) }
+                // Cancelled here while the relay did not answer: it still holds the record. Not
+                // tapped now, so the rate-limit window holds it back too.
+                Plans.resendCancel(d.id, cancelResends) { relay.cancelDelayed(d.id, userTapped = false) }
             }
         }
         // However the cancel arrived (socket, push, this list), its plan hands out no keys.

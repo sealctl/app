@@ -46,87 +46,123 @@ final class PushTests: SealctlTestCase {
         // suspended, got the request over its socket and posted the notification itself.
         let wasRewritten = rewritten.exists
         XCTContext.runActivity(named: wasRewritten ? "the request's own text (extension or app)" : "notification left as the relay sent it") { _ in }
-        guard openFromNotification(springboard, title: wasRewritten ? "Allow OPENAI_API_KEY?" : "Waiting for your phone") else { return }
+        // Either notification opens this request: both carry its id.
+        guard openFromNotification(springboard, titles: ["Allow OPENAI_API_KEY?", "Waiting for your phone"]) else { return }
         card("Allow OPENAI_API_KEY?", 30)
         tap("Allow once")
         XCTAssertEqual(job.wait(30).0, 0)
     }
 
-    /// Opens the request from its notification: one tap on the banner if it can be tapped, else
-    /// one tap on its row in Notification Center, where it stays until it is handled.
+    /// Opens the request from its notification: a tap on its banner when one stands still on
+    /// screen, else a tap on its row in Notification Center, where it stays until it is handled.
+    /// `titles` are the texts the request's notifications can have.
     ///
     /// A request can show two banners in a row. When the app's relay socket is still open a moment
     /// after it went to the background, the request reaches it there and the app posts its own
     /// notification ("Allow OPENAI_API_KEY?"); the pushed one follows a few seconds later
-    /// (unsigned, the extension leaves the relay's "Waiting for your phone"). In both failed
-    /// runs (45281524313, 45276400487) the fake relay logged the request "sent to 1 phone
-    /// socket(s)"; in passing runs, 0. While one banner replaces the other, neither can be
-    /// tapped, and a drag from the top edge while a banner is up does not open Notification
-    /// Center (XCTest logged "Interrupting element BannerNotification … NotificationShortLookView"
-    /// and the tree after the drag was the home screen). So the banner is tapped whenever it can
-    /// be, any banner is let go before the drag, and the drag counts only when the row shows; it
-    /// is made again, after the home button closes whatever it opened, up to three times.
+    /// (unsigned, the extension leaves the relay's "Waiting for your phone"). Each failed run
+    /// (45281524313, 45276400487, 45315290307) logged the request "sent to 1 phone socket(s)".
     ///
-    /// The notification itself is tapped once only: if the app is not in the foreground after
-    /// it, the failure carries springboard's UI tree (and so its screenshot is kept), and a
-    /// crash after the tap is not hidden by a second one.
-    private func openFromNotification(_ springboard: XCUIApplication, title: String,
+    /// - A banner is tapped by coordinate, and only when its frame is whole on screen and the
+    ///   same in two reads: a banner sliding away can still report itself hittable, and an
+    ///   element tap then fails the test outright (45315290307: "Failed to scroll to visible …
+    ///   BannerNotification {{164.3, -103.3}, {73.3, 17.9}}", then "no matches found").
+    /// - A drag from the top edge while any banner is up does not open Notification Center
+    ///   (45281524313: "Interrupting element BannerNotification", then the home screen), so every
+    ///   banner goes first. A drag counts when a row of the request, or a stack holding one,
+    ///   shows; a stack is expanded. Otherwise the home button closes what the drag opened and
+    ///   the drag is made again, up to three times.
+    ///
+    /// A tap that brings no foreground is tried again only while the app still runs (a banner
+    /// that left under the tap): if the app is not running, it crashed, and the failure says so
+    /// instead of a second tap hiding it. Failures carry springboard's UI tree (and so the
+    /// screenshot is kept).
+    private func openFromNotification(_ springboard: XCUIApplication, titles: [String],
                                       file: StaticString = #filePath, line: UInt = #line) -> Bool {
-        // The notification itself, not a stack's summary ("…, 2 more notifications").
-        let match = NSPredicate(format: "label CONTAINS %@ AND NOT (label CONTAINS[c] 'more notification')", title)
-        let notification = springboard.descendants(matching: .any).matching(match).firstMatch
+        let either = NSCompoundPredicate(orPredicateWithSubpredicates: titles.map { NSPredicate(format: "label CONTAINS %@", $0) })
+        let more = NSPredicate(format: "label CONTAINS[c] 'more notification'")
+        // A notification itself, and a stack's summary ("…, 2 more notifications").
+        let row = springboard.descendants(matching: .any)
+            .matching(NSCompoundPredicate(andPredicateWithSubpredicates: [either, NSCompoundPredicate(notPredicateWithSubpredicate: more)])).firstMatch
+        let stack = springboard.descendants(matching: .any)
+            .matching(NSCompoundPredicate(andPredicateWithSubpredicates: [either, more])).firstMatch
         // Any banner, this request's or another: the id XCTest reports for an interrupting banner.
         let banner = springboard.descendants(matching: .any).matching(identifier: "NotificationShortLookView").firstMatch
-        let deadline = Date().addingTimeInterval(60)
-        // With Notification Center closed, the notification's text shows only on a banner.
-        func bannerUp() -> Bool { banner.exists || notification.exists }
+        let screen = springboard.windows.firstMatch.frame
+        let deadline = Date().addingTimeInterval(90)
+        // With Notification Center closed, the request's text shows only on a banner.
+        func bannerUp() -> Bool { banner.exists || row.exists || stack.exists }
+        func poll(until end: Date, while busy: () -> Bool) {
+            while busy() && Date() < min(end, deadline) { Thread.sleep(forTimeInterval: 0.25) }
+        }
+        /// True when the tap brought the app to the foreground; false when it may have missed.
+        func opened(_ via: String) -> Bool? {
+            if app.wait(for: .runningForeground, timeout: 15) { return true }
+            if app.state == .notRunning {
+                XCTFail("the app is not running after the tap (\(via))\n\(uiTree(3000, of: springboard))", file: file, line: line)
+                return nil
+            }
+            return false
+        }
 
-        // Banners: tap this one as soon as it can be tapped, until none is up.
-        var via = "banner"
-        var tapped = false
+        // Banners: tap one of the request's as soon as it stands still on screen, until none is up.
+        var missed = false
         while bannerUp() && Date() < deadline {
-            if notification.exists && notification.isHittable {
-                notification.tap()
-                tapped = true
+            if tapWhenStill(row, springboard, screen) {
+                guard let ok = opened("banner") else { return false }
+                if ok { return true }
+                missed = true
                 break
             }
             Thread.sleep(forTimeInterval: 0.25)
         }
 
-        if !tapped {
-            via = "Notification Center"
-            // From the top edge on the left half: Notification Center (the right half is Control Center).
-            let top = springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.005))
-            let down = springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.75))
-            var drags = 0
-            var shown = false
-            while !shown && drags < 3 && Date() < deadline {
-                if drags > 0 {
-                    // Closes what the last drag opened (Notification Center without the row, a
-                    // banner's long look, search); then any new banner goes before the next drag.
-                    XCUIDevice.shared.press(.home)
-                    let closed = Date().addingTimeInterval(10)
-                    while bannerUp() && Date() < closed { Thread.sleep(forTimeInterval: 0.25) }
-                }
-                let quiet = min(deadline, Date().addingTimeInterval(20))
-                while bannerUp() && Date() < quiet { Thread.sleep(forTimeInterval: 0.25) }
-                top.press(forDuration: 0.1, thenDragTo: down)
-                drags += 1
-                shown = notification.waitForExistence(timeout: 10)
+        // Notification Center. From the top edge on the left half (the right half is Control Center).
+        let top = springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.005))
+        let down = springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.75))
+        var drags = 0
+        while drags < 3 && Date() < deadline {
+            if drags > 0 || missed {
+                // Closes what the last drag or a missed tap opened (Notification Center without
+                // the row, a long look, search, another app).
+                XCUIDevice.shared.press(.home)
+                poll(until: Date().addingTimeInterval(10), while: bannerUp)
             }
-            guard shown else {
-                XCTFail("not in Notification Center after \(drags) drags: \(title)\n\(uiTree(3000, of: springboard))",
-                        file: file, line: line)
-                return false
+            poll(until: Date().addingTimeInterval(20), while: bannerUp)
+            top.press(forDuration: 0.1, thenDragTo: down)
+            drags += 1
+            poll(until: Date().addingTimeInterval(10)) { !row.exists && !stack.exists }
+            if !row.exists && stack.exists {
+                poll(until: Date().addingTimeInterval(10)) { !tapWhenStill(stack, springboard, screen) }
+                poll(until: Date().addingTimeInterval(10)) { !row.exists }
             }
-            waitHittable(notification, 5)
-            notification.tap()
+            var tapped = false
+            poll(until: Date().addingTimeInterval(10)) {
+                tapped = row.exists && tapWhenStill(row, springboard, screen)
+                return !tapped
+            }
+            if tapped {
+                guard let ok = opened("Notification Center") else { return false }
+                if ok { return true }
+            }
         }
-        guard app.wait(for: .runningForeground, timeout: 15) else {
-            XCTFail("the app did not open from the notification (\(via))\n\(uiTree(3000, of: springboard))",
-                    file: file, line: line)
-            return false
+        XCTFail("not opened from Notification Center after \(drags) drags: \(titles.joined(separator: " / "))\n\(uiTree(3000, of: springboard))",
+                file: file, line: line)
+        return false
+    }
+
+    /// Taps the middle of `e` by coordinate when its frame is whole on screen and the same in two
+    /// reads 0.3 s apart. Reads go through snapshots, which fail softly when the element has gone,
+    /// and a coordinate tap never fails the test: false when it was not tapped.
+    private func tapWhenStill(_ e: XCUIElement, _ springboard: XCUIApplication, _ screen: CGRect) -> Bool {
+        func frame() -> CGRect? {
+            guard let f = try? e.snapshot().frame, !f.isEmpty, screen.contains(f) else { return nil }
+            return f
         }
+        guard let first = frame() else { return false }
+        Thread.sleep(forTimeInterval: 0.3)
+        guard let still = frame(), still == first else { return false }
+        springboard.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: still.midX, dy: still.midY)).tap()
         return true
     }
 

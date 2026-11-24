@@ -47,6 +47,8 @@ public final class AppEngine {
     @ObservationIgnored var phoneKeysCache: PhoneKeys?
     @ObservationIgnored let keyBox: KeyBox
     @ObservationIgnored var assemblers: [String: PlanAssembler] = [:]
+    /// Cancels sent again from the relay's list, and what the relay answered (SPEC.md 11.23).
+    @ObservationIgnored var cancelResends = CancelResends()
     @ObservationIgnored let approvals = SerialQueue()
     @ObservationIgnored var socket: PhoneSocket?
     @ObservationIgnored var uploadTask: Task<Void, Never>?

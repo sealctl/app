@@ -262,8 +262,9 @@ class RelayClient(
         null
     }
 
-    suspend fun cancelDelayed(id: String) {
-        call("POST", "${phone()}/delayed/$id/cancel", userTapped = true)
+    /** [userTapped]: the person tapped Cancel; false for a cancel sent again by the app. */
+    suspend fun cancelDelayed(id: String, userTapped: Boolean = true) {
+        call("POST", "${phone()}/delayed/$id/cancel", userTapped = userTapped)
     }
 
     suspend fun finishDelayed(id: String): JsonObject = call("POST", "${phone()}/delayed/$id/finish", userTapped = true)

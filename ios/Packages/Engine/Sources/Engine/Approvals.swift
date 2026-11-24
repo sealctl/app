@@ -599,6 +599,13 @@ extension AppEngine {
                     if d.state == "cancelled" { m.cancelledBy = d.by }
                     await applyLocal(.putDelayed(action: m))
                     if d.state == "cancelled" { await notifier.remove(ids: ["ready-\(d.id)"]) }
+                } else if mine.state == "cancelled" && mine.cancelledBy == "phone"
+                            && (d.state == "waiting" || d.state == "released") && cancelResends.due(d.id, now: now()) {
+                    // Cancelled here while the relay did not answer: it still holds the record. Not
+                    // tapped now, so the rate-limit window holds it back too.
+                    var failure: Error?
+                    do { try await relay.cancelDelayed(d.id, userTapped: false) } catch { failure = error }
+                    cancelResends.answered(d.id, error: failure, now: now())
                 }
             } else {
                 await applyLocal(.putDelayed(action: DelayedAction(
@@ -631,32 +638,37 @@ extension AppEngine {
         }
     }
 
-    /// Cancel needs no biometrics: stopping is always allowed.
+    /// Cancel needs no biometrics: stopping is always allowed. The cancel is recorded here
+    /// first, so the plan hands out no more keys whatever the relay answers: `404 gone` (the
+    /// machine already fetched the record, or it expired) or no answer at all (fail closed). A
+    /// cancel the relay did not get is sent again from its list (`refreshDelayed`). Returns
+    /// whether the relay took it.
     @discardableResult
     public func cancelDelayed(_ id: String) async -> Bool {
         let d = local.delayed.first { $0.id == id }
-        do {
-            try await relay.cancelDelayed(id)
-        } catch {
-            relayFailed(error)
-            return false
-        }
-        if var m = d {
+        if var m = d, m.state != "cancelled" {
             m.state = "cancelled"
             m.cancelledBy = "phone"
             await applyLocal(.putDelayed(action: m))
         }
-        if var p = local.plans.first(where: { $0.delayId == id }) {
+        for var p in local.plans where p.delayId == id && p.state != "cancelled" {
             p.state = "cancelled"
             await applyLocal(.putPlan(plan: p))
         }
         await notifier.remove(ids: ["ready-\(id)"])
+        delayedTick = nowMs()
+        var took = true
+        do {
+            try await relay.cancelDelayed(id)
+        } catch {
+            relayFailed(error)
+            took = false
+        }
         Task {
             await self.sendNotice(what: d?.what ?? "unseal_all", state: "cancelled", machine: d?.machine, delayId: id,
                                   at: d.map { Int64($0.releaseAt) })
         }
-        delayedTick = nowMs()
-        return true
+        return took
     }
 
     /// Starts a level 3 action on the phone: nil (go ahead now) at a trusted place, else the
@@ -734,5 +746,46 @@ extension AppEngine {
 
     func nextSeq(_ machine: String) async -> UInt64 {
         (try? await db.run { try $0.nextMessageSeq(machine: machine) }) ?? UInt64(nowMs())
+    }
+}
+
+/// The cancels this phone sends again from the relay's list, for this run of the app (SPEC.md
+/// 11.23; client loops pause after an error and honour `429`). A cancel the relay took, or one
+/// that got an answer that will not change (`404 gone`: the record is gone; `403`; `409`; any
+/// other `4xx`), is not sent again. A `429` waits out its window (`retryAfter`); no answer, a
+/// `5xx` or a `401` waits 15 s, twice as long after each further failure, at most 15 minutes.
+struct CancelResends {
+    private var done: Set<String> = []
+    /// Per id: when the next try may go out, and the failures so far.
+    private var waits: [String: (at: Int64, failures: Int)] = [:]
+
+    func due(_ id: String, now: Int64) -> Bool {
+        !done.contains(id) && now >= (waits[id]?.at ?? 0)
+    }
+
+    mutating func answered(_ id: String, error: Error?, now: Int64) {
+        let failures = waits[id]?.failures ?? 0
+        if error.map(Self.isFinal) ?? true {
+            done.insert(id)
+            waits[id] = nil
+        } else if case .rateLimited(let until, _)? = error as? RelayError {
+            waits[id] = (max(until, now), failures)
+        } else {
+            waits[id] = (now + Self.backoffMs(failures + 1), failures + 1)
+        }
+    }
+
+    /// An answer the same call would get again.
+    static func isFinal(_ error: Error) -> Bool {
+        switch error as? RelayError {
+        case .http(let status, _, _)?: return (400...499).contains(status) && ![401, 408, 429].contains(status)
+        case .conflict?: return true
+        default: return false
+        }
+    }
+
+    /// The wait after `failures` tries with no usable answer: 15 s doubling, at most 15 minutes.
+    static func backoffMs(_ failures: Int) -> Int64 {
+        min(Int64(15_000) << Int64(min(max(failures - 1, 0), 6)), 15 * 60_000)
     }
 }

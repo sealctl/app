@@ -2,6 +2,9 @@ package com.sealctl.app
 
 import com.sealctl.core.app.DelayedAction
 import com.sealctl.core.app.PlanApprovalRecord
+import com.sealctl.relay.RateLimitedException
+import com.sealctl.relay.RelayException
+import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * Which approved plan answers a machine's later key requests (SPEC.md 9.6). A plan stops
@@ -39,5 +42,93 @@ internal object Plans {
     fun toCancel(plans: List<PlanApprovalRecord>, delayed: List<DelayedAction>): List<PlanApprovalRecord> {
         val cancelled = delayed.filter { it.state == "cancelled" }.map { it.id }.toSet()
         return plans.filter { it.state != "cancelled" && it.delayId != null && it.delayId in cancelled }
+    }
+
+    /**
+     * What a cancel from this phone records (SPEC.md 11.23): the delayed record [id], cancelled
+     * by the phone (unless it is already cancelled), and every plan waiting on it.
+     */
+    fun cancelledHere(delayed: List<DelayedAction>, plans: List<PlanApprovalRecord>, id: String): Pair<DelayedAction?, List<PlanApprovalRecord>> =
+        delayed.firstOrNull { it.id == id && it.state != "cancelled" }?.copy(state = "cancelled", cancelledBy = "phone") to
+            plans.filter { it.delayId == id && it.state != "cancelled" }.map { it.copy(state = "cancelled") }
+
+    /**
+     * A cancel from this phone: [record] writes [cancelledHere] first, then [relayCancel] asks
+     * the relay. The plan hands out no more keys whatever the relay answers: `404 gone` (the
+     * machine already fetched the record, or it expired) or no answer at all (fail closed).
+     * Returns the relay's error, or null when the relay took the cancel.
+     */
+    suspend fun cancelFromPhone(relayCancel: suspend () -> Unit, record: () -> Unit): Exception? {
+        record()
+        return try {
+            relayCancel()
+            null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            e
+        }
+    }
+
+    /**
+     * A record this phone cancelled that the relay's list still shows live ([relayState]
+     * `waiting` or `released`): the relay did not get that cancel, so it is sent again.
+     */
+    fun cancelAgain(mine: DelayedAction, relayState: String): Boolean =
+        mine.state == "cancelled" && mine.cancelledBy == "phone" && (relayState == "waiting" || relayState == "released")
+
+    /**
+     * Sends the cancel of [id] again ([cancelAgain]) when [resends] says it is due, and keeps
+     * what the relay answered.
+     */
+    suspend fun resendCancel(id: String, resends: CancelResends, send: suspend () -> Unit) {
+        if (!resends.due(id)) return
+        val error = try {
+            send()
+            null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            e
+        }
+        resends.answered(id, error)
+    }
+}
+
+/**
+ * The cancels this phone sends again from the relay's list, for this run of the app (SPEC.md
+ * 11.23; client loops pause after an error and honour `429`). A cancel the relay took, or one
+ * that got an answer that will not change (`404 gone`: the record is gone; `403`; any other
+ * `4xx`), is not sent again. A `429` waits out its window (`retryAfter`); no answer, a `5xx` or
+ * a `401` waits 15 s, twice as long after each further failure, at most 15 minutes.
+ */
+internal class CancelResends(private val now: () -> Long = System::currentTimeMillis) {
+    private val done = HashSet<String>()
+    /** Per id: when the next try may go out, and the failures so far. */
+    private val waits = HashMap<String, Pair<Long, Int>>()
+
+    @Synchronized
+    fun due(id: String): Boolean = id !in done && now() >= (waits[id]?.first ?: 0L)
+
+    @Synchronized
+    fun answered(id: String, error: Exception?) {
+        val failures = waits[id]?.second ?: 0
+        when {
+            error == null || isFinal(error) -> {
+                done += id
+                waits -= id
+            }
+            error is RateLimitedException -> waits[id] = maxOf(error.until, now()) to failures
+            else -> waits[id] = now() + backoffMs(failures + 1) to failures + 1
+        }
+    }
+
+    companion object {
+        /** An answer the same call would get again. */
+        fun isFinal(e: Exception): Boolean =
+            e is RelayException && e.status in 400..499 && e.status != 401 && e.status != 408 && e.status != 429
+
+        /** The wait after [failures] tries with no usable answer: 15 s doubling, at most 15 minutes. */
+        fun backoffMs(failures: Int): Long = minOf(15_000L shl (failures - 1).coerceIn(0, 6), 15 * 60_000L)
     }
 }

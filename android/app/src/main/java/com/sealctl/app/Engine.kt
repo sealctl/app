@@ -180,6 +180,8 @@ class Engine(
     )
     /** Requests whose answer is on its way (SPEC.md 8.5). */
     private val inFlight = InFlight()
+    /** Cancels sent again from the relay's list, and what the relay answered (SPEC.md 11.23). */
+    private val cancelResends = CancelResends()
     /** Exits from trusted places so far, to tell whether one came while an answer was on its way. */
     private val placeExits = AtomicInteger(0)
     private var uploadJob: Job? = null
@@ -930,6 +932,10 @@ class Engine(
             } else if (mine.state != d.state && mine.state != "cancelled") {
                 if (d.state == "cancelled") delayedCancelled(d.id, d.by)
                 else applyLocal(LocalEvent.PutDelayed(mine.copy(state = d.state)))
+            } else if (Plans.cancelAgain(mine, d.state)) {
+                // Cancelled here while the relay did not answer: it still holds the record. Not
+                // tapped now, so the rate-limit window holds it back too.
+                Plans.resendCancel(d.id, cancelResends) { relay.cancelDelayed(d.id, userTapped = false) }
             }
         }
         // However the cancel arrived (socket, push, this list), its plan hands out no keys.
@@ -964,20 +970,23 @@ class Engine(
         delayedTick.value = System.currentTimeMillis()
     }
 
-    /** Cancel needs no biometrics: stopping is always allowed. */
+    /**
+     * Cancel needs no biometrics: stopping is always allowed. The cancel is recorded here
+     * whatever the relay answers; one the relay did not get is sent again from its list
+     * ([refreshDelayed]). Returns whether the relay took it.
+     */
     suspend fun cancelDelayed(id: String): Boolean {
         val d = local.value.delayed.firstOrNull { it.id == id }
-        return try {
-            relay.cancelDelayed(id)
-            d?.let { applyLocal(LocalEvent.PutDelayed(it.copy(state = "cancelled", cancelledBy = "phone"))) }
-            local.value.plans.firstOrNull { it.delayId == id }?.let { applyLocal(LocalEvent.PutPlan(it.copy(state = "cancelled"))) }
-            scope.launch { sendNotice(d?.what ?: "unseal_all", "cancelled", d?.machine, id, d?.releaseAt?.toLong()) }
+        val failed = Plans.cancelFromPhone(relayCancel = { relay.cancelDelayed(id) }) {
+            val (mine, plans) = Plans.cancelledHere(local.value.delayed, local.value.plans, id)
+            mine?.let { applyLocal(LocalEvent.PutDelayed(it)) }
+            for (p in plans) applyLocal(LocalEvent.PutPlan(p))
             takeBackReady(id)
             delayedTick.value = System.currentTimeMillis()
-            true
-        } catch (e: Exception) {
-            relayFailed(e as? Exception ?: Exception()); false
         }
+        failed?.let { relayFailed(it) }
+        scope.launch { sendNotice(d?.what ?: "unseal_all", "cancelled", d?.machine, id, d?.releaseAt?.toLong()) }
+        return failed == null
     }
 
     /** A cancelled action on the phone: no "Ready" note at its end (SPEC.md 11.23). */

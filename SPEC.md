@@ -1754,9 +1754,10 @@ Manual checks on each device before each release:
 
 Builds are reproducible from the tag: pinned Xcode, pinned Rust toolchain, Gradle version catalog, committed lock files.
 
-CI today (the table above is the target): `ios.yml` and `supply-chain.yml`. Shape:
+CI today (the table above is the target): `checks.yml`, `ios.yml` and `supply-chain.yml`. Shape:
 - One run per pull request; a new push cancels the old run. Runs on `main`, schedules and manual runs each get a concurrency group of their own, so they are never cancelled or replaced. Every job has `timeout-minutes`.
 - `supply-chain.yml` (jobs `gradle-wrapper`, `gradle-verification`, `cargo`, required on `main` once merged) has no workflow path filter, so its checks always report; a `changes` job reads the pull request's file list and skips the Gradle or Cargo jobs when their files are untouched (a skipped job counts as passed).
+- `checks.yml` (Linux only, no path filter, so its checks always report): jobs `rust-fmt` (`cargo fmt --check`), `rust-clippy` (`clippy --all-targets -D warnings`), `rust-test` (`cargo test` for the workspace), `android-test` (`testDebugUnitTest`, against the host build of `libsealctl_app` through JNA) and `android-lint` (`lintDebug`).
 - `ios.yml` (macOS, about 75 minutes, not required: the free plan runs 5 macOS jobs at a time) keeps its path filter. On Dependabot's pull requests that only change `Cargo.toml`/`Cargo.lock` it builds the core and runs the package and unit tests but skips the UI tests. Other pull requests run the UI tests when `ios/`, `shared/`, `tools/`, `scripts/`, the workflow or the Cargo files change (a `sealctl-core` pin bump changes only the Cargo files but swaps the whole core). They always run on `main` and manual runs.
 
 ### 17.2 Release

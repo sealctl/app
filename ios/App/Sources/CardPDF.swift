@@ -45,7 +45,7 @@ enum CardPDF {
                 cg.strokePath()
             }
             let by = h - margin - 40
-            text("Words fingerprint", margin, by - 10, small, muted)
+            text("Seed fingerprint", margin, by - 10, small, muted)
             for b in 0..<4 { cg.stroke(CGRect(x: margin + 90 + CGFloat(b) * 16, y: by - 12, width: 14, height: 16)) }
             text("Written on", margin + colW, by - 10, small, muted)
             cg.move(to: CGPoint(x: margin + colW + 56, y: by + 4))

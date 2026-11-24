@@ -5,6 +5,7 @@
 
 uniffi::setup_scaffolding!();
 
+pub mod activity;
 pub mod cards;
 pub mod clock;
 pub mod codec;

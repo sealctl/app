@@ -1,6 +1,7 @@
 package com.sealctl.app
 
 import com.sealctl.core.RequestKind
+import com.sealctl.core.app.ActivityRow
 import com.sealctl.core.app.ReplyOption
 import com.sealctl.core.app.displayText
 import java.time.Instant
@@ -255,6 +256,15 @@ object Texts {
         "delete" -> "deleting your relay data."
         else -> "leaving."
     }
+
+    // ---------- Activity (11.12) ----------
+
+    /** The second line of an Activity row ([com.sealctl.core.app.activityRow] makes the parts). */
+    fun activityDetails(row: ActivityRow): String = row.details.joinToString(" · ")
+
+    /** One label for an Activity row, read in order: time, what was used, outcome, details. */
+    fun activityLabel(time: String, row: ActivityRow): String =
+        (listOf(time, row.subject, row.outcome) + row.details).joinToString(", ")
 
     // ---------- formatting ----------
 

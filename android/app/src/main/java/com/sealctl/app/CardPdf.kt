@@ -57,7 +57,7 @@ object CardPdf {
             c.drawLine(x + 90, y + 18, x + colW - 16, y + 18, line)
         }
         val by = h - margin - 40
-        c.drawText("Words fingerprint", margin, by, small)
+        c.drawText("Seed fingerprint", margin, by, small)
         for (b in 0 until 4) c.drawRect(margin + 90 + b * 16, by - 12, margin + 104 + b * 16, by + 4, line)
         c.drawText("Written on", margin + colW, by, small)
         c.drawLine(margin + colW + 56, by + 4, w - margin, by + 4, line)

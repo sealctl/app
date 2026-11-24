@@ -215,7 +215,7 @@ private struct WordsPages: View {
             if page == 3 {
                 Gap(16)
                 TitleText("Now fill in the card")
-                HStack { Text("Words fingerprint:").foregroundStyle(Palette.ink2); MonoText(model.engine?.words.fingerprintText ?? "", style: .title3, weight: .semibold) }
+                HStack { Text("Seed fingerprint:").foregroundStyle(Palette.ink2); MonoText(model.engine?.words.fingerprintText ?? "", style: .title3, weight: .semibold) }
                     .accessibilityElement(children: .combine)
                 HStack { Text("Written on:").foregroundStyle(Palette.ink2); MonoText(Texts.isoDate(nowMs()), style: .title3) }
                     .accessibilityElement(children: .combine)
@@ -400,10 +400,10 @@ private struct ReinstalledView: View {
         Page(onBack: nil) {
             Gap(48)
             Wordmark()
-            TitleText("Continue with words \(fp ?? "")")
+            TitleText("Continue with seed \(fp ?? "")")
             BodyText("This iPhone still holds sealctl words from an earlier install.")
         } bottom: {
-            PrimaryButton("Continue with words \(fp ?? "")") {
+            PrimaryButton("Continue with seed \(fp ?? "")") {
                 Task { _ = await model.engine?.continueAfterReinstall() }
             }
             PlainButton("Start over") { Task { await model.engine?.startOverAfterReinstall() } }
@@ -433,7 +433,7 @@ private struct BackupFoundView: View {
             Wordmark()
             TitleText("Your words are in iCloud Keychain")
             HStack(spacing: 0) {
-                Text("Words ").foregroundStyle(Palette.ink2)
+                Text("Seed ").foregroundStyle(Palette.ink2)
                 MonoText(fp)
                 Text(", saved on \(Texts.isoDate(created)).").foregroundStyle(Palette.ink2)
             }
@@ -535,7 +535,7 @@ private struct RestoreConfirm: View {
         Page(onBack: onNo) {
             Gap(32)
             HStack(spacing: 6) {
-                TitleText("These are words")
+                TitleText("This is seed")
                 MonoText(fp, style: .title2, weight: .semibold)
             }
             .fixedSize(horizontal: false, vertical: true)

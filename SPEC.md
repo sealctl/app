@@ -331,7 +331,7 @@ Secrets are encrypted with AES-256-GCM using Android Keystore keys and stored as
 
 | Event | iPhone | Android |
 | --- | --- | --- |
-| App deleted and installed again | Keychain items usually remain (Apple does not promise this). On first launch the app finds `com.sealctl.root`, asks for Face ID or the passcode, and offers "Continue with words 7Hq3". If the user declines, it deletes the items. State comes back from the relay | Keystore keys and files are gone. Block Store keeps its copy when the user's Google backup is on, so Welcome offers to restore from it. State comes back from the relay |
+| App deleted and installed again | Keychain items usually remain (Apple does not promise this). On first launch the app finds `com.sealctl.root`, asks for Face ID or the passcode, and offers "Continue with seed 7Hq3". If the user declines, it deletes the items. State comes back from the relay | Keystore keys and files are gone. Block Store keeps its copy when the user's Google backup is on, so Welcome offers to restore from it. State comes back from the relay |
 | Passcode or screen lock removed | iOS deletes the root and words items; the app shows `WordsLost` | The app refuses to answer until a screen lock is set |
 | New phone, same Apple Account or Google account | Restore from iCloud Keychain | Restore from Block Store (cloud restore on Pixel from Android 9, on other makers from Android 12) |
 | iPhone to Android or back | The words, typed in | The words, typed in |
@@ -625,7 +625,7 @@ Nothing about the machine, the agent, the key or the sealed request goes through
 | Yearly check due | "Time for the yearly card check. Have your card nearby; it takes a minute." | `.active`, 10:00 local, repeated weekly until done |
 | Words 2 years old | "Your words are 2 years old. Changing them takes about 10 minutes and a new blank card." | `.active`, repeated monthly until done |
 | Machine unseen 90 days | "dev@mbp.example.com hasn't been seen for 90 days. Unpair it?" | `.passive` |
-| Old words requested | "dev@mbp.example.com has an object sealed with words 7Hq3. Open sealctl to move it." | `.active` |
+| Old words requested | "dev@mbp.example.com has an object sealed with seed 7Hq3. Open sealctl to move it." | `.active` |
 | Delay over, action on the phone | "Ready: open sealctl to finish leaving." (or "…to show your words.", "…to delete your relay data.") | `.timeSensitive`, at `releaseAt` |
 | Hand-back report | "dev@mbp.example.com handed back 9 objects. 0 failed." | `.active` |
 
@@ -698,6 +698,7 @@ Wording in this section is exact. Text in quotes is shown as written. `dev@mbp.e
 - Colours from the brand tokens (cool neutrals, one crimson accent): paper `#ffffff` / `#0e121a`, surface `#f6f7f9` / `#151a24`, surface-2 `#eef0f4` / `#1b2130`, ink `#1a2133` / `#eef0f5`, muted `#5f6677` / `#949bad`, border `#e3e6ec` / `#242b3a`, accent sealing wax `#b4232c` / `#ff5c63`, accent soft `#f8e3e5` / `#3b2327`, text on accent `#ffffff` / `#12151c`. Light and dark follow the system. Android's launch window is paper.
 - Status colours are separate from the accent: Open uses green `#157f3c` / `#4cc47c`; Waiting uses amber `#b45309` / `#f0a54a`; Locked uses muted ink. Every status also has its word; colour is never the only signal.
 - Text in the system sans (SF Pro, Roboto). Machine names, key names, commands, paths, tags, the words fingerprint and the wordmark in the system monospace (SF Mono, `FontFamily.Monospace`). No bundled fonts.
+- The words fingerprint is labelled "seed" on screen ("seed 7Hq3", "Seed fingerprint", "Seed 7Hq3 (retired)"); "words" stays for the 24 words themselves ("Show words", "your 24 words", the words backup).
 - Cards have 12-point corners and soft shadows. The primary button is filled with the accent; secondary buttons are outlined; Deny is a plain text button.
 - The wordmark `sealctl` (lower case, monospace, weight 600) sits at the top of Welcome and About.
 - App icon from `brand/app-icon.svg`: the shield and prompt in white on sealing wax, full bleed. iOS 18+ dark variant: shield `#ff5c63` (the dark accent) on `#0e121a`. Tinted variant: the glyph alone. Android adaptive icon: the glyph as foreground, `#b4232c` as background, the glyph as the monochrome layer.
@@ -766,7 +767,7 @@ The paper size defaults to Letter for regions that use it (US, CA, MX, PH, CL, C
 The last page adds:
 
 > **Now fill in the card**
-> Words fingerprint: `7Hq3`
+> Seed fingerprint: `7Hq3`
 > Written on: 2026-11-21
 > [I've written all 24]
 
@@ -839,7 +840,7 @@ iOS: When In Use first, then Always (`requestAlwaysAuthorization`) at the first 
 
 > `sealctl`
 > **Your words are in iCloud Keychain**
-> Words `7Hq3`, saved on 2026-11-02.
+> Seed `7Hq3`, saved on 2026-11-02.
 > [Restore 7Hq3]
 > [Restore from paper]
 > [Create new words]
@@ -856,7 +857,7 @@ Android says "in your Google backup". If more than one set is found, the newest 
 There are 24 numbered fields. Entry uses an in-app keypad with the letters a to z and delete, so no system keyboard sees the words. A hardware keyboard also works. After the four letters that identify a BIP39 word, the word fills in and focus moves on. Letters that cannot start any valid word are disabled on the keypad.
 
 - When all 24 are filled, the core checks them. Wrong checksum: "These words don't fit together. Check the order and spelling against your card." The field with the first unknown word is marked: "No word starts with 'qzab'."
-- Right: "These are words `7Hq3`. Does your card say 7Hq3?" [Yes] [No, check again]. A card without a fingerprint (written by hand without the box) can still answer [Yes].
+- Right: "This is seed `7Hq3`. Does your card say 7Hq3?" [Yes] [No, check again]. A card without a fingerprint (written by hand without the box) can still answer [Yes].
 
 **Restoring your data.** The app derives the phone keys and downloads the state.
 
@@ -1075,25 +1076,42 @@ When the first `agent` card ever appears, the card shows one extra line under th
 
 "Keys used" counts uses from replies and from machine reports. "Requests declined" counts Deny answers. Both count in the month by the phone's local time when the answer was given or the report reached the phone (the app passes its UTC offset to `answered`, `apply_status` and `apply_report`; an answer the iOS extension gave counts in the month it was given, 6.4), so a use near midnight on the last day of a month counts in the same month whichever way it arrived. The third line is a fixed statement of how sealctl works. No other figures, no price, no comparison.
 
-**Log** grouped by day, newest first:
+**Log** grouped by day, newest first, two lines per use:
 
-> 09:02 · `OPENAI_API_KEY` · claude · shop · `npm test` · dev@mbp.example.com · One tap
-> 09:15 · `OPENAI_API_KEY` · claude · shop · `npm test` · dev@mbp.example.com · In session
+```
+24 Nov 2026
+09:18  STRIPE_KEY                     In session
+       shop · claude · webapp · sealctl run -- npm test · mbp.example.com
+08:54  Volume safe                  Allowed once
+       Work laptop
+08:26  Seal volume safe                Confirmed
+       mbp.example.com
+22 Nov 2026
+08:35  Secret store a7c3…42            Confirmed
+       sealctl unseal · unpaired (Zq7Lr2Xa)
+```
 
-Outcomes: "One tap", "Answered by itself", "In session" (reported by the machine), "Allowed once", "Denied", "Expired". Filters: machine, key. Empty: "Nothing yet. Every use of your keys shows here."
+The time sits in a narrow column with tabular figures. The rows use the text font throughout, not the monospace of 11.1. The top line, in ink, says what was used; the outcome is on its right ("Denied" in the accent colour, "Expired" muted, the others in the secondary ink). The second line is muted and smaller. One accessibility label reads the row in order: time, what, outcome, details. The rows come from `activity_row` in the shared crate (`shared/src/activity.rs`), so both apps show the same text:
+
+- **What was used.** A secret `project/name` shows its name, and the project leads the second line. A volume reads "Volume safe", a backup "Backup r2:acme-backups", an SSH key "SSH key github"; an object asked for by id (an unseal plan, the store key) reads like Inventory, "Secret store a7c3…42". `sealctl seal` reads as the action, "Seal volume safe" (its command is not repeated). The usage entry records the request's subject kind (`kind`) for this; entries from before it, and uses a machine reports from its session (always secret names), are read from the key and the command.
+- **The second line,** without empty parts: project · agent · repository · command · machine. The command reads as typed: the CLI sends its arguments without the program name, so "scan" shows as "sealctl scan". A repository equal to the machine's user name is left out: outside a git repository the CLI sends the folder, and the home folder says nothing.
+- **The machine** is its nickname, else its host without `user@` and `.local` (and the tag when two machines share a name); a machine that is not paired shows "unpaired (Zq7Lr2Xa)", the first 8 characters of its key.
+- Every value passes `display_text` (11.7), and UUIDs anywhere in the row are shortened to their first four and last two characters ("5D1E…71").
+
+Outcomes: "One tap", "Answered by itself", "In session" (reported by the machine), "Allowed once", "Denied", "Expired", "Confirmed". Filters: machine, key. Empty: "Nothing yet. Every use of your keys shows here."
 
 ### 11.13 Inventory
 
 One row per derived key, grouped by machine:
 
-> **Secret store** `3f9k…a1` · words `7Hq3`
+> **Secret store** `3f9k…a1` · seed `7Hq3`
 > `~/.sealctl/store` · 14 KB
 > First used 2026-11-21 · last used today
 
 Purpose names: `secrets` "Secret store", `secret` "Own-approval secret", `volume` "Volume", `backup` "Backup". A detail view adds the full id, the key check, the machine, the full path or URL.
 
 - Items unseen for a year: "Not seen since 2025-11-02" in amber.
-- Items on retired words: "Words 7Hq3 (retired)".
+- Items on retired words: "Seed 7Hq3 (retired)".
 - Filters: machine, words (current or retired).
 - Empty: "No keys handed out yet."
 - After a restore from paper with no relay backup: "This list was empty after restoring from paper. Machines add what they hold the next time they ask."
@@ -1129,7 +1147,7 @@ The old words stay on this phone (the `old` items) until Finish, for rewrap and 
 
 **Plan.**
 
-> **Moving to words 4kPz**
+> **Moving to seed 4kPz**
 > **dev@mbp.example.com** · Rewrapped 12 of 12
 > Volume `clients` · 240 GB · Re-encrypt: about 3 h · Run `sealctl migrate` on this machine
 > **ci-runner@build.example.com** · Waiting to hear from this machine
@@ -1153,21 +1171,21 @@ If items are not seen:
 Then:
 
 > **Done. Mark your old card.**
-> Write "retired on 2028-03-02" on the card with words 7Hq3. Keep it with your new card until your next change, then destroy it.
+> Write "retired on 2028-03-02" on the card of seed 7Hq3. Keep it with your new card until your next change, then destroy it.
 > [Done]
 
 Finishing deletes the old words from the phone and from iCloud Keychain or Block Store. The old phone key's relay data is already gone (step 6). The retired card is recorded under Words.
 
 ### 11.15 Old words
 
-A machine sends `old_words` for an object sealed with retired words. The notification says "dev@mbp.example.com has an object sealed with words 7Hq3. Open sealctl to move it." The screen:
+A machine sends `old_words` for an object sealed with retired words. The notification says "dev@mbp.example.com has an object sealed with seed 7Hq3. Open sealctl to move it." The screen:
 
-> **Type words 7Hq3**
-> Sealed with words 7Hq3, retired 2028-03-02. Type them to move this object to your current words. The phone forgets them afterwards.
+> **Type the words of seed 7Hq3**
+> Sealed with seed 7Hq3, retired 2028-03-02. Type its words to move this object to your current words. The phone forgets them afterwards.
 > Object: Volume `clients` on dev@mbp.example.com
 > [Type the words]
 
-Face ID or the passcode first, then the same 24-field entry as restore. If the fingerprint differs: "These are words 4kPz, not 7Hq3. Check that you have the right card." On a match, the core derives only that object's keys, seals the reply, and the old root is released at once.
+Face ID or the passcode first, then the same 24-field entry as restore. If the fingerprint differs: "This is seed 4kPz, not 7Hq3. Check that you have the right card." On a match, the core derives only that object's keys, seals the reply, and the old root is released at once.
 
 If the request expires while the user types: "dev@mbp.example.com stopped waiting. Run the command again on the machine, then type the words." The typed words are not kept.
 
@@ -1244,7 +1262,7 @@ The app sends a lock, then `DELETE .../machines/{machine}`.
 ### 11.18 Settings
 
 > **Words**
-> Words `7Hq3` · written on 2026-11-21 · next check 2027-11-21
+> Seed `7Hq3` · written on 2026-11-21 · next check 2027-11-21
 > [Show words] [Check my card now] [Change words]
 > **Backups**
 > iCloud Keychain (Android: Google backup) [toggle]
@@ -1450,7 +1468,7 @@ The screens for levels 2 and 3 (9.6). They are full-screen, never a sheet, and n
 > Deny
 
 - Away from a trusted place the line reads: "Away from your trusted places: this starts two hours after you confirm. Your phone and your computers can cancel it until then." Without location permission it says the same without "trusted places": "This starts two hours after you confirm…"
-- Level 2 titles: "Hand back volume safe from dev@mbp.example.com?", "Let sealctl seal take over volume safe on dev@mbp.example.com?", "Move dev@mbp.example.com to words 4kPz?" (rewrap: "12 objects. Each takes seconds."). Level 2 has no delay line.
+- Level 2 titles: "Hand back volume safe from dev@mbp.example.com?", "Let sealctl seal take over volume safe on dev@mbp.example.com?", "Move dev@mbp.example.com to seed 4kPz?" (rewrap: "12 objects. Each takes seconds."). Level 2 has no delay line.
 - Item names come from the machine and are shown in monospace, one per line, never joined into a sentence.
 - [Confirm with Face ID] reads "Confirm with Touch ID" or, on Android, "Confirm with fingerprint or face". It runs the prompt of 9.6.
 

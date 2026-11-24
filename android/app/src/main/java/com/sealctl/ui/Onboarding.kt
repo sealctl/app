@@ -237,7 +237,7 @@ private fun WordsPages(onDone: () -> Unit) {
         if (page == 3) {
             Gap(16)
             Title("Now fill in the card")
-            com.sealctl.designsystem.Line(com.sealctl.designsystem.plain("Words fingerprint: "), com.sealctl.designsystem.code(fp ?: "", size = 18, weight = FontWeight.SemiBold, color = Sealctl.colors.ink))
+            com.sealctl.designsystem.Line(com.sealctl.designsystem.plain("Seed fingerprint: "), com.sealctl.designsystem.code(fp ?: "", size = 18, weight = FontWeight.SemiBold, color = Sealctl.colors.ink))
             com.sealctl.designsystem.Line(com.sealctl.designsystem.plain("Written on: "), com.sealctl.designsystem.code(Texts.isoDate(System.currentTimeMillis()), size = 18, color = Sealctl.colors.ink))
         }
     }
@@ -401,7 +401,7 @@ private fun BackupFoundScreen(found: Phase.BackupFound?, activity: MainActivity,
         Spacer(Modifier.height(48.dp))
         Wordmark()
         Title("Your words are in your Google backup")
-        com.sealctl.designsystem.Line(com.sealctl.designsystem.plain("Words "), com.sealctl.designsystem.code(fp, size = 15, color = Sealctl.colors.ink), com.sealctl.designsystem.plain(", saved on ${found?.created?.let { Texts.isoDate(it) } ?: ""}."))
+        com.sealctl.designsystem.Line(com.sealctl.designsystem.plain("Seed "), com.sealctl.designsystem.code(fp, size = 15, color = Sealctl.colors.ink), com.sealctl.designsystem.plain(", saved on ${found?.created?.let { Texts.isoDate(it) } ?: ""}."))
     }
 }
 
@@ -477,7 +477,7 @@ private fun RestoreConfirm(activity: MainActivity, onNo: () -> Unit, onYes: () -
         SecondaryButton("No, check again", onNo)
     }) {
         Spacer(Modifier.height(32.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) { Title("These are words "); Mono(fp, size = 22, weight = FontWeight.SemiBold) }
+        Row(verticalAlignment = Alignment.CenterVertically) { Title("This is seed "); Mono(fp, size = 22, weight = FontWeight.SemiBold) }
         Body("Does your card say $fp?")
     }
 }

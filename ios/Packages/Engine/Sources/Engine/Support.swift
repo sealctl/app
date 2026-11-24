@@ -93,7 +93,7 @@ public enum Phase: Equatable, Sendable {
     case needsScreenLock
     case noWords
     case backupFound(fingerprint: String, created: Int64)
-    /// Keychain items survived a reinstall (7.4): "Continue with words 7Hq3".
+    /// Keychain items survived a reinstall (7.4): "Continue with seed 7Hq3".
     case reinstalled
     case cardUnchecked
     case onboarding(step: Int)

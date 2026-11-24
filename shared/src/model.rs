@@ -321,6 +321,14 @@ pub struct UsageEntry {
     pub command: Option<String>,
     /// `one_tap`, `automatic`, `in_session`, `once`, `denied`, `expired`, `confirmed`.
     pub outcome: String,
+    /// What `key` names, for the Activity row ([`crate::activity`]): the request's
+    /// `ctx.subject` kind (`secret`, `volume`, `backup`, `ssh`, `machine`), `secret` for a
+    /// secret name, or the item's purpose when `key` is `"<purpose> <id>"`. `None` for entries
+    /// written before it was recorded and for uses a machine reports from a session
+    /// (`in_session`, always secret names). Left out of the JSON when `None`, so a reported
+    /// entry stays equal to the one recorded before (the duplicate check compares the JSON).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 /// A request seen in the last 10 minutes.

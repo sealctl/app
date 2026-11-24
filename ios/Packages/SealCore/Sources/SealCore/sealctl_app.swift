@@ -1242,6 +1242,99 @@ public func FfiConverterTypeStore_lower(_ value: Store) -> UInt64 {
 
 
 /**
+ * One row of the Activity log.
+ */
+public struct ActivityRow: Equatable, Hashable {
+    /**
+     * What was used: "web-relay-token", "Volume safe", "Secret store a7c3…42",
+     * "Seal volume safe".
+     */
+    public var subject: String
+    /**
+     * "One tap", "In session", "Denied", …
+     */
+    public var outcome: String
+    /**
+     * The outcome's colour.
+     */
+    public var tone: ActivityTone
+    /**
+     * The second line, in order and without empty parts: the project (secrets), the agent,
+     * the repository, the command and the machine. The apps join them with " · ".
+     */
+    public var details: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * What was used: "web-relay-token", "Volume safe", "Secret store a7c3…42",
+         * "Seal volume safe".
+         */subject: String, 
+        /**
+         * "One tap", "In session", "Denied", …
+         */outcome: String, 
+        /**
+         * The outcome's colour.
+         */tone: ActivityTone, 
+        /**
+         * The second line, in order and without empty parts: the project (secrets), the agent,
+         * the repository, the command and the machine. The apps join them with " · ".
+         */details: [String]) {
+        self.subject = subject
+        self.outcome = outcome
+        self.tone = tone
+        self.details = details
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ActivityRow: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeActivityRow: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ActivityRow {
+        return
+            try ActivityRow(
+                subject: FfiConverterString.read(from: &buf), 
+                outcome: FfiConverterString.read(from: &buf), 
+                tone: FfiConverterTypeActivityTone.read(from: &buf), 
+                details: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ActivityRow, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.subject, into: &buf)
+        FfiConverterString.write(value.outcome, into: &buf)
+        FfiConverterTypeActivityTone.write(value.tone, into: &buf)
+        FfiConverterSequenceString.write(value.details, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeActivityRow_lift(_ buf: RustBuffer) throws -> ActivityRow {
+    return try FfiConverterTypeActivityRow.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeActivityRow_lower(_ value: ActivityRow) -> RustBuffer {
+    return FfiConverterTypeActivityRow.lower(value)
+}
+
+
+/**
  * What one answer changed.
  */
 public struct AnsweredResult: Equatable, Hashable {
@@ -4511,6 +4604,15 @@ public struct UsageEntry: Equatable, Hashable {
      * `one_tap`, `automatic`, `in_session`, `once`, `denied`, `expired`, `confirmed`.
      */
     public var outcome: String
+    /**
+     * What `key` names, for the Activity row ([`crate::activity`]): the request's
+     * `ctx.subject` kind (`secret`, `volume`, `backup`, `ssh`, `machine`), `secret` for a
+     * secret name, or the item's purpose when `key` is `"<purpose> <id>"`. `None` for entries
+     * written before it was recorded and for uses a machine reports from a session
+     * (`in_session`, always secret names). Left out of the JSON when `None`, so a reported
+     * entry stays equal to the one recorded before (the duplicate check compares the JSON).
+     */
+    public var kind: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -4535,7 +4637,15 @@ public struct UsageEntry: Equatable, Hashable {
          */command: String?, 
         /**
          * `one_tap`, `automatic`, `in_session`, `once`, `denied`, `expired`, `confirmed`.
-         */outcome: String) {
+         */outcome: String, 
+        /**
+         * What `key` names, for the Activity row ([`crate::activity`]): the request's
+         * `ctx.subject` kind (`secret`, `volume`, `backup`, `ssh`, `machine`), `secret` for a
+         * secret name, or the item's purpose when `key` is `"<purpose> <id>"`. `None` for entries
+         * written before it was recorded and for uses a machine reports from a session
+         * (`in_session`, always secret names). Left out of the JSON when `None`, so a reported
+         * entry stays equal to the one recorded before (the duplicate check compares the JSON).
+         */kind: String?) {
         self.time = time
         self.machine = machine
         self.key = key
@@ -4543,6 +4653,7 @@ public struct UsageEntry: Equatable, Hashable {
         self.repo = repo
         self.command = command
         self.outcome = outcome
+        self.kind = kind
     }
 
     
@@ -4567,7 +4678,8 @@ public struct FfiConverterTypeUsageEntry: FfiConverterRustBuffer {
                 agent: FfiConverterOptionString.read(from: &buf), 
                 repo: FfiConverterOptionString.read(from: &buf), 
                 command: FfiConverterOptionString.read(from: &buf), 
-                outcome: FfiConverterString.read(from: &buf)
+                outcome: FfiConverterString.read(from: &buf), 
+                kind: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -4579,6 +4691,7 @@ public struct FfiConverterTypeUsageEntry: FfiConverterRustBuffer {
         FfiConverterOptionString.write(value.repo, into: &buf)
         FfiConverterOptionString.write(value.command, into: &buf)
         FfiConverterString.write(value.outcome, into: &buf)
+        FfiConverterOptionString.write(value.kind, into: &buf)
     }
 }
 
@@ -4974,6 +5087,91 @@ public func FfiConverterTypeWordsInfo_lift(_ buf: RustBuffer) throws -> WordsInf
 public func FfiConverterTypeWordsInfo_lower(_ value: WordsInfo) -> RustBuffer {
     return FfiConverterTypeWordsInfo.lower(value)
 }
+
+
+/**
+ * How the outcome is coloured.
+ */
+
+public enum ActivityTone: Equatable, Hashable {
+    
+    /**
+     * Allowed or confirmed: the secondary ink.
+     */
+    case normal
+    /**
+     * Denied: the declined (accent) colour.
+     */
+    case declined
+    /**
+     * Expired: muted.
+     */
+    case muted
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ActivityTone: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeActivityTone: FfiConverterRustBuffer {
+    typealias SwiftType = ActivityTone
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ActivityTone {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .normal
+        
+        case 2: return .declined
+        
+        case 3: return .muted
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ActivityTone, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .normal:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .declined:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .muted:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeActivityTone_lift(_ buf: RustBuffer) throws -> ActivityTone {
+    return try FfiConverterTypeActivityTone.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeActivityTone_lower(_ value: ActivityTone) -> RustBuffer {
+    return FfiConverterTypeActivityTone.lower(value)
+}
+
 
 
 /**
@@ -6084,6 +6282,30 @@ fileprivate struct FfiConverterOptionTypeHold: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeMachine: FfiConverterRustBuffer {
+    typealias SwiftType = Machine?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeMachine.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeMachine.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypePlaceCandidate: FfiConverterRustBuffer {
     typealias SwiftType = PlaceCandidate?
 
@@ -6834,6 +7056,19 @@ public func appRulesVersion() -> String  {
 })
 }
 /**
+ * The Activity row of `entry`; `machine` is the paired machine it came from, `None` when it
+ * is not (or no longer) paired.
+ */
+public func activityRow(entry: UsageEntry, machine: Machine?) -> ActivityRow  {
+    return try!  FfiConverterTypeActivityRow_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_func_activity_row(
+        FfiConverterTypeUsageEntry_lower(entry),
+        FfiConverterOptionTypeMachine.lower(machine),uniffiCallStatus
+    )
+})
+}
+/**
  * Four choices for word `position` (1 to 24): the right word and three BIP39 words with the
  * same first letter, shuffled.
  */
@@ -7146,6 +7381,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.contractVersionMismatch
     }
     if (uniffi_sealctl_app_checksum_func_app_rules_version() != 4703) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sealctl_app_checksum_func_activity_row() != 46249) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_func_card_choices() != 45350) {

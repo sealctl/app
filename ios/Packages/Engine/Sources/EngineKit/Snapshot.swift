@@ -36,8 +36,19 @@ public struct ExtensionSnapshot: Codable, Sendable {
     public var placesOn: Bool
     public var relay: String
     public var written: Int64
+    /// The relay's time the app last learned (SPEC.md 8.1); nil in a snapshot written before it.
+    public var clock: Clock?
 
-    public init(state: State, local: LocalState, currentPlace: String?, placesOn: Bool, relay: String) {
+    /// `RelayClock` as the snapshot keeps it.
+    public struct Clock: Codable, Sendable {
+        public var relay: UInt64
+        public var boot: UInt64
+        public var bootId: String
+        public var distrusted: Bool
+    }
+
+    public init(state: State, local: LocalState, currentPlace: String?, placesOn: Bool, relay: String,
+                clock: RelayClock? = nil) {
         self.state = encodeState(state: state)
         days = local.days.map { Day(machine: $0.machine, firstApproval: $0.firstApproval, placeId: $0.placeId, ends: $0.ends) }
         holds = local.holds.map { HoldRecord(machine: $0.machine, until: $0.until) }
@@ -49,6 +60,13 @@ public struct ExtensionSnapshot: Codable, Sendable {
         self.placesOn = placesOn
         self.relay = relay
         written = nowMs()
+        self.clock = clock.map { Clock(relay: $0.relay, boot: $0.boot, bootId: $0.bootId, distrusted: $0.distrusted) }
+    }
+
+    /// The relay's time the app last learned, as the core takes it.
+    public var relayClock: RelayClock {
+        guard let c = clock else { return RelayClock(relay: 0, boot: 0, bootId: "", distrusted: false) }
+        return RelayClock(relay: c.relay, boot: c.boot, bootId: c.bootId, distrusted: c.distrusted)
     }
 
     public func decodedState() -> State? { try? decodeState(bytes: state) }

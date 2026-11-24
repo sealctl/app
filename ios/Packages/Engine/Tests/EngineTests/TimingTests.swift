@@ -433,7 +433,8 @@ struct TimingTests {
         #expect(w.request.checkMatch(pick: try await r.number()))
         await engine.onPlaceTransition(["p1"], entered: false)
         #expect(!engine.delayLifted())
-        let before = nowMs()
+        // the plan is on the corrected clock (8.1), which can be a second behind the system's
+        let before = engine.clockNow()
         #expect(await engine.confirmSensitive(w))
         let plan = try #require(engine.local.plans.first { $0.requestId == w.id })
         #expect(plan.state == "delayed")

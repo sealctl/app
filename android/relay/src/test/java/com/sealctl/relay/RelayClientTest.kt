@@ -69,6 +69,28 @@ class RelayClientTest {
         }
     }
 
+    /** SPEC.md 8.1: the relay's time and the accepted signed times go to the corrected clock. */
+    @Test
+    fun relayTimesReachTheClock() = runTest {
+        val times = mutableListOf<Long>()
+        val accepted = mutableListOf<Long>()
+        val c = RelayClient(server.url("/").toString().trimEnd('/'), { keys }, now = { clock },
+            onRelayTime = { times += it }, onAccepted = { accepted += it })
+        server.enqueue(json(200, """{"ok":true,"env":"fake","version":"x","time":1795252000}"""))
+        assertEquals(1_795_252_000_000L, c.relayTime())
+        assertEquals("/v1/health", server.takeRequest().path)
+        server.enqueue(json(401, """{"error":"clock_skew","time":1795252400}"""))
+        server.enqueue(json(200, """{"machines":[]}"""))
+        c.machines()
+        assertEquals(listOf(1_795_252_000_000L, 1_795_252_400_000L), times)
+        // The retry was signed with the corrected offset and accepted.
+        assertEquals(listOf(1_795_252_400_000L), accepted)
+        // No time in the answer, or no answer: nothing learned.
+        server.enqueue(json(200, """{"ok":true}"""))
+        assertNull(c.relayTime())
+        assertEquals(2, times.size)
+    }
+
     @Test
     fun rateLimitStopsCallsButNotTappedReplies() = runTest {
         server.enqueue(json(429, """{"error":"rate_limited","retryAfter":3600,"scope":"phone"}"""))

@@ -718,6 +718,12 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_sealctl_app_checksum_func_word_entry(
     ): Int
+    external fun uniffi_sealctl_app_checksum_func_place_settled_at(
+    ): Int
+    external fun uniffi_sealctl_app_checksum_func_relay_clock_learned(
+    ): Int
+    external fun uniffi_sealctl_app_checksum_func_relay_clock_now(
+    ): Int
     external fun uniffi_sealctl_app_checksum_func_decode_state(
     ): Int
     external fun uniffi_sealctl_app_checksum_func_encode_state(
@@ -760,6 +766,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_sealctl_app_checksum_method_store_apply_status(
     ): Int
+    external fun uniffi_sealctl_app_checksum_method_store_clock_now(
+    ): Int
     external fun uniffi_sealctl_app_checksum_method_store_close_request(
     ): Int
     external fun uniffi_sealctl_app_checksum_method_store_erase(
@@ -770,7 +778,15 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_sealctl_app_checksum_method_store_place_sample(
     ): Int
+    external fun uniffi_sealctl_app_checksum_method_store_place_settled_now(
+    ): Int
     external fun uniffi_sealctl_app_checksum_method_store_prune(
+    ): Int
+    external fun uniffi_sealctl_app_checksum_method_store_relay_accepted(
+    ): Int
+    external fun uniffi_sealctl_app_checksum_method_store_relay_clock(
+    ): Int
+    external fun uniffi_sealctl_app_checksum_method_store_relay_time(
     ): Int
     external fun uniffi_sealctl_app_checksum_method_store_see_request(
     ): Int
@@ -825,6 +841,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_method_store_apply_status(`ptr`: Long,`machine`: RustBuffer.ByValue,`status`: RustBufferMachineStatus.ByValue,`utcOffsetSecs`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_sealctl_app_fn_method_store_clock_now(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_method_store_close_request(`ptr`: Long,`id`: RustBuffer.ByValue,`outcome`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_sealctl_app_fn_method_store_erase(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -835,7 +853,15 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_sealctl_app_fn_method_store_place_sample(`ptr`: Long,`sample`: RustBuffer.ByValue,`utcOffsetSecs`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_sealctl_app_fn_method_store_place_settled_now(`ptr`: Long,`place`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     external fun uniffi_sealctl_app_fn_method_store_prune(`ptr`: Long,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_sealctl_app_fn_method_store_relay_accepted(`ptr`: Long,`signedMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_sealctl_app_fn_method_store_relay_clock(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_sealctl_app_fn_method_store_relay_time(`ptr`: Long,`relayMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_method_store_see_request(`ptr`: Long,`id`: RustBuffer.ByValue,`machine`: RustBuffer.ByValue,`expires`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
@@ -860,6 +886,12 @@ internal object UniffiLib {
     external fun uniffi_sealctl_app_fn_func_random_id(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_word_entry(`prefix`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_sealctl_app_fn_func_place_settled_at(`place`: RustBuffer.ByValue,`now`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    external fun uniffi_sealctl_app_fn_func_relay_clock_learned(`relayMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_sealctl_app_fn_func_relay_clock_now(`clock`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_decode_state(`bytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1029,6 +1061,15 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_sealctl_app_checksum_func_word_entry() and 0xFFFF) != 42711) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_sealctl_app_checksum_func_place_settled_at() and 0xFFFF) != 45879) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_sealctl_app_checksum_func_relay_clock_learned() and 0xFFFF) != 31114) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_sealctl_app_checksum_func_relay_clock_now() and 0xFFFF) != 7729) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_sealctl_app_checksum_func_decode_state() and 0xFFFF) != 10933) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1050,7 +1091,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_sealctl_app_checksum_func_place_kind() and 0xFFFF) != 46517) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_sealctl_app_checksum_func_place_settled() and 0xFFFF) != 36074) {
+    if ((lib.uniffi_sealctl_app_checksum_func_place_settled() and 0xFFFF) != 45654) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_func_merge_state() and 0xFFFF) != 39551) {
@@ -1092,6 +1133,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_sealctl_app_checksum_method_store_apply_status() and 0xFFFF) != 19917) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_sealctl_app_checksum_method_store_clock_now() and 0xFFFF) != 39839) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_sealctl_app_checksum_method_store_close_request() and 0xFFFF) != 56401) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1107,7 +1151,19 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_sealctl_app_checksum_method_store_place_sample() and 0xFFFF) != 47269) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_sealctl_app_checksum_method_store_place_settled_now() and 0xFFFF) != 56412) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_sealctl_app_checksum_method_store_prune() and 0xFFFF) != 25831) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_sealctl_app_checksum_method_store_relay_accepted() and 0xFFFF) != 22391) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_sealctl_app_checksum_method_store_relay_clock() and 0xFFFF) != 20139) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_sealctl_app_checksum_method_store_relay_time() and 0xFFFF) != 58623) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_method_store_see_request() and 0xFFFF) != 63167) {
@@ -1675,6 +1731,13 @@ public interface StoreInterface {
     fun `applyStatus`(`machine`: kotlin.String, `status`: MachineStatus, `utcOffsetSecs`: kotlin.Int): ReportResult
     
     /**
+     * The corrected clock (SPEC.md 8.1): the relay's time carried on the since-boot clock
+     * while fresh, else the later of the system clock and the last-known relay time. Every
+     * security window is counted on it: holds, plans, the level 3 delay and places.
+     */
+    fun `clockNow`(): ClockNow
+    
+    /**
      * Marks a pending request `answered`, `expired` or `ignored`.
      */
     fun `closeRequest`(`id`: kotlin.String, `outcome`: kotlin.String)
@@ -1701,9 +1764,34 @@ public interface StoreInterface {
     fun `placeSample`(`sample`: LocationSample, `utcOffsetSecs`: kotlin.Int): PlaceCandidate?
     
     /**
+     * Whether a trusted place lifts the level 3 delay now ([`crate::decide::place_settled`]
+     * on the corrected clock). A place added by hand never does while the clock is stale:
+     * its 24 hours can't be counted on a clock the person may have set.
+     */
+    fun `placeSettledNow`(`place`: TrustedPlace): kotlin.Boolean
+    
+    /**
      * Applies the lifetimes (SPEC.md 5.4 `prune`) and trims the usage log.
      */
     fun `prune`(`now`: kotlin.ULong): State
+    
+    /**
+     * The relay accepted a call signed with `signed_ms` (the `Sealctl-Time` sent, in ms):
+     * its clock is within the 5-minute signature window of that. A clock that disagrees by
+     * more is stale until the relay's time is learned again.
+     */
+    fun `relayAccepted`(`signedMs`: kotlin.ULong)
+    
+    /**
+     * The relay's time last learned, for the iOS extension's snapshot.
+     */
+    fun `relayClock`(): RelayClock
+    
+    /**
+     * The relay's time, Unix ms, as the relay gave it just now: the `time` of `GET
+     * /v1/health` or of a `401 clock_skew` (seconds, times 1000).
+     */
+    fun `relayTime`(`relayMs`: kotlin.ULong): ClockNow
     
     /**
      * Request ids seen in the last 10 minutes (SPEC.md 9.5). Returns `false` when this id was
@@ -1994,6 +2082,25 @@ open class Store: Disposable, AutoCloseable, StoreInterface
 
     
     /**
+     * The corrected clock (SPEC.md 8.1): the relay's time carried on the since-boot clock
+     * while fresh, else the later of the system clock and the last-known relay time. Every
+     * security window is counted on it: holds, plans, the level 3 delay and places.
+     */
+    @Throws(AppException::class)override fun `clockNow`(): ClockNow {
+            return FfiConverterTypeClockNow.lift(
+    callWithHandle {
+    uniffiRustCallWithError(AppException) { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_method_store_clock_now(
+        it,
+        _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Marks a pending request `answered`, `expired` or `ignored`.
      */
     @Throws(AppException::class)override fun `closeRequest`(`id`: kotlin.String, `outcome`: kotlin.String)
@@ -2083,6 +2190,26 @@ open class Store: Disposable, AutoCloseable, StoreInterface
 
     
     /**
+     * Whether a trusted place lifts the level 3 delay now ([`crate::decide::place_settled`]
+     * on the corrected clock). A place added by hand never does while the clock is stale:
+     * its 24 hours can't be counted on a clock the person may have set.
+     */
+    @Throws(AppException::class)override fun `placeSettledNow`(`place`: TrustedPlace): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithHandle {
+    uniffiRustCallWithError(AppException) { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_method_store_place_settled_now(
+        it,
+        
+        FfiConverterTypeTrustedPlace.lower(`place`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Applies the lifetimes (SPEC.md 5.4 `prune`) and trims the usage log.
      */
     @Throws(AppException::class)override fun `prune`(`now`: kotlin.ULong): State {
@@ -2093,6 +2220,61 @@ open class Store: Disposable, AutoCloseable, StoreInterface
         it,
         
         FfiConverterULong.lower(`now`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * The relay accepted a call signed with `signed_ms` (the `Sealctl-Time` sent, in ms):
+     * its clock is within the 5-minute signature window of that. A clock that disagrees by
+     * more is stale until the relay's time is learned again.
+     */
+    @Throws(AppException::class)override fun `relayAccepted`(`signedMs`: kotlin.ULong)
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(AppException) { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_method_store_relay_accepted(
+        it,
+        
+        FfiConverterULong.lower(`signedMs`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * The relay's time last learned, for the iOS extension's snapshot.
+     */
+    @Throws(AppException::class)override fun `relayClock`(): RelayClock {
+            return FfiConverterTypeRelayClock.lift(
+    callWithHandle {
+    uniffiRustCallWithError(AppException) { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_method_store_relay_clock(
+        it,
+        _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * The relay's time, Unix ms, as the relay gave it just now: the `time` of `GET
+     * /v1/health` or of a `401 clock_skew` (seconds, times 1000).
+     */
+    @Throws(AppException::class)override fun `relayTime`(`relayMs`: kotlin.ULong): ClockNow {
+            return FfiConverterTypeClockNow.lift(
+    callWithHandle {
+    uniffiRustCallWithError(AppException) { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_method_store_relay_time(
+        it,
+        
+        FfiConverterULong.lower(`relayMs`),_status)
 }
     }
     )
@@ -2281,6 +2463,55 @@ public object FfiConverterTypeAnsweredResult: FfiConverterRustBuffer<AnsweredRes
 
     override fun write(value: AnsweredResult, buf: ByteBuffer) {
             FfiConverterBoolean.write(value.`firstOfDay`, buf)
+    }
+}
+
+
+
+/**
+ * The corrected clock now.
+ */
+data class ClockNow (
+    /**
+     * Unix ms.
+     */
+    var `now`: kotlin.ULong
+    , 
+    /**
+     * The relay's time, learned in this boot within the last 24 hours, with no signed call
+     * against it. When false the clock is the later of the system clock and the last-known
+     * relay time, and a place added by hand does not lift the level 3 delay.
+     */
+    var `fresh`: kotlin.Boolean
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeClockNow: FfiConverterRustBuffer<ClockNow> {
+    override fun read(buf: ByteBuffer): ClockNow {
+        return ClockNow(
+            FfiConverterULong.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ClockNow) = (
+            FfiConverterULong.allocationSize(value.`now`) +
+            FfiConverterBoolean.allocationSize(value.`fresh`)
+    )
+
+    override fun write(value: ClockNow, buf: ByteBuffer) {
+            FfiConverterULong.write(value.`now`, buf)
+            FfiConverterBoolean.write(value.`fresh`, buf)
     }
 }
 
@@ -3887,6 +4118,70 @@ public object FfiConverterTypePlanItemRecord: FfiConverterRustBuffer<PlanItemRec
             FfiConverterString.write(value.`name`, buf)
             FfiConverterOptionalString.write(value.`purpose`, buf)
             FfiConverterOptionalString.write(value.`id`, buf)
+    }
+}
+
+
+
+/**
+ * The last relay time the phone learned (stored as the `clock` doc; the iOS app copies it to
+ * its extension's snapshot).
+ */
+data class RelayClock (
+    /**
+     * The relay's time then, Unix ms; 0 when never learned.
+     */
+    var `relay`: kotlin.ULong
+    , 
+    /**
+     * The since-boot clock then, ms.
+     */
+    var `boot`: kotlin.ULong
+    , 
+    /**
+     * The boot it was learned in ("" when the phone does not tell).
+     */
+    var `bootId`: kotlin.String
+    , 
+    /**
+     * A signed call the relay accepted disagreed with it by more than the signature window.
+     */
+    var `distrusted`: kotlin.Boolean
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeRelayClock: FfiConverterRustBuffer<RelayClock> {
+    override fun read(buf: ByteBuffer): RelayClock {
+        return RelayClock(
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: RelayClock) = (
+            FfiConverterULong.allocationSize(value.`relay`) +
+            FfiConverterULong.allocationSize(value.`boot`) +
+            FfiConverterString.allocationSize(value.`bootId`) +
+            FfiConverterBoolean.allocationSize(value.`distrusted`)
+    )
+
+    override fun write(value: RelayClock, buf: ByteBuffer) {
+            FfiConverterULong.write(value.`relay`, buf)
+            FfiConverterULong.write(value.`boot`, buf)
+            FfiConverterString.write(value.`bootId`, buf)
+            FfiConverterBoolean.write(value.`distrusted`, buf)
     }
 }
 
@@ -7205,6 +7500,52 @@ object CoreExceptionExternalErrorHandler : UniffiRustCallStatusErrorHandler<Core
     
 
         /**
+         * Whether a trusted place lifts the level 3 delay at `now` ([`crate::decide::place_settled`]
+         * on the corrected clock). A place added by hand never does while the clock is stale: its 24
+         * hours can't be counted on a clock the person may have set.
+         */ fun `placeSettledAt`(`place`: TrustedPlace, `now`: ClockNow): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_func_place_settled_at(
+    
+        
+        FfiConverterTypeTrustedPlace.lower(`place`),
+        FfiConverterTypeClockNow.lower(`now`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The relay's time `relay_ms` (Unix ms), learned now.
+         */ fun `relayClockLearned`(`relayMs`: kotlin.ULong): RelayClock {
+            return FfiConverterTypeRelayClock.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_func_relay_clock_learned(
+    
+        
+        FfiConverterULong.lower(`relayMs`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The clock now by `clock`, on this phone's system and since-boot clocks: for the iOS
+         * extension, which reads the app's snapshot rather than the store.
+         */ fun `relayClockNow`(`clock`: RelayClock): ClockNow {
+            return FfiConverterTypeClockNow.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_func_relay_clock_now(
+    
+        
+        FfiConverterTypeRelayClock.lower(`clock`),_status)
+}
+    )
+    }
+    
+
+        /**
          * Decodes what `state_open` returned. An empty plaintext is the empty state.
          */
     @Throws(AppException::class) fun `decodeState`(`bytes`: kotlin.ByteArray): State {
@@ -7311,7 +7652,9 @@ object CoreExceptionExternalErrorHandler : UniffiRustCallStatusErrorHandler<Core
 
         /**
          * Whether a trusted place also lifts the level 3 delay at `now`: a learned place at once, a place
-         * added by hand 24 hours after it was added. Every other comfort of a place starts at once.
+         * added by hand 24 hours after it was added. Every other comfort of a place starts at once. A
+         * place added by hand with `created` 0 was added while the clock was stale and its 24 hours
+         * have not started (the store stamps it once the clock is fresh, SPEC.md 8.1).
          */ fun `placeSettled`(`place`: TrustedPlace, `now`: kotlin.ULong): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     uniffiRustCall() { _status ->

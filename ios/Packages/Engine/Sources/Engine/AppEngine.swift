@@ -82,7 +82,8 @@ public final class AppEngine {
         words = WordsSession()
         let box = KeyBox(vault: vault)
         keyBox = box
-        relay = RelayClient(baseURL: config.relayURL, keys: { await box.get() })
+        relay = RelayClient(baseURL: config.relayURL, keys: { await box.get() },
+                            onRelayTime: { db.relayTime($0) }, onAccepted: { db.relayAccepted($0) })
         words.engine = self
         biometryName = await vault.biometryName()
         watchNetwork()
@@ -135,7 +136,8 @@ public final class AppEngine {
         if let c = currentPlace, !state.places.contains(where: { $0.id == c && !$0.deleted }) { currentPlace = nil }
         guard phase == .ready || { if case .onboarding = phase { return true }; return false }() else { return }
         files.writeSnapshot(ExtensionSnapshot(state: state, local: local, currentPlace: currentPlace,
-                                              placesOn: places?.hasForeground ?? false, relay: config.relayURL))
+                                              placesOn: places?.hasForeground ?? false, relay: config.relayURL,
+                                              clock: db.relayClock()))
     }
 
     public var liveMachines: [Machine] { state.machines.filter { !$0.deleted } }
@@ -221,6 +223,8 @@ public final class AppEngine {
         notificationsAllowed = await notifier.allowed()
         biometryName = await vault.biometryName()
         guard phase == .ready, !relayDataDeleted, let _ = await phoneKeys() else { return }
+        // The relay's time, for every security window (8.1); the snapshot carries it.
+        if await relay.relayTime() != nil { writeSnapshot() }
         await takeInbox()
         if socket == nil {
             socket = PhoneSocket(

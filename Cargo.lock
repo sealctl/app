@@ -1950,6 +1950,7 @@ dependencies = [
 name = "sealctl-app"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "proptest",
  "rusqlite",
  "sealctl-core",

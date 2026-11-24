@@ -189,10 +189,14 @@ pub fn place_kind(places_on: bool, current_place: Option<String>) -> PlaceKind {
 pub const MANUAL_PLACE_SETTLE_MS: u64 = 24 * 3_600_000;
 
 /// Whether a trusted place also lifts the level 3 delay at `now`: a learned place at once, a place
-/// added by hand 24 hours after it was added. Every other comfort of a place starts at once.
+/// added by hand 24 hours after it was added. Every other comfort of a place starts at once. A
+/// place added by hand with `created` 0 was added while the clock was stale and its 24 hours
+/// have not started (the store stamps it once the clock is fresh, SPEC.md 8.1).
 #[uniffi::export]
 pub fn place_settled(place: TrustedPlace, now: u64) -> bool {
-    !place.deleted && (!place.manual || now >= place.created.saturating_add(MANUAL_PLACE_SETTLE_MS))
+    !place.deleted
+        && (!place.manual
+            || (place.created != 0 && now >= place.created.saturating_add(MANUAL_PLACE_SETTLE_MS)))
 }
 
 /// Whether every agent use has a live answer at `now` (not removed, within its 90 days).

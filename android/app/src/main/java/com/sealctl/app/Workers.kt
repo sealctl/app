@@ -17,7 +17,7 @@ class DailyWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
     override suspend fun doWork(): Result {
         val e = Graph.engine
         if (e.phoneKeys() == null) return Result.success()
-        safe { e.store.prune(System.currentTimeMillis().toULong()) }
+        safe { e.store.prune(e.clockNow().toULong()) }
         e.refreshState()
         if (e.local.value.dirty) e.upload()
         e.registerPush()

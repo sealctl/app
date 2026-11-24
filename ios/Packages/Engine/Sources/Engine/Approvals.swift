@@ -41,6 +41,7 @@ extension AppEngine {
                 return
             }
         }
+        if req.level() >= 3 { await freshClockAtHandAddedPlace() }
         let mark = placeMark()
         var ctx = await context(r, machine)
         var verdict = decide(request: req, ctx: ctx)
@@ -95,7 +96,7 @@ extension AppEngine {
     }
 
     func context(_ r: RelayRequest, _ machine: Machine) async -> DecideContext {
-        let now = nowMs()
+        let now = clockNow()
         let plan = livePlan(r.machine)
         let open: Bool = machine.lastStatus.map { s in
             guard s.session == "open", let left = s.left else { return false }
@@ -120,10 +121,24 @@ extension AppEngine {
             .max { $0.notBefore < $1.notBefore }
     }
 
-    /// The place the phone is inside also lifts the level 3 delay (a place added by hand: after 24 hours).
+    /// The clock every security window is counted on (SPEC.md 8.1): holds, plans, the level 3
+    /// delay and places. The relay's time while fresh, else the later of the system clock and
+    /// the last-known relay time.
+    public func clockNow() -> Int64 { Int64(clamping: db.clockNow().now) }
+
+    /// The place the phone is inside also lifts the level 3 delay: a place added by hand after
+    /// 24 hours on the corrected clock, and never while that clock is stale (8.1, 9.6).
     public func placeSettledNow() -> Bool {
         guard let id = currentPlace, let p = state.places.first(where: { $0.id == id && !$0.deleted }) else { return false }
-        return SealCore.placeSettled(place: p, now: UInt64(nowMs()))
+        return placeSettledAt(place: p, now: db.clockNow())
+    }
+
+    /// Before a level 3 decision at a place added by hand: a stale clock would not let the place
+    /// lift the delay, so the relay's time is asked first.
+    func freshClockAtHandAddedPlace() async {
+        guard let id = currentPlace, let p = state.places.first(where: { $0.id == id && !$0.deleted }), p.manual,
+              !db.clockNow().fresh else { return }
+        if await relay.relayTime() != nil { writeSnapshot() }
     }
 
     /// A level 3 action happens at once here (SPEC.md 9.6).
@@ -478,7 +493,7 @@ extension AppEngine {
     public func wrongNumber(_ w: Waiting) async {
         let w = current(w)
         _ = await answerCard(w) { await send(w.request, w.relay, .refuse(err: .noMatch), outcome: "denied", allowed: false) }
-        await applyLocal(.setHold(hold: Hold(machine: w.machine.key, until: UInt64(nowMs() + 3_600_000))))
+        await applyLocal(.setHold(hold: Hold(machine: w.machine.key, until: UInt64(clockNow() + 3_600_000))))
         drop(w.relay.id)
     }
 
@@ -527,7 +542,7 @@ extension AppEngine {
         case .unseal:
             let delay = delaySecs(Self.confirmDelay(arrival: Int(w.verdict.delaySecs), level: Int(w.verdict.level),
                                                     liftedNow: lifted))
-            let notBefore = nowMs() + Int64(delay) * 1000
+            let notBefore = clockNow() + Int64(delay) * 1000
             let sent = await answerCard(w) {
                 await send(w.request, w.relay, .plan(place: place, notBefore: UInt64(notBefore)), outcome: "confirmed",
                            allowed: true, delay: delay > 0 ? delay : nil)
@@ -647,6 +662,7 @@ extension AppEngine {
     /// Starts a level 3 action on the phone: nil (go ahead now) at a trusted place, else the
     /// delayed record the relay keeps for the hour.
     public func startPhoneAction(_ what: String) async throws -> DelayedAction? {
+        await freshClockAtHandAddedPlace()
         if delayLifted() { return nil }
         let delay = delaySecs(Self.levelThreeDelaySecs)
         let id = randomId()

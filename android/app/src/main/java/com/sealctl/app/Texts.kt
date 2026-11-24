@@ -187,6 +187,10 @@ object Texts {
 
     fun notNear(name: String) = "$name isn't near this phone. Run the command at its terminal; this phone then asks for the number on its screen."
     const val NO_BIOMETRICS = "This needs a fingerprint or face unlock of the strong class, and this phone has none set up."
+    /** Before the first gate (SPEC.md 9.6). */
+    const val FIRST_GATE = "Before your fingerprint or face can confirm sensitive actions on this phone, type two words from your card."
+    /** Before a new gate after an enrolment change (SPEC.md 9.6). */
+    const val BIOMETRY_CHANGED = "A fingerprint or face was added or removed on this phone. Type two words from your card to go on."
     const val LOCKED_OUT = "Fingerprint is locked after too many tries. Lock and unlock your phone with its screen lock, then try again."
     fun whichNumber(name: String) = "Which number does $name show?"
     const val LOOK_AT_TERMINAL = "Look at the terminal where you ran the command."

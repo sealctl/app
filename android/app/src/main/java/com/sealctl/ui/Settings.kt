@@ -251,6 +251,12 @@ fun PlacesScreen(activity: MainActivity) {
     var removing by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val context = ctx()
+    // Two card words before a new gate (9.6), asked by "Trust where I am now"; then it goes on.
+    var gateCard by remember { mutableStateOf<Pair<GateResult, suspend () -> Unit>?>(null) }
+    gateCard?.let { (why, then) ->
+        GateCardWords(activity, why, onPassed = { gateCard = null; scope.launch { then() } }, onCancel = { gateCard = null })
+        return
+    }
     Page("Places") {
         val o = offer
         if (o != null) SurfaceCard {
@@ -265,7 +271,7 @@ fun PlacesScreen(activity: MainActivity) {
             })
             PlainButton("Not this place", { engine.applyLocal(com.sealctl.core.app.LocalEvent.SuppressCandidate(o.id)); engine.placeOffer.value = null })
         }
-        if (engine.places.hasForeground() && current == null && o == null) TrustHere(activity)
+        if (engine.places.hasForeground() && current == null && o == null) TrustHere(activity) { why, then -> gateCard = why to then }
         if (!engine.places.hasForeground()) {
             Body("Places need location access. Without it, a session stays open up to 1 hour and reopening always takes a tap.")
             PrimaryButton("Allow location", { openAppSettings(context) })
@@ -292,7 +298,7 @@ fun PlacesScreen(activity: MainActivity) {
 
 /** "Trust where I am now": a place added by hand (SPEC.md 11.9). Its comforts start at once; it lifts the level 3 delay after 24 hours. */
 @Composable
-private fun TrustHere(activity: MainActivity) {
+private fun TrustHere(activity: MainActivity, onCard: (GateResult, suspend () -> Unit) -> Unit) {
     val engine = Graph.engine
     val scope = rememberCoroutineScope()
     var fix by remember { mutableStateOf<com.sealctl.places.Fix?>(null) }
@@ -300,6 +306,24 @@ private fun TrustHere(activity: MainActivity) {
     var name by remember { mutableStateOf("Home") }
     var error by remember { mutableStateOf<String?>(null) }
     val f = fix
+    suspend fun trust(f: com.sealctl.places.Fix, name: String) {
+        when (val g = biometricGate(activity, "Trust this place")) {
+            GateResult.Passed -> {
+                // `created` 0: the store stamps it on the corrected clock (SPEC.md 8.1).
+                val place = com.sealctl.core.app.TrustedPlace(randomPlaceId(), name.ifBlank { "Place" }, f.lat, f.lon, 150.0,
+                    0u, 0u, false, true)
+                engine.apply(Event.AddPlace(place), upload = true)
+                engine.monitorPlaces()
+                fix = null
+                Ui.toast("Trusted ${place.name}.")
+            }
+            GateResult.Cancelled -> {}
+            GateResult.NoBiometrics -> error = Texts.NO_BIOMETRICS
+            // Two card words first (9.6), then the prompt again, which makes the new gate.
+            GateResult.Changed, GateResult.NoGate -> { error = null; onCard(g) { trust(f, name) } }
+            else -> error = "Couldn't confirm it's you."
+        }
+    }
     if (f == null) {
         SecondaryButton(if (locating) "Finding where you are…" else "Trust where I am now", {
             if (!locating) {
@@ -322,24 +346,7 @@ private fun TrustHere(activity: MainActivity) {
         Body("Showing your words and leaving sealctl skip the two-hour wait here from ${Texts.time(System.currentTimeMillis() + 86_400_000)} tomorrow, so someone holding your unlocked phone can't trust a place to skip it.")
         Muted("Accurate to ${f.accuracy.toInt()} m. The location stays on this phone.")
         OutlinedTextField(name, { name = it.take(40) }, label = { Text("Name") }, modifier = Modifier.fillMaxWidth())
-        PrimaryButton("Trust", {
-            scope.launch {
-                when (biometricGate(activity, "Trust this place")) {
-                    GateResult.Passed -> {
-                        // `created` 0: the store stamps it on the corrected clock (SPEC.md 8.1).
-                        val place = com.sealctl.core.app.TrustedPlace(randomPlaceId(), name.ifBlank { "Place" }, f.lat, f.lon, 150.0,
-                            0u, 0u, false, true)
-                        engine.apply(Event.AddPlace(place), upload = true)
-                        engine.monitorPlaces()
-                        fix = null
-                        Ui.toast("Trusted ${place.name}.")
-                    }
-                    GateResult.Cancelled -> {}
-                    GateResult.NoBiometrics -> error = Texts.NO_BIOMETRICS
-                    else -> error = "Couldn't confirm it's you."
-                }
-            }
-        })
+        PrimaryButton("Trust", { scope.launch { trust(f, name) } })
         PlainButton("Cancel", { fix = null })
     }
     ErrorText(error)
@@ -381,8 +388,24 @@ fun MachineDetailScreen(activity: MainActivity, key: String) {
     LaunchedEffect(Unit) { while (true) { delay(1000); now = System.currentTimeMillis() } }
     var confirmUnpair by remember { mutableStateOf(false) }
     var releaseError by remember { mutableStateOf<String?>(null) }
+    var gateCard by remember { mutableStateOf<GateResult?>(null) }
     var nickname by remember(m?.nickname) { mutableStateOf(m?.nickname ?: "") }
     if (m == null) { Page(null) { Muted("This machine is no longer paired.") }; return }
+    suspend fun release() {
+        releaseError = when (val g = biometricGate(activity, "Confirm releasing ${engine.displayName(m)}.")) {
+            GateResult.Passed -> { engine.releaseHold(key); null }
+            GateResult.Cancelled -> null
+            GateResult.NoBiometrics -> Texts.NO_BIOMETRICS
+            GateResult.LockedOut -> Texts.LOCKED_OUT
+            // Two card words before a new gate (9.6), then the prompt again.
+            GateResult.Changed, GateResult.NoGate -> { gateCard = g; null }
+            else -> "Couldn't confirm it's you."
+        }
+    }
+    gateCard?.let { why ->
+        GateCardWords(activity, why, onPassed = { gateCard = null; scope.launch { release() } }, onCancel = { gateCard = null })
+        return
+    }
     val v = MachineView.of(m, engine, now)
     val tag = remember(key) { runCatching { com.sealctl.core.machineTag(key) }.getOrDefault("") }
     Page(null) {
@@ -392,17 +415,7 @@ fun MachineDetailScreen(activity: MainActivity, key: String) {
         val hold = local.holds.firstOrNull { it.machine == key && it.until.toLong() > now }
         if (hold != null) {
             Text(Texts.held(engine.displayName(m), hold.until.toLong()), color = Sealctl.colors.waiting)
-            TextButton({
-                scope.launch {
-                    releaseError = when (biometricGate(activity, "Confirm releasing ${engine.displayName(m)}.")) {
-                        GateResult.Passed -> { engine.releaseHold(key); null }
-                        GateResult.Cancelled -> null
-                        GateResult.NoBiometrics -> Texts.NO_BIOMETRICS
-                        GateResult.LockedOut -> Texts.LOCKED_OUT
-                        else -> "Couldn't confirm it's you."
-                    }
-                }
-            }) { Text("Release now") }
+            TextButton({ scope.launch { release() } }) { Text("Release now") }
             ErrorText(releaseError)
         }
         if (v.state == com.sealctl.designsystem.MachineState.Open) PrimaryButton("Lock now", { scope.launch { if (engine.lock(m)) Ui.toast("Locked ${engine.displayName(m)}.") } })
@@ -471,7 +484,7 @@ private fun PhoneAction(
     val local by engine.local.collectAsState()
     var error by remember { mutableStateOf<String?>(null) }
     var done by remember { mutableStateOf<String?>(null) }
-    var cardCheck by remember { mutableStateOf(false) }
+    var cardCheck by remember { mutableStateOf<GateResult?>(null) }
     val pending = local.delayed.lastOrNull { it.what == what && it.state in setOf("waiting", "released") }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) { while (true) { delay(1000); now = System.currentTimeMillis() } }
@@ -485,8 +498,8 @@ private fun PhoneAction(
             GateResult.Cancelled -> return
             GateResult.LockedOut -> { error = Texts.LOCKED_OUT; return }
             GateResult.NoBiometrics -> { error = Texts.NO_BIOMETRICS; return }
-            // The gate is made again only after the card check.
-            GateResult.Changed -> { error = null; cardCheck = true; return }
+            // A new gate is made only after the card check.
+            GateResult.Changed, GateResult.NoGate -> { error = null; cardCheck = g; return }
             is GateResult.Failed -> { error = g.message; return }
         }
         if (pending != null) {
@@ -508,15 +521,11 @@ private fun PhoneAction(
         Page(null, bottom = { PrimaryButton("Done", { Ui.pop() }) }) { Gap(24); Body(done!!) }
         return
     }
-    if (cardCheck) {
-        CardWords(activity, positions = 2, groups = 2, title = "Use your card",
-            body = "A fingerprint or face was added or removed on this phone. Type two words from your card to go on.",
-            onPassed = {
-                engine.vault.resetGate()
-                cardCheck = false
-                scope.launch { confirm() }
-            },
-            onCancel = { cardCheck = false })
+    cardCheck?.let { why ->
+        GateCardWords(activity, why, onPassed = {
+            cardCheck = null
+            scope.launch { confirm() }
+        }, onCancel = { cardCheck = null })
         return
     }
     if (pending != null && pending.releaseAt.toLong() > now) {

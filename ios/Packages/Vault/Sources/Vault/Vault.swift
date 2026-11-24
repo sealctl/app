@@ -9,9 +9,47 @@ public enum GateResult: Sendable, Equatable {
     case lockedOut
     /// A face or finger was added or removed: the gate item is gone. The card comes first.
     case changed
+    /// No gate on this phone yet: the card comes first, then the first gate is made (9.6).
+    case noGate
     /// No biometrics on this phone, or none enrolled.
     case unavailable
     case failed(String)
+}
+
+/// What the gate does with what is stored (SPEC.md 9.6).
+public enum GateStep: Sendable, Equatable {
+    /// A gate exists, or existed: the prompt reads it (an unreadable one means `changed`).
+    case check
+    /// The card was just passed: the prompt makes a new gate.
+    case make
+    /// No gate, and no card passed since: two words from the card first (`noGate`).
+    case cardFirst
+
+    /// The first gate, like a new one after an enrolment change, is made only after the card,
+    /// so a face or finger enrolled before then is never trusted on its own.
+    public static func of(itemExists: Bool, made: Bool, cardPassed: Bool) -> GateStep {
+        if itemExists || made { return .check }
+        return cardPassed ? .make : .cardFirst
+    }
+}
+
+/// The allowance two words from the card give for making a new gate (SPEC.md 9.6): for the one
+/// prompt that follows, and only within `window` seconds of the card, so a card passed and then
+/// left does not let a face enrolled later make the gate.
+public struct GateAllowance: Sendable, Equatable {
+    /// Two minutes from the card to the prompt.
+    public static let window: TimeInterval = 120
+    private var until: TimeInterval?
+
+    public init() {}
+
+    public mutating func allow(now: TimeInterval) { until = now + Self.window }
+
+    /// Whether the card allows a new gate at `now`; true at most once per `allow`.
+    public mutating func take(now: TimeInterval) -> Bool {
+        defer { until = nil }
+        return until.map { now < $0 } ?? false
+    }
 }
 
 /// The outcome of the words prompt (Face ID, Touch ID or the passcode).
@@ -49,8 +87,10 @@ public protocol Vault: Sendable {
     func authenticateOwner(reason: String) async -> OwnerAuth
 
     /// Levels 2 and 3: a fresh biometric match, no passcode, proven by reading the gate item.
+    /// `noGate` before the first gate: the card comes first (`resetGate`).
     func gate(reason: String) async -> GateResult
-    /// After an enrolment change and the card words: a new gate.
+    /// After two words from the card (an enrolment change, or before the first gate): removes
+    /// any old gate and lets the next prompt make a new one.
     func resetGate() async
 
     /// The iCloud Keychain copy (`com.sealctl.words.sync`): `backup_item_encode` bytes.

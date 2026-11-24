@@ -15,19 +15,17 @@ struct LeaveView: View {
     @SwiftUI.State private var error: String?
     @SwiftUI.State private var running = false
     @SwiftUI.State private var lostCard = false
-    /// A face or fingerprint was added or removed at this step (1 or 3): two card words, then a
-    /// new gate (9.6), then the step goes on.
+    /// No gate yet, or a face or fingerprint was added or removed, at this step (1 or 3): two
+    /// card words, then a new gate (9.6), then the step goes on.
     @SwiftUI.State private var cardAt: Int?
+    @SwiftUI.State private var gateWhy: GateResult = .changed
 
     var body: some View {
         let e = model.engine!
         if let at = cardAt {
-            CardWordsView(positions: 2, groups: 2, title: "Use your card", body: Texts.biometryChanged, onPassed: {
-                Task {
-                    await e.vault.resetGate()
-                    cardAt = nil
-                    if at == 1 { start(e) } else { confirm(e, pendingLeave(e)) }
-                }
+            GateCardWordsView(why: gateWhy, onPassed: {
+                cardAt = nil
+                if at == 1 { start(e) } else { confirm(e, pendingLeave(e)) }
             }, onCancel: { cardAt = nil })
         } else {
             steps(e)
@@ -153,11 +151,12 @@ struct LeaveView: View {
 
     private func start(_ e: AppEngine) {
         Task {
-            switch await e.vault.gate(reason: "Confirm leaving sealctl.") {
+            let result = await e.vault.gate(reason: "Confirm leaving sealctl.")
+            switch result {
             case .passed: await go(e, 2)
             case .cancelled: break
             case .lockedOut: error = Texts.lockedOut(e.biometryName)
-            case .changed: cardAt = 1
+            case .changed, .noGate: gateWhy = result; cardAt = 1
             default: error = Texts.noBiometrics(e.biometryName)
             }
         }
@@ -165,11 +164,12 @@ struct LeaveView: View {
 
     private func confirm(_ e: AppEngine, _ pending: DelayedAction?) {
         Task {
-            switch await e.vault.gate(reason: "Confirm leaving sealctl.") {
+            let result = await e.vault.gate(reason: "Confirm leaving sealctl.")
+            switch result {
             case .passed: break
             case .cancelled: return
             case .lockedOut: error = Texts.lockedOut(e.biometryName); return
-            case .changed: cardAt = 3; return
+            case .changed, .noGate: gateWhy = result; cardAt = 3; return
             default: error = Texts.noBiometrics(e.biometryName); return
             }
             if let pending {

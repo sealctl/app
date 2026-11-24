@@ -52,7 +52,55 @@ struct MemoryVaultTests {
         await v.set(locked: true)
         #expect(await v.readRoot() == nil)
         #expect(await v.readPhoneKeys() != nil)
+        await v.resetGate()
         await v.set(nextGate: .changed)
         #expect(await v.gate(reason: "x") == .changed)
+    }
+
+    /// SPEC.md 9.6: the first gate needs two words from the card, like a new one after an
+    /// enrolment change; a phone without biometrics keeps the card fallback.
+    @Test func firstGateNeedsTheCard() async throws {
+        let v = MemoryVault()
+        try await v.saveAll(words: try Words.generate())
+        #expect(await v.gate(reason: "x") == .noGate)
+        #expect(await v.gate(reason: "x") == .noGate)
+        await v.resetGate()
+        #expect(await v.gate(reason: "x") == .passed)
+        // Made: later prompts check it, with no card.
+        #expect(await v.gate(reason: "x") == .passed)
+        await v.erase()
+        #expect(await v.gate(reason: "x") == .noGate)
+        await v.set(biometrics: .unavailable)
+        #expect(await v.gate(reason: "x") == .unavailable)
+    }
+
+    /// The card allows the one prompt that follows it: a cancelled prompt means the card again,
+    /// and a card left for longer than the window allows nothing (9.6).
+    @Test func theCardAllowsOnePrompt() async throws {
+        let v = MemoryVault()
+        try await v.saveAll(words: try Words.generate())
+        await v.resetGate()
+        await v.set(nextGate: .cancelled)
+        #expect(await v.gate(reason: "x") == .cancelled)
+        await v.set(nextGate: .passed)
+        #expect(await v.gate(reason: "x") == .noGate)
+        var card = GateAllowance()
+        let before = card.take(now: 10)
+        card.allow(now: 10)
+        let first = card.take(now: 11), second = card.take(now: 12)
+        card.allow(now: 10)
+        let late = card.take(now: 10 + GateAllowance.window)
+        #expect(!before)
+        #expect(first)
+        #expect(!second)
+        #expect(!late)
+    }
+
+    @Test func gateSteps() {
+        #expect(GateStep.of(itemExists: false, made: false, cardPassed: false) == .cardFirst)
+        #expect(GateStep.of(itemExists: false, made: false, cardPassed: true) == .make)
+        #expect(GateStep.of(itemExists: true, made: false, cardPassed: false) == .check)
+        #expect(GateStep.of(itemExists: false, made: true, cardPassed: false) == .check)
+        #expect(GateStep.of(itemExists: true, made: true, cardPassed: true) == .check)
     }
 }

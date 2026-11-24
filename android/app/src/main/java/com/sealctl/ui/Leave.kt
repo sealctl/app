@@ -46,24 +46,58 @@ fun LeaveScreen(activity: MainActivity) {
     val step = local.leaveStep.toInt().coerceAtLeast(1)
     val scope = rememberCoroutineScope()
     var error by remember { mutableStateOf<String?>(null) }
+    // Two card words before a new gate (9.6) at step 1 or 3; then the step goes on.
+    var gateCard by remember { mutableStateOf<GateResult?>(null) }
     fun go(n: Int, skipped: List<String> = local.leaveSkipped) = engine.applyLocal(LocalEvent.SetLeave(n.toUInt(), skipped))
     fun cancel() { go(0, emptyList()); Ui.pop() }
     // Skipped computers keep their names after step 5 forgets every machine.
     fun skippedName(key: String) = engine.state.value.machines.firstOrNull { it.key == key }?.name
         ?.let { Texts.shown(it, Texts.MAX_NAME) } ?: key.take(8)
 
+    suspend fun start() {
+        when (val g = biometricGate(activity, "Confirm leaving sealctl.")) {
+            GateResult.Passed -> go(2)
+            GateResult.Cancelled -> {}
+            GateResult.LockedOut -> error = Texts.LOCKED_OUT
+            GateResult.Changed, GateResult.NoGate -> { error = null; gateCard = g }
+            else -> error = Texts.NO_BIOMETRICS
+        }
+    }
+    suspend fun confirm() {
+        val pending = local.delayed.lastOrNull { it.what == "leave" && it.state in setOf("waiting", "released") }
+        when (val g = biometricGate(activity, "Confirm leaving sealctl.")) {
+            GateResult.Passed -> {}
+            GateResult.Cancelled -> return
+            GateResult.LockedOut -> { error = Texts.LOCKED_OUT; return }
+            GateResult.Changed, GateResult.NoGate -> { error = null; gateCard = g; return }
+            else -> { error = Texts.NO_BIOMETRICS; return }
+        }
+        if (pending != null) {
+            when (engine.finishPhoneAction(pending.id)) {
+                null -> go(4)
+                "relay" -> error = "The relay isn't answering, and sealctl can't finish until it confirms nothing was cancelled."
+                "too_early" -> error = "Not yet."
+                "gone" -> error = "This waited too long. Start again."
+                else -> error = "Cancelled from another device. Nothing happened."
+            }
+            return
+        }
+        val delayed = try { engine.startPhoneAction("leave") } catch (e: Exception) { error = Texts.RELAY_DOWN; return }
+        if (delayed == null) go(4)
+    }
+
+    gateCard?.let { why ->
+        if (step == 1 || step == 3) {
+            GateCardWords(activity, why, onPassed = {
+                gateCard = null
+                scope.launch { if (step == 1) start() else confirm() }
+            }, onCancel = { gateCard = null })
+            return
+        }
+    }
     when (step) {
         1 -> Page(null, onBack = { cancel() }, bottom = {
-            PrimaryButton("Start", {
-                scope.launch {
-                    when (biometricGate(activity, "Confirm leaving sealctl.")) {
-                        GateResult.Passed -> go(2)
-                        GateResult.Cancelled -> {}
-                        GateResult.LockedOut -> error = Texts.LOCKED_OUT
-                        else -> error = Texts.NO_BIOMETRICS
-                    }
-                }
-            })
+            PrimaryButton("Start", { scope.launch { start() } })
             PlainButton("Cancel", { cancel() })
         }) {
             Gap(24)
@@ -83,28 +117,7 @@ fun LeaveScreen(activity: MainActivity) {
             }
             Page(null, onBack = { cancel() }, bottom = {
                 ErrorText(error)
-                PrimaryButton(Texts.CONFIRM, {
-                    scope.launch {
-                        when (biometricGate(activity, "Confirm leaving sealctl.")) {
-                            GateResult.Passed -> {}
-                            GateResult.Cancelled -> return@launch
-                            GateResult.LockedOut -> { error = Texts.LOCKED_OUT; return@launch }
-                            else -> { error = Texts.NO_BIOMETRICS; return@launch }
-                        }
-                        if (pending != null) {
-                            when (engine.finishPhoneAction(pending.id)) {
-                                null -> go(4)
-                                "relay" -> error = "The relay isn't answering, and sealctl can't finish until it confirms nothing was cancelled."
-                                "too_early" -> error = "Not yet."
-                                "gone" -> error = "This waited too long. Start again."
-                                else -> error = "Cancelled from another device. Nothing happened."
-                            }
-                            return@launch
-                        }
-                        val delayed = try { engine.startPhoneAction("leave") } catch (e: Exception) { error = Texts.RELAY_DOWN; return@launch }
-                        if (delayed == null) go(4)
-                    }
-                })
+                PrimaryButton(Texts.CONFIRM, { scope.launch { confirm() } })
                 PlainButton("Cancel", { cancel() })
             }) {
                 Gap(24)

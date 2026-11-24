@@ -3,6 +3,7 @@ package com.sealctl.vault
 import android.app.KeyguardManager
 import android.content.Context
 import android.os.Build
+import android.os.SystemClock
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
@@ -26,6 +27,13 @@ class KeysInvalidatedException : Exception("keys invalidated")
  * 29 this is the words key too; from API 30 only the gate key.
  */
 class NoBiometricsException(cause: Throwable) : Exception("no biometric enrolled", cause)
+
+/**
+ * No gate on this phone yet: the first one is made only after two words from the card
+ * ([Vault.resetGate]), so a face or fingerprint enrolled before then is not trusted on its own
+ * (SPEC.md 9.6).
+ */
+class GateNeedsCardException : Exception("no gate yet")
 
 /** The root can't be read now: the device is locked. */
 class DeviceLockedException : Exception("device locked")
@@ -146,25 +154,49 @@ class Vault(private val context: Context) {
 
     // ---------- the biometric gate (levels 2 and 3, SPEC.md 9.6) ----------
 
-    /** A gate cipher and whether it makes a new gate (first use) or checks the existing one. */
+    /** A gate cipher and whether it makes a new gate (after the card) or checks the existing one. */
     class Gate(val cipher: Cipher, val creating: Boolean)
+
+    /** What [gate] does with what is stored (SPEC.md 9.6). */
+    enum class GateStep {
+        /** A gate exists: the prompt decrypts it. */
+        CHECK,
+        /** The card was just passed: the prompt makes a new gate. */
+        MAKE,
+        /** No gate, and no card passed since: two words from the card first. */
+        CARD_FIRST,
+    }
+
+    /**
+     * Set by [resetGate] once the card was passed; taken by the one prompt that follows, and
+     * only within [GateAllowance.WINDOW_MS] of the card. Kept in memory only: a card passed in an
+     * earlier run of the app allows nothing.
+     */
+    private val newGate = GateAllowance { SystemClock.elapsedRealtime() }
 
     /**
      * A cipher on `sealctl.gate` for a strong-biometric-only prompt. The gate file holds 32
      * random bytes; decrypting it is the proof of a fresh match. When there is no gate yet the
-     * cipher encrypts a new one. Throws [KeysInvalidatedException] after an enrolment change and
+     * cipher encrypts a new one, but only after the card ([resetGate]): otherwise it throws
+     * [GateNeedsCardException]. Throws [KeysInvalidatedException] after an enrolment change and
      * [NoBiometricsException] when a new gate key can't be made.
      */
     fun gate(): Gate {
         val existing = existingKey(GATE_KEY)
         val gate = file(GATE)
         return try {
-            if (existing != null && gate.exists()) {
-                val raw = gate.readBytes()
-                Gate(Cipher.getInstance(GCM).apply { init(Cipher.DECRYPT_MODE, existing, GCMParameterSpec(128, raw, 0, IV)) }, false)
-            } else {
-                val key = existing ?: key(GATE_KEY) { gateAuth() }
-                Gate(Cipher.getInstance(GCM).apply { init(Cipher.ENCRYPT_MODE, key) }, true)
+            val hasGate = existing != null && gate.exists()
+            // The card's allowance goes to this one prompt: cancelled or failed, the card again.
+            when (gateStep(existing != null, gate.exists(), !hasGate && newGate.take())) {
+                GateStep.CHECK -> {
+                    val raw = gate.readBytes()
+                    Gate(Cipher.getInstance(GCM).apply { init(Cipher.DECRYPT_MODE, existing, GCMParameterSpec(128, raw, 0, IV)) }, false)
+                }
+                GateStep.MAKE -> {
+                    val key = existing ?: key(GATE_KEY) { gateAuth() }
+                    Gate(Cipher.getInstance(GCM).apply { init(Cipher.ENCRYPT_MODE, key) }, true)
+                }
+                GateStep.CARD_FIRST -> throw GateNeedsCardException()
             }
         } catch (e: KeyPermanentlyInvalidatedException) {
             throw KeysInvalidatedException()
@@ -185,10 +217,14 @@ class Vault(private val context: Context) {
         false
     }
 
-    /** After an enrolment change and the card words: a new gate key. */
+    /**
+     * After two words from the card (an enrolment change, or before the first gate): removes
+     * any old gate and lets the next biometric prompt make a new one.
+     */
     fun resetGate() {
         deleteKey(GATE_KEY)
         file(GATE).delete()
+        newGate.allow()
     }
 
     private fun KeyGenParameterSpec.Builder.gateAuth() {
@@ -206,6 +242,7 @@ class Vault(private val context: Context) {
 
     /** Deletes every key and file (Erase sealctl from this phone). */
     fun erase() {
+        newGate.clear()
         for (alias in listOf(ROOT_KEY, WORDS_KEY, DEVICE_KEY, GATE_KEY)) deleteKey(alias)
         for (f in listOf(ROOT, WORDS, PHONE, GATE, "root.old.bin", "words.old.bin")) file(f).delete()
     }
@@ -286,6 +323,17 @@ class Vault(private val context: Context) {
     }
 
     companion object {
+        /**
+         * The gate rule (SPEC.md 9.6): a stored gate is checked; a missing or half-made one is
+         * made only after the card. A key without its file (a prompt cancelled while making it)
+         * or a file without its key is no gate.
+         */
+        fun gateStep(hasKey: Boolean, hasFile: Boolean, cardPassed: Boolean): GateStep = when {
+            hasKey && hasFile -> GateStep.CHECK
+            cardPassed -> GateStep.MAKE
+            else -> GateStep.CARD_FIRST
+        }
+
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val GCM = "AES/GCM/NoPadding"
         private const val IV = 12
@@ -297,5 +345,34 @@ class Vault(private val context: Context) {
         const val WORDS_KEY = "sealctl.words"
         const val DEVICE_KEY = "sealctl.device"
         const val GATE_KEY = "sealctl.gate"
+    }
+}
+
+/**
+ * The allowance two words from the card give for making a new gate (SPEC.md 9.6): for the one
+ * biometric prompt that follows, and only within [WINDOW_MS] of the card on [now] (a clock
+ * since boot), so a card passed and then left does not let a face enrolled later make the gate.
+ */
+class GateAllowance(private val now: () -> Long) {
+    private var until = 0L
+
+    @Synchronized fun allow() {
+        until = now() + WINDOW_MS
+    }
+
+    /** Whether the card allows a new gate now; true at most once per [allow]. */
+    @Synchronized fun take(): Boolean {
+        val ok = until != 0L && now() < until
+        until = 0L
+        return ok
+    }
+
+    @Synchronized fun clear() {
+        until = 0L
+    }
+
+    companion object {
+        /** Two minutes from the card to the prompt. */
+        const val WINDOW_MS = 120_000L
     }
 }

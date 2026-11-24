@@ -10,7 +10,8 @@ final class SettingsTests: SealctlTestCase {
         see("Showing the words is a sensitive action. Every paired computer is told.")
         see("This starts two hours after you confirm.")
         tap("Confirm with Face ID")
-        faceID(then: "Showing your words")
+        // The first level 3 action on this phone: two card words first (9.6).
+        gate(then: "Showing your words")
         see("Starts at")
         // The shortened hour ends; confirm again to finish.
         see("The hour is over. Confirm again to finish.", TimeInterval(Env.delay + 30))
@@ -51,7 +52,7 @@ final class SettingsTests: SealctlTestCase {
         tab("Settings")
         tap("Show words")
         tap("Confirm with Face ID")
-        faceID(then: "Starts at")
+        gate(then: "Starts at")
         tap("Cancel")
         see("Cancelled. Nothing happened.", 20)
     }

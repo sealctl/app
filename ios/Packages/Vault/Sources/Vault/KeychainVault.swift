@@ -119,6 +119,10 @@ public actor KeychainVault: Vault {
     // MARK: the gate (levels 2 and 3, SPEC.md 9.6)
 
     private static let gateMade = "com.sealctl.gate.made"
+    /// Set by `resetGate` once the card was passed; taken by the one prompt that follows, and
+    /// only within `GateAllowance.window` of the card. In memory only: a card passed in an
+    /// earlier run of the app allows nothing.
+    private var newGate = GateAllowance()
 
     public func gate(reason: String) async -> GateResult {
         let ctx = LAContext()
@@ -129,6 +133,12 @@ public actor KeychainVault: Vault {
             if error?.code == LAError.biometryLockout.rawValue { return .lockedOut }
             return .unavailable
         }
+        // No gate yet: the card first, before any prompt (9.6).
+        let itemExists = exists(Self.gateItem), made = defaults.bool(forKey: Self.gateMade)
+        // The card's allowance goes to this one prompt: cancelled or failed, the card again.
+        let step = GateStep.of(itemExists: itemExists, made: made,
+                               cardPassed: !itemExists && !made && newGate.take(now: Self.uptime()))
+        if step == .cardFirst { return .noGate }
         do {
             guard try await ctx.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) else {
                 return .failed("denied")
@@ -151,7 +161,7 @@ public actor KeychainVault: Vault {
         }
         // An item that is there but can't be read was invalidated by an enrolment change. The
         // flag alone can't tell: UserDefaults go with the app, the keychain item stays (7.4).
-        if defaults.bool(forKey: Self.gateMade) || exists(Self.gateItem) { return .changed }
+        if step == .check { return .changed }
         return makeGate(ctx, readStatus: status)
     }
 
@@ -176,7 +186,11 @@ public actor KeychainVault: Vault {
     public func resetGate() {
         delete(Self.gateItem)
         defaults.removeObject(forKey: Self.gateMade)
+        newGate.allow(now: Self.uptime())
     }
+
+    /// Seconds since boot, not moved by the date and time settings.
+    private static func uptime() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
 
     // MARK: iCloud Keychain copy
 
@@ -203,6 +217,7 @@ public actor KeychainVault: Vault {
     public func erase() {
         for s in [Self.words, Self.root, Self.phone, Self.gateItem, "com.sealctl.root.old", "com.sealctl.words.old"] { delete(s) }
         defaults.removeObject(forKey: Self.gateMade)
+        newGate = GateAllowance()
     }
 
     // MARK: plumbing

@@ -47,6 +47,7 @@ import com.sealctl.designsystem.Title
 import com.sealctl.designsystem.monoStyle
 import com.sealctl.vault.AuthResult
 import com.sealctl.vault.Biometric
+import com.sealctl.vault.GateNeedsCardException
 import com.sealctl.vault.KeysInvalidatedException
 import com.sealctl.vault.NoBiometricsException
 import com.sealctl.vault.Vault
@@ -59,6 +60,8 @@ sealed class GateResult {
     data object Cancelled : GateResult()
     data object LockedOut : GateResult()
     data object Changed : GateResult()
+    /** No gate yet on this phone: two words from the card before the first one is made. */
+    data object NoGate : GateResult()
     /** No strong biometric on this phone: level 2 uses the card, level 3 is refused (9.6). */
     data object NoBiometrics : GateResult()
     data class Failed(val message: String) : GateResult()
@@ -71,6 +74,8 @@ suspend fun biometricGate(activity: FragmentActivity, reason: String): GateResul
         vault.gate()
     } catch (e: KeysInvalidatedException) {
         return GateResult.Changed
+    } catch (e: GateNeedsCardException) {
+        return GateResult.NoGate
     } catch (e: NoBiometricsException) {
         return GateResult.NoBiometrics
     } catch (e: java.security.GeneralSecurityException) {
@@ -86,6 +91,20 @@ suspend fun biometricGate(activity: FragmentActivity, reason: String): GateResul
         is AuthResult.Failed -> GateResult.Failed(r.message)
     }
 }
+
+/** The card asks before a new gate is made: the first one, or one after an enrolment change. */
+fun GateResult.needsCardForGate(): Boolean = this == GateResult.Changed || this == GateResult.NoGate
+
+/**
+ * Two words from the card before a new gate (SPEC.md 9.6): the first gate on this phone, or a
+ * new one after a fingerprint or face was added or removed. Passing it lets the next biometric
+ * prompt make the gate; [onPassed] then asks it again.
+ */
+@Composable
+fun GateCardWords(activity: FragmentActivity, why: GateResult, onPassed: () -> Unit, onCancel: () -> Unit) =
+    CardWords(activity, positions = 2, groups = 2, title = "Use your card",
+        body = if (why == GateResult.NoGate) Texts.FIRST_GATE else Texts.BIOMETRY_CHANGED,
+        onPassed = { Graph.engine.vault.resetGate(); onPassed() }, onCancel = onCancel)
 
 private enum class CardFor { Plan, Changed, Instead }
 
@@ -104,6 +123,7 @@ fun SensitiveScreen(activity: MainActivity, requestId: String) {
     // Why the card is asked for: the plan needs it, the enrolment changed, or level 2 takes
     // the card instead of a biometric this phone can't give (no strong biometric, locked out).
     var cardFor by remember { mutableStateOf(CardFor.Plan) }
+    var gateWhy by remember { mutableStateOf<GateResult>(GateResult.Changed) }
     var cardInstead by remember { mutableStateOf(false) }
     // The number match and the plan are kept out of screenshots and recents (SPEC.md 11.21).
     SecureScreen()
@@ -115,6 +135,29 @@ fun SensitiveScreen(activity: MainActivity, requestId: String) {
     val name = remember(requestId) { w?.let { engine.displayName(it.machine) } ?: "" }
     val level3 = (w?.verdict?.level?.toInt() ?: 3) >= 3
     fun deny() = scope.launch { w?.let { engine.deny(it) }; Ui.pop() }
+    fun confirm(w: Waiting) = scope.launch {
+        if (w.verdict.needsCardWords && !cardChecked) { cardFor = CardFor.Plan; step = SStep.CardWords; return@launch }
+        if (w.verdict.needsBiometrics && !(cardInstead && !level3)) {
+            when (val g = biometricGate(activity, "Confirm handing back $name.")) {
+                GateResult.Passed -> {}
+                GateResult.Cancelled -> return@launch
+                GateResult.LockedOut -> {
+                    if (level3) { engine.refuse(w, RefuseReason.NO_BIOMETRICS); error = Texts.LOCKED_OUT; return@launch }
+                    cardFor = CardFor.Instead; step = SStep.CardWords; return@launch
+                }
+                GateResult.Changed, GateResult.NoGate -> { gateWhy = g; cardFor = CardFor.Changed; step = SStep.CardWords; return@launch }
+                GateResult.NoBiometrics -> {
+                    if (level3) { engine.refuse(w, RefuseReason.NO_BIOMETRICS); error = Texts.NO_BIOMETRICS; return@launch }
+                    cardFor = CardFor.Instead; step = SStep.CardWords; return@launch
+                }
+                is GateResult.Failed -> { error = g.message; return@launch }
+            }
+        }
+        val ok = engine.confirmSensitive(w)
+        // Still waiting: the reply did not go and can be confirmed again.
+        val still = engine.waiting.value.any { it.relay.id == w.relay.id && !it.expired }
+        step = if (!ok) { error = if (still) Texts.ANSWER_NOT_SENT else Texts.stoppedWaiting(name); SStep.Plan } else if (engine.local.value.delayed.any { it.id == w.relay.id }) SStep.Delay else SStep.Done
+    }
     when (step) {
         SStep.Number -> NumberMatch(w!!, name, onPick = { ok ->
             if (ok) step = SStep.Plan else scope.launch { engine.wrongNumber(w); step = SStep.WrongNumber }
@@ -128,40 +171,21 @@ fun SensitiveScreen(activity: MainActivity, requestId: String) {
             Body(Texts.WRONG_NUMBER_BODY)
             Muted(Texts.WRONG_NUMBER_WHAT)
         }
-        SStep.Plan -> PlanView(w!!, name, level3, error, onConfirm = {
-            scope.launch {
-                if (w.verdict.needsCardWords && !cardChecked) { cardFor = CardFor.Plan; step = SStep.CardWords; return@launch }
-                if (w.verdict.needsBiometrics && !(cardInstead && !level3)) {
-                    when (val g = biometricGate(activity, "Confirm handing back $name.")) {
-                        GateResult.Passed -> {}
-                        GateResult.Cancelled -> return@launch
-                        GateResult.LockedOut -> {
-                            if (level3) { engine.refuse(w, RefuseReason.NO_BIOMETRICS); error = Texts.LOCKED_OUT; return@launch }
-                            cardFor = CardFor.Instead; step = SStep.CardWords; return@launch
-                        }
-                        GateResult.Changed -> { cardFor = CardFor.Changed; step = SStep.CardWords; return@launch }
-                        GateResult.NoBiometrics -> {
-                            if (level3) { engine.refuse(w, RefuseReason.NO_BIOMETRICS); error = Texts.NO_BIOMETRICS; return@launch }
-                            cardFor = CardFor.Instead; step = SStep.CardWords; return@launch
-                        }
-                        is GateResult.Failed -> { error = g.message; return@launch }
-                    }
-                }
-                val ok = engine.confirmSensitive(w)
-                // Still waiting: the reply did not go and can be confirmed again.
-                val still = engine.waiting.value.any { it.relay.id == w.relay.id && !it.expired }
-                step = if (!ok) { error = if (still) Texts.ANSWER_NOT_SENT else Texts.stoppedWaiting(name); SStep.Plan } else if (engine.local.value.delayed.any { it.id == w.relay.id }) SStep.Delay else SStep.Done
-            }
-        }, onDeny = { deny() })
-        SStep.CardWords -> CardWords(activity, positions = 2, groups = 2, title = "Use your card", onPassed = {
+        SStep.Plan -> PlanView(w!!, name, level3, error, onConfirm = { confirm(w) }, onDeny = { deny() })
+        SStep.CardWords -> if (cardFor == CardFor.Changed) GateCardWords(activity, gateWhy, onPassed = {
+            // The prompt again makes the new gate, and the confirmation goes on.
+            step = SStep.Plan
+            w?.let { confirm(it) }
+        }, onCancel = { step = SStep.Plan })
+        else CardWords(activity, positions = 2, groups = 2, title = "Use your card", onPassed = {
             when (cardFor) {
                 CardFor.Plan -> {
                     cardChecked = true
                     // The core asks for both after an enrolment change: the gate is made again.
                     if (w?.verdict?.needsBiometrics == true) engine.vault.resetGate()
                 }
-                // The card meets the check; the gate is made again from the next biometric.
-                CardFor.Changed -> engine.vault.resetGate()
+                // Shown by GateCardWords above.
+                CardFor.Changed -> {}
                 // Level 2 only: the card stands in for the biometric on the next Confirm.
                 CardFor.Instead -> cardInstead = true
             }

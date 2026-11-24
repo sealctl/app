@@ -92,6 +92,8 @@ struct CLIFlowTests {
                 #expect(w.request.matchChoices().contains(n))
                 #expect(w.request.checkMatch(pick: n))
             }
+            // The card before the first gate (SPEC.md 9.6).
+            await vault.resetGate()
             #expect(await vault.gate(reason: "Confirm handing back \(self.name).") == .passed)
             #expect(await engine.confirmSensitive(w))
         }

@@ -523,8 +523,14 @@ Not level 3: showing the words during onboarding (no machine is paired yet) and 
 | No biometric hardware, none enrolled, or (Android) only weak (class 2) biometrics | Two words from the card, by position, with the keypad of 11.16; never the passcode | Refused: `no_biometrics` to a machine; on the phone, "This needs Face ID (Android: a fingerprint or face unlock of the strong class), and this phone has none set up." On a computer, `sealctl unseal --all --words` works with the card |
 | Locked out after failed tries | Same as above | Refused until biometrics work again: "Face ID is locked after too many tries. Lock and unlock your iPhone with its passcode, then try again." |
 | A face or fingerprint was added or removed (the gate item or key is invalidated) | First two words from the card, then the app makes a new gate and continues | The same, then the level 3 flow |
+| No gate yet: the first biometric confirmation on this phone (pairing in onboarding, the first level 2 or 3 action, [Release now], "Trust where I am now"), also after a restore, an erase or a reinstall | The same as after an enrolment change: two words from the card, then the prompt makes the first gate | The same, then the level 3 flow |
 
 The card is the fallback because the passcode is what a thief watching over a shoulder gets; the card is somewhere else. A thief who knows the passcode and enrols their own face meets the card check.
+
+**The gate is made only after the card.** The gate (`com.sealctl.gate`, `sealctl.gate`) trusts the faces and fingerprints enrolled when it is made. So the app never makes one on its own: the first one, like a new one after an enrolment change, comes right after two words from the card, in the same screen flow ("Use your card"), with the same tries and messages as the level 2 card fallback. Passing the card allows one new gate, for the one prompt that follows it, within two minutes and in that run of the app only: that prompt makes it, and later confirmations read it with no card. A prompt that is cancelled or fails, or a card left for longer, means the card again. Without the card, a face enrolled by someone holding the unlocked phone, before the owner's first sensitive action, would be trusted from then on. A phone without biometrics keeps the card fallback of the table above and never makes a gate.
+
+- The card screen says why. First gate: "Before Face ID can confirm sensitive actions on this phone, type two words from your card." (Touch ID, Optic ID; Android: "Before your fingerprint or face can confirm sensitive actions on this phone, type two words from your card."). After an enrolment change: "A face or fingerprint was added or removed on this phone. Type two words from your card first."
+- Then the confirmation goes on by itself: the prompt asks again, makes the gate, and the action continues.
 
 **Proximity** (level 2 and 3) means the person approving can see the machine:
 
@@ -895,7 +901,7 @@ The camera fills the screen with a square guide. Camera permission text (iOS `NS
 > [Pair]
 > [Cancel]
 
-[Pair] asks for biometrics (level 2, 9.6: "Confirm pairing dev@mbp.example.com."), reads the phone keys (the root is not needed), computes the proof, and posts the machine. If the name matches a paired machine, the duplicate card (11.6) comes first.
+[Pair] asks for biometrics (level 2, 9.6: "Confirm pairing dev@mbp.example.com."; the first pairing on a phone asks two words from the card before that, 9.6), reads the phone keys (the root is not needed), computes the proof, and posts the machine. If the name matches a paired machine, the duplicate card (11.6) comes first.
 
 The app's own camera is the proof of proximity for pairing. A pairing link opened any other way (tapped in a message, opened by the system camera) leads to the scanner with: "Scan the code with sealctl. On a computer without a terminal, open the link in its browser to see the code." The website's `/p` page draws the code from the link's fragment (19.3).
 
@@ -1723,7 +1729,7 @@ XCUITest and Compose UI tests, each against a fresh fake relay:
 8. Yearly check right and wrong.
 9. Delete relay data; erase this phone; Leave sealctl with two fake machines, one handed back by unpairing itself and one skipped, resumed after the app is killed at each step.
 10. Offline, clock skew, rate limit banners.
-11. Levels 2 and 3 against the fake machine and fake relay: `unseal` of one object near and not near (number asked, right and wrong, hold and release); `unseal --all` at a trusted place and away (delay, countdown, cancel here, cancel from a second fake machine, release fetched by the machine); a plan in parts; keys outside the plan refused; Show words and Delete my relay data with the delay and `finish`; the card check right and wrong; the report screen. Biometrics simulated: matched, failed, not enrolled (level 2 asks the card, level 3 refuses), locked out, enrolment changed (card first, then a new gate).
+11. Levels 2 and 3 against the fake machine and fake relay: `unseal` of one object near and not near (number asked, right and wrong, hold and release); `unseal --all` at a trusted place and away (delay, countdown, cancel here, cancel from a second fake machine, release fetched by the machine); a plan in parts; keys outside the plan refused; Show words and Delete my relay data with the delay and `finish`; the card check right and wrong; the report screen. Biometrics simulated: matched, failed, not enrolled (level 2 asks the card, level 3 refuses), locked out, enrolment changed (card first, then a new gate), and the first gate (the first pairing and the first Show words ask the card, then Face ID).
 
 ### 16.5 Real-device matrix
 

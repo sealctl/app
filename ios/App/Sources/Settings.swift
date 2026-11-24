@@ -173,66 +173,74 @@ struct PlacesView: View {
     @SwiftUI.State private var removing: String?
     @SwiftUI.State private var renaming: String?
     @SwiftUI.State private var newName = ""
+    /// Two card words before a new gate (9.6), asked by "Trust where I am now"; then it goes on.
+    @SwiftUI.State private var gateCard: GateCard?
 
     var body: some View {
         let e = model.engine!
         let places = e.state.places.filter { !$0.deleted }
-        Page("Places", onBack: { router.pop() }) {
-            if let o = e.placeOffer {
-                SurfaceCard {
-                    TitleText("Trust this place?")
-                    BodyText("You opened your machines here on \(o.days.count) mornings: \(o.days.joined(separator: ", ")).")
-                    BodyText("At a trusted place, reopening needs no tap while your phone is unlocked and near the machine, sessions can stay open up to 4 hours, and leaving locks the machines you opened here. The location stays on this phone.")
-                    TextField("Name", text: $name).textFieldStyle(.roundedBorder)
-                    PrimaryButton("Trust") { Task { await e.trustPlace(o, name: name) } }
-                    PlainButton("Not this place") { Task { await e.suppressPlace(o) } }
-                }
-            }
-            if !model.places.hasForeground {
-                BodyText("Places need location access. Without it, a session stays open up to 1 hour and reopening always takes a tap.")
-                PrimaryButton("Allow location") {
-                    Task {
-                        if model.places.undetermined { await model.places.requestWhenInUse() } else { Links.settings() }
+        if let g = gateCard {
+            GateCardWordsView(why: g.why, onPassed: { gateCard = nil; g.then() }, onCancel: { gateCard = nil })
+        } else {
+            Page("Places", onBack: { router.pop() }) {
+                if let o = e.placeOffer {
+                    SurfaceCard {
+                        TitleText("Trust this place?")
+                        BodyText("You opened your machines here on \(o.days.count) mornings: \(o.days.joined(separator: ", ")).")
+                        BodyText("At a trusted place, reopening needs no tap while your phone is unlocked and near the machine, sessions can stay open up to 4 hours, and leaving locks the machines you opened here. The location stays on this phone.")
+                        TextField("Name", text: $name).textFieldStyle(.roundedBorder)
+                        PrimaryButton("Trust") { Task { await e.trustPlace(o, name: name) } }
+                        PlainButton("Not this place") { Task { await e.suppressPlace(o) } }
                     }
                 }
-            } else if places.isEmpty {
-                MutedText("No places yet. After three mornings of approving at the same spot, sealctl asks whether to trust it.")
-            }
-            if model.places.hasForeground && e.currentPlace == nil && e.placeOffer == nil { TrustHereView() }
-            ForEach(places, id: \.id) { p in
-                SurfaceCard {
-                    Text(p.name).fontWeight(.semibold).foregroundStyle(Palette.ink)
-                    // created 0: added by hand while the clock could not be checked (SPEC.md 8.1)
-                    MutedText((p.created == 0 ? "trusted just now" : "trusted since \(Texts.isoDate(Int64(p.created)))")
-                              + (e.currentPlace == p.id ? " · You're here" : ""))
-                    if p.manual && p.created == 0 {
-                        MutedText("Skips the two-hour wait 24 hours after your phone next reaches sealctl")
-                    } else if p.manual && Int64(p.created) + 86_400_000 > nowMs() {
-                        MutedText("Skips the two-hour wait from \(Texts.time(Int64(p.created) + 86_400_000)) tomorrow")
+                if !model.places.hasForeground {
+                    BodyText("Places need location access. Without it, a session stays open up to 1 hour and reopening always takes a tap.")
+                    PrimaryButton("Allow location") {
+                        Task {
+                            if model.places.undetermined { await model.places.requestWhenInUse() } else { Links.settings() }
+                        }
                     }
-                    if removing == p.id {
-                        BodyText("Remove \(p.name)? Machines opened here stay Open until their allowance ends.")
-                        HStack {
-                            TextButton("Remove") { Task { await e.removePlace(p.id); removing = nil } }
-                            TextButton("Cancel") { removing = nil }
+                } else if places.isEmpty {
+                    MutedText("No places yet. After three mornings of approving at the same spot, sealctl asks whether to trust it.")
+                }
+                if model.places.hasForeground && e.currentPlace == nil && e.placeOffer == nil {
+                    TrustHereView(onCard: { why, then in gateCard = GateCard(why: why, then: then) })
+                }
+                ForEach(places, id: \.id) { p in
+                    SurfaceCard {
+                        Text(p.name).fontWeight(.semibold).foregroundStyle(Palette.ink)
+                        // created 0: added by hand while the clock could not be checked (SPEC.md 8.1)
+                        MutedText((p.created == 0 ? "trusted just now" : "trusted since \(Texts.isoDate(Int64(p.created)))")
+                                  + (e.currentPlace == p.id ? " · You're here" : ""))
+                        if p.manual && p.created == 0 {
+                            MutedText("Skips the two-hour wait 24 hours after your phone next reaches sealctl")
+                        } else if p.manual && Int64(p.created) + 86_400_000 > nowMs() {
+                            MutedText("Skips the two-hour wait from \(Texts.time(Int64(p.created) + 86_400_000)) tomorrow")
                         }
-                    } else if renaming == p.id {
-                        TextField("Name", text: $newName).textFieldStyle(.roundedBorder)
-                        HStack {
-                            TextButton("Rename") { Task { await e.renamePlace(p.id, newName); renaming = nil } }
-                            TextButton("Cancel") { renaming = nil }
-                        }
-                    } else {
-                        HStack(spacing: 20) {
-                            TextButton("Rename") { newName = p.name; renaming = p.id }
-                            TextButton("Remove") { removing = p.id }
+                        if removing == p.id {
+                            BodyText("Remove \(p.name)? Machines opened here stay Open until their allowance ends.")
+                            HStack {
+                                TextButton("Remove") { Task { await e.removePlace(p.id); removing = nil } }
+                                TextButton("Cancel") { removing = nil }
+                            }
+                        } else if renaming == p.id {
+                            TextField("Name", text: $newName).textFieldStyle(.roundedBorder)
+                            HStack {
+                                TextButton("Rename") { Task { await e.renamePlace(p.id, newName); renaming = nil } }
+                                TextButton("Cancel") { renaming = nil }
+                            }
+                        } else {
+                            HStack(spacing: 20) {
+                                TextButton("Rename") { newName = p.name; renaming = p.id }
+                                TextButton("Remove") { removing = p.id }
+                            }
                         }
                     }
                 }
+                MutedText("Places are learned: after three mornings of approving at the same spot, sealctl asks whether to trust it. You can also trust where you are now.")
             }
-            MutedText("Places are learned: after three mornings of approving at the same spot, sealctl asks whether to trust it. You can also trust where you are now.")
+            .onAppear { name = "Place \(places.count + 1)" }
         }
-        .onAppear { name = "Place \(places.count + 1)" }
     }
 }
 
@@ -240,6 +248,8 @@ struct PlacesView: View {
 /// at once; it lifts the level 3 delay only after 24 hours.
 struct TrustHereView: View {
     @Environment(AppModel.self) private var model
+    /// No gate yet or a changed enrolment: the card first (9.6), then `then` asks again.
+    let onCard: (GateResult, @escaping () -> Void) -> Void
     @SwiftUI.State private var fix: Fix?
     @SwiftUI.State private var locating = false
     @SwiftUI.State private var name = "Home"
@@ -255,22 +265,7 @@ struct TrustHereView: View {
                 MutedText("Accurate to \(Int(f.accuracy)) m. The location stays on this phone.")
                 TextField("Name", text: $name).textFieldStyle(.roundedBorder)
                 ErrorText(error)
-                PrimaryButton("Trust") {
-                    Task {
-                        guard await e.vault.gate(reason: "Trust this place") == .passed else {
-                            error = "Couldn't confirm it's you."
-                            return
-                        }
-                        let n = name.trimmingCharacters(in: .whitespaces)
-                        // `created` 0: the store stamps it on the corrected clock (8.1).
-                        await e.apply(.addPlace(place: TrustedPlace(id: randomId(), name: n.isEmpty ? "Place" : String(n.prefix(40)),
-                                                                    lat: f.lat, lon: f.lon, radius: 150, created: 0,
-                                                                    updated: 0, deleted: false, manual: true)), upload: true)
-                        await e.monitorPlaces()
-                        fix = nil
-                        e.show("Trusted \(n.isEmpty ? "Place" : n).")
-                    }
-                }
+                PrimaryButton("Trust") { trust(f, name.trimmingCharacters(in: .whitespaces), e) }
             }
         } else {
             SecondaryButton(locating ? "Finding where you are…" : "Trust where I am now", enabled: !locating) {
@@ -289,6 +284,30 @@ struct TrustHereView: View {
                 }
             }
             ErrorText(error)
+        }
+    }
+
+    /// Biometrics, then the place. `f` and `n` are passed in: after the card this view may be gone.
+    private func trust(_ f: Fix, _ n: String, _ e: AppEngine) {
+        Task {
+            let result = await e.vault.gate(reason: "Trust this place")
+            switch result {
+            case .passed: break
+            case .changed, .noGate:
+                error = nil
+                onCard(result) { trust(f, n, e) }
+                return
+            default:
+                error = "Couldn't confirm it's you."
+                return
+            }
+            // `created` 0: the store stamps it on the corrected clock (8.1).
+            await e.apply(.addPlace(place: TrustedPlace(id: randomId(), name: n.isEmpty ? "Place" : String(n.prefix(40)),
+                                                        lat: f.lat, lon: f.lon, radius: 150, created: 0,
+                                                        updated: 0, deleted: false, manual: true)), upload: true)
+            await e.monitorPlaces()
+            fix = nil
+            e.show("Trusted \(n.isEmpty ? "Place" : n).")
         }
     }
 }
@@ -346,10 +365,15 @@ struct MachineDetailView: View {
     let key: String
     @SwiftUI.State private var confirmUnpair = false
     @SwiftUI.State private var nickname = ""
+    @SwiftUI.State private var releaseError: String?
+    /// Two card words before a new gate (9.6), asked by [Release now]; then it goes on.
+    @SwiftUI.State private var gateCard: GateCard?
 
     var body: some View {
         let e = model.engine!
-        if let m = e.state.machines.first(where: { $0.key == key && !$0.deleted }) {
+        if let g = gateCard {
+            GateCardWordsView(why: g.why, onPassed: { gateCard = nil; g.then() }, onCancel: { gateCard = nil })
+        } else if let m = e.state.machines.first(where: { $0.key == key && !$0.deleted }) {
             Ticker { now in
                 let v = MachineView.of(m, e, now: now)
                 let tag = (try? machineTag(machineKey: key)) ?? ""
@@ -362,13 +386,8 @@ struct MachineDetailView: View {
                     if !v.detail.isEmpty { BodyText(v.detail) }
                     if let hold = e.local.holds.first(where: { $0.machine == key && Int64($0.until) > now }) {
                         Text(Texts.held(e.displayName(m), until: Int64(hold.until))).foregroundStyle(Palette.waiting)
-                        TextButton("Release now") {
-                            Task {
-                                if await e.vault.gate(reason: "Confirm releasing \(e.displayName(m)).") == .passed {
-                                    await e.releaseHold(key)
-                                }
-                            }
-                        }
+                        TextButton("Release now") { release(m, e) }
+                        ErrorText(releaseError)
                     }
                     if v.state == .open {
                         PrimaryButton("Lock now") {
@@ -402,6 +421,24 @@ struct MachineDetailView: View {
             .onAppear { nickname = m.nickname ?? "" }
         } else {
             Page(onBack: { router.pop() }) { MutedText("This machine is no longer paired.") }
+        }
+    }
+}
+
+extension MachineDetailView {
+    /// [Release now]: biometrics, or the card first when there is no gate yet (9.6).
+    private func release(_ m: Machine, _ e: AppEngine) {
+        Task {
+            releaseError = nil
+            let result = await e.vault.gate(reason: "Confirm releasing \(e.displayName(m)).")
+            switch result {
+            case .passed: await e.releaseHold(key)
+            case .cancelled: break
+            case .changed, .noGate: gateCard = GateCard(why: result) { release(m, e) }
+            case .lockedOut: releaseError = Texts.lockedOut(e.biometryName)
+            case .unavailable: releaseError = Texts.noBiometrics(e.biometryName)
+            case .failed: releaseError = "Couldn't confirm it's you."
+            }
         }
     }
 }
@@ -467,8 +504,9 @@ struct PhoneAction<Intro: View>: View {
     @SwiftUI.State private var done: String?
     /// The delay on screen stays until closed, also after a cancel.
     @SwiftUI.State private var delayId: String?
-    /// A face or fingerprint was added or removed: two card words come before a new gate (9.6).
-    @SwiftUI.State private var cardCheck = false
+    /// No gate yet, or a face or fingerprint was added or removed: two card words come before
+    /// a new gate (9.6).
+    @SwiftUI.State private var cardCheck: GateResult?
 
     init(what: String, reason: String, button: String, @ViewBuilder intro: () -> Intro, run: @escaping () async -> String?) {
         self.what = what; self.reason = reason; self.button = button; self.intro = intro(); self.run = run
@@ -483,14 +521,11 @@ struct PhoneAction<Intro: View>: View {
                     Gap(24)
                     BodyText(done)
                 } bottom: { PrimaryButton("Done") { router.pop() } }
-            } else if cardCheck {
-                CardWordsView(positions: 2, groups: 2, title: "Use your card", body: Texts.biometryChanged, onPassed: {
-                    Task {
-                        await e.vault.resetGate()
-                        cardCheck = false
-                        go(pending, e)
-                    }
-                }, onCancel: { cardCheck = false })
+            } else if let why = cardCheck {
+                GateCardWordsView(why: why, onPassed: {
+                    cardCheck = nil
+                    go(pending, e)
+                }, onCancel: { cardCheck = nil })
             } else if let id = delayId ?? pending.flatMap({ Int64($0.releaseAt) > now ? $0.id : nil }),
                       let d = e.local.delayed.first(where: { $0.id == id }),
                       (d.state == "waiting" && Int64(d.releaseAt) > now) || (d.state == "cancelled" && delayId == id) {
@@ -519,12 +554,13 @@ struct PhoneAction<Intro: View>: View {
     private func go(_ pending: DelayedAction?, _ e: AppEngine) {
         Task {
             error = nil
-            switch await e.vault.gate(reason: reason) {
+            let result = await e.vault.gate(reason: reason)
+            switch result {
             case .passed: break
             case .cancelled: return
             case .lockedOut: error = Texts.lockedOut(e.biometryName); return
             case .unavailable: error = Texts.noBiometrics(e.biometryName); return
-            case .changed: cardCheck = true; return
+            case .changed, .noGate: cardCheck = result; return
             case .failed(let m): error = "Couldn't confirm (\(m))."; return
             }
             if let pending {

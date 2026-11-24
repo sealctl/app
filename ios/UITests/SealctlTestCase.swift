@@ -6,6 +6,9 @@ class SealctlTestCase: XCTestCase {
     var app: XCUIApplication!
     /// The words of this test's phone, read from the words pages or typed in.
     var words: [String] = []
+    /// This test's phone has made its biometric gate. Before that, the first level 2 or 3
+    /// confirmation asks two words from the card (SPEC.md 9.6).
+    var gateMade = false
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -137,6 +140,34 @@ class SealctlTestCase: XCTestCase {
             Thread.sleep(forTimeInterval: 1)
         }
         see(next, 1, file: file, line: line)
+    }
+
+    /// Answers a level 2 or 3 confirmation the last tap raised. The first one on this phone
+    /// asks two words from the card before Face ID makes the gate (SPEC.md 9.6).
+    func gate(then next: String, _ timeout: TimeInterval = 20, file: StaticString = #filePath, line: UInt = #line) {
+        if !gateMade {
+            see("Before Face ID can confirm sensitive actions on this phone, type two words from your card.", 15, file: file, line: line)
+            typeCardWords(2, file: file, line: line)
+            gateMade = true
+        }
+        faceID(then: next, timeout, file: file, line: line)
+    }
+
+    /// The card check of 11.23: opens the words (Face ID or the passcode), types the words the
+    /// fields ask for, and checks.
+    func typeCardWords(_ count: Int, file: StaticString = #filePath, line: UInt = #line) {
+        tap("Use my card", file: file, line: line)
+        let fields = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'field-'"))
+        let end = Date().addingTimeInterval(30)
+        while !fields.firstMatch.exists && Date() < end {
+            Bio.match()
+            Thread.sleep(forTimeInterval: 1)
+        }
+        XCTAssertTrue(fields.firstMatch.waitForExistence(timeout: 5), uiTree(3000), file: file, line: line)
+        let positions = (0..<fields.count).map { Int(fields.element(boundBy: $0).identifier.dropFirst(6))! }
+        XCTAssertEqual(positions.count, count, file: file, line: line)
+        typeWords(positions.map { words[$0 - 1] }, fields: positions)
+        tap("Check", file: file, line: line)
     }
 
     /// Answers the notification permission alert, which only the first launch of a run sees
@@ -299,7 +330,7 @@ class SealctlTestCase: XCTestCase {
     func confirmPairing(_ name: String, button: String = "Pair") {
         if button == "Pair" { see("Pair this machine?") }
         tap(button)
-        faceID(then: "Paired. \(name) can now ask this phone for keys.", 30)
+        gate(then: "Paired. \(name) can now ask this phone for keys.", 30)
         tap("Done")
     }
 

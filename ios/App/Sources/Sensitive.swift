@@ -17,6 +17,8 @@ struct SensitiveView: View {
     @SwiftUI.State private var step: SStep?
     @SwiftUI.State private var error: String?
     @SwiftUI.State private var cardChecked = false
+    /// The card asked before a new gate (`changed` or `noGate`); then the prompt makes it.
+    @SwiftUI.State private var gateWhy: GateResult?
     @SwiftUI.State private var name = ""
     @SwiftUI.State private var machineKey = ""
 
@@ -50,13 +52,21 @@ struct SensitiveView: View {
                     }
                 case .plan: PlanView(w: w!, name: name, error: error, onConfirm: { confirm(w!, e) }, onDeny: { deny(w, e) })
                 case .cardWords:
-                    CardWordsView(positions: 2, groups: 2, title: "Use your card", body: nil, onPassed: {
-                        cardChecked = true
-                        Task {
-                            if w?.verdict.needsBiometrics == true { await e.vault.resetGate() }
+                    if let why = gateWhy {
+                        GateCardWordsView(why: why, onPassed: {
+                            gateWhy = nil
                             step = .plan
-                        }
-                    }, onCancel: { step = .plan })
+                            if let w { confirm(w, e) }
+                        }, onCancel: { gateWhy = nil; step = .plan })
+                    } else {
+                        CardWordsView(positions: 2, groups: 2, title: "Use your card", body: nil, onPassed: {
+                            cardChecked = true
+                            Task {
+                                if w?.verdict.needsBiometrics == true { await e.vault.resetGate() }
+                                step = .plan
+                            }
+                        }, onCancel: { step = .plan })
+                    }
                 case .delay: DelayView(id: requestId, title: Texts.leaving(name))
                 case .done:
                     Page(onBack: { router.pop() }) {
@@ -92,7 +102,8 @@ struct SensitiveView: View {
                 return
             }
             if w.verdict.needsBiometrics && !cardChecked {
-                switch await e.vault.gate(reason: "Confirm handing back \(name).") {
+                let result = await e.vault.gate(reason: "Confirm handing back \(name).")
+                switch result {
                 case .passed: break
                 case .cancelled: return
                 case .lockedOut:
@@ -111,7 +122,9 @@ struct SensitiveView: View {
                     }
                     step = .cardWords
                     return
-                case .changed:
+                case .changed, .noGate:
+                    // Two card words, then this prompt again makes the new gate (9.6).
+                    gateWhy = result
                     step = .cardWords
                     return
                 case .failed(let m):
@@ -332,6 +345,37 @@ struct ReportView: View {
 
 extension Texts {
     static let biometryChanged = "A face or fingerprint was added or removed on this phone. Type two words from your card first."
+    /// Before the first gate (9.6).
+    static func firstGate(_ biometry: String) -> String {
+        "Before \(biometry) can confirm sensitive actions on this phone, type two words from your card."
+    }
+}
+
+/// A card check before a new gate, and what to do once it passed.
+struct GateCard {
+    let why: GateResult
+    let then: () -> Void
+}
+
+/// Two words from the card before a new gate (SPEC.md 9.6): the first gate on this phone, or a
+/// new one after a face or fingerprint was added or removed. Passing it lets the next prompt
+/// make the gate; `onPassed` then asks it again.
+struct GateCardWordsView: View {
+    @Environment(AppModel.self) private var model
+    let why: GateResult
+    let onPassed: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        let e = model.engine!
+        CardWordsView(positions: 2, groups: 2, title: "Use your card",
+                      body: why == .noGate ? Texts.firstGate(e.biometryName) : Texts.biometryChanged, onPassed: {
+            Task {
+                await e.vault.resetGate()
+                onPassed()
+            }
+        }, onCancel: onCancel)
+    }
 }
 
 /// Typed words from the card (level 2 fallback, Leave sealctl). The words are opened behind

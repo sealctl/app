@@ -67,11 +67,11 @@ impl RelayClock {
         }
     }
 
-    /// Same boot: the since-boot clock has not restarted, and the boot ids, when both are
-    /// known, match.
+    /// Same boot: the since-boot clock has not restarted and the boot ids match. An empty id
+    /// matches nothing: without a boot id a reboot followed by a longer uptime would look
+    /// like the same boot, so the time is not carried and the clock is stale (fails closed).
     fn same_boot(&self, boot: &Boot) -> bool {
-        boot.ms >= self.boot
-            && (self.boot_id.is_empty() || boot.id.is_empty() || self.boot_id == boot.id)
+        boot.ms >= self.boot && !self.boot_id.is_empty() && self.boot_id == boot.id
     }
 
     /// The relay's time carried forward: on the since-boot clock in the same boot, else the
@@ -147,8 +147,23 @@ pub fn system_ms() -> u64 {
 pub fn boot_now() -> Boot {
     Boot {
         ms: boot_ms(),
-        id: boot_id(),
+        id: boot_or_process_id(boot_id()),
     }
+}
+
+/// The boot's id, or when the system gives none (an app that can't read it), an id of this
+/// process. A relay time learned by an earlier process then never counts as this boot's: the
+/// clock is stale until the relay's time is learned again in this process, which the app
+/// does on launch and foreground (SPEC.md 8.1). The system clock is not used to tell boots
+/// apart: it is the clock that can be set.
+fn boot_or_process_id(boot: String) -> String {
+    if !boot.is_empty() {
+        return boot;
+    }
+    static PROCESS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    PROCESS
+        .get_or_init(|| format!("process-{}-{}", std::process::id(), boot_ms()))
+        .clone()
 }
 
 #[cfg(any(target_os = "android", target_os = "linux"))]
@@ -219,6 +234,42 @@ mod tests {
             ms,
             id: "b1".into(),
         }
+    }
+
+    #[test]
+    fn without_a_boot_id_a_time_from_an_earlier_process_is_stale() {
+        // No boot id at all: nothing counts as the same boot, so nothing is carried.
+        let none = |ms| Boot {
+            ms,
+            id: String::new(),
+        };
+        let c = RelayClock::learned(T, &none(H));
+        let now = c.now(T + 30 * H, &none(H + 60_000));
+        assert!(!now.fresh);
+        assert_eq!(now.now, T + 30 * H);
+        // The fallback id is this process's: learned and read in it, the clock is fresh.
+        let here = boot_or_process_id(String::new());
+        assert!(here.starts_with("process-"));
+        assert_eq!(boot_or_process_id(String::new()), here);
+        assert_eq!(boot_or_process_id("b1".into()), "b1");
+        let mine = |ms| Boot {
+            ms,
+            id: here.clone(),
+        };
+        let c = RelayClock::learned(T, &mine(H));
+        let now = c.now(T - 5 * H, &mine(H + 60_000));
+        assert!(now.fresh);
+        assert_eq!(now.now, T + 60_000);
+        // Stored, then read by a later process after a reboot with a longer uptime: stale,
+        // and the clock set back reads no earlier than the stored relay time.
+        let stored: RelayClock = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
+        let later = Boot {
+            ms: 5 * H,
+            id: "process-2-18000000".into(),
+        };
+        let now = stored.now(T - 5 * H, &later);
+        assert!(!now.fresh);
+        assert_eq!(now.now, T);
     }
 
     #[test]

@@ -63,6 +63,36 @@ final class Gate {
         #expect(engine.local.delayed.first { $0.id == "d1" }?.state == "cancelled")
         #expect(notifier.removed.contains("ready-d1"))
     }
+
+    /// A cancel sent again from the relay's list keeps what the relay answered (SPEC.md 11.23):
+    /// a final answer (`404 gone`, `403`, `400`, `409`) or a cancel the relay took ends the
+    /// resends; `429` waits out its window; no answer or a `5xx` waits 15 s, doubling.
+    @Test func cancelResendsKeepTheRelaysAnswer() {
+        var resends = CancelResends()
+        var now: Int64 = 1_000_000
+        let finals: [Error?] = [RelayError.http(status: 404, code: "gone", body: .null),
+                                RelayError.http(status: 403, code: "forbidden", body: .null),
+                                RelayError.http(status: 400, code: "bad_id", body: .null),
+                                RelayError.conflict(rev: 1), nil]
+        for (i, answer) in finals.enumerated() {
+            #expect(resends.due("d\(i)", now: now))
+            resends.answered("d\(i)", error: answer, now: now)
+            now += 3_600_000
+            #expect(!resends.due("d\(i)", now: now), "after \(String(describing: answer))")
+        }
+        resends.answered("r", error: RelayError.rateLimited(until: now + 120_000, scope: nil), now: now)
+        #expect(!resends.due("r", now: now + 119_000))
+        #expect(resends.due("r", now: now + 120_000))
+        now += 120_000
+        resends.answered("r", error: RelayError.transport("offline"), now: now)
+        #expect(!resends.due("r", now: now + 14_000))
+        #expect(resends.due("r", now: now + 15_000))
+        now += 15_000
+        resends.answered("r", error: RelayError.http(status: 503, code: "http_503", body: .null), now: now)
+        #expect(!resends.due("r", now: now + 29_000))
+        #expect(resends.due("r", now: now + 30_000))
+        #expect(CancelResends.backoffMs(20) == 15 * 60_000)
+    }
 }
 
 #if os(macOS)
@@ -645,6 +675,26 @@ extension TimingTests {
         let (code, out) = await m.waitAsync(r)
         #expect(code == 4, "\(out)")
         #expect(out.contains("CANCELLED by=phone"), "\(out)")
+    }
+
+    /// A cancel sent again that gets a final answer (here `403`) is not sent again on the next
+    /// looks at the relay's list, which run every 15 s while the countdown is open.
+    @Test func cancelSentAgainStopsAfterAFinalAnswer() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, _, m) = try await paired(relay, testDelay: 60)
+        let (w, r) = try await delayedApproval(engine, m)
+        defer { r.process.terminate() }
+        // Two refusals: the tapped cancel, then the first resend.
+        try await relay.control("/test/fail", #"{"path": "/cancel", "status": 403, "error": "forbidden", "times": 2}"#)
+        #expect(!(await engine.cancelDelayed(w.id)))
+        #expect(await engine.refreshDelayed())
+        // The relay would take it now, but nothing more is sent: the record stays live there.
+        #expect(await engine.refreshDelayed())
+        #expect(await engine.refreshDelayed())
+        let held = try await engine.relay.listDelayed().first { $0.id == w.id }
+        #expect(held?.state == "waiting")
+        #expect(engine.livePlan(w.machine.key) == nil)
     }
 }
 #endif

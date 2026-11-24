@@ -8,8 +8,11 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.sealctl.relay.RateLimitedException
+import com.sealctl.relay.RelayException
 import java.io.IOException
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonObject
 
 /** The plan that answers later key requests (SPEC.md 9.6, 11.23). */
 class PlansTest {
@@ -98,5 +101,54 @@ class PlansTest {
         // Cancelled from a computer, or not cancelled here: nothing to send.
         assertFalse(Plans.cancelAgain(mine.copy(cancelledBy = "m1"), "waiting"))
         assertFalse(Plans.cancelAgain(delayed("d1", "waiting"), "waiting"))
+    }
+
+    @Test
+    fun aResentCancelThatGotAFinalAnswerIsNotSentAgain() = runTest {
+        var now = 1_000_000L
+        val resends = CancelResends { now }
+        // `404 gone` (the record is gone), `403`, `400`, and a cancel the relay took.
+        val answers = listOf<Exception?>(RelayException(404, "gone"), RelayException(403, "forbidden"), RelayException(400, "bad_id"), null)
+        for ((i, answer) in answers.withIndex()) {
+            val id = "d$i"
+            var sent = 0
+            Plans.resendCancel(id, resends) { sent++; if (answer != null) throw answer }
+            // The countdown asks the relay's list every 15 s; an hour of that sends nothing more.
+            repeat(240) { now += 15_000; Plans.resendCancel(id, resends) { sent++ } }
+            assertEquals("after ${answer?.message ?: "200"}", 1, sent)
+        }
+    }
+
+    @Test
+    fun aResentCancelWaitsOutARateLimitAndBacksOffWithoutAnAnswer() = runTest {
+        var now = 1_000_000L
+        val resends = CancelResends { now }
+        var sent = 0
+        // `429`: nothing until its window ends (Retry-After).
+        Plans.resendCancel("d1", resends) { sent++; throw RateLimitedException(now + 120_000, null, JsonObject(emptyMap())) }
+        now += 119_000
+        Plans.resendCancel("d1", resends) { sent++ }
+        assertEquals(1, sent)
+        // No answer: 15 s, then twice as long each time.
+        now += 1_000
+        Plans.resendCancel("d1", resends) { sent++; throw IOException("offline") }
+        assertEquals(2, sent)
+        now += 14_000
+        Plans.resendCancel("d1", resends) { sent++ }
+        assertEquals(2, sent)
+        now += 1_000
+        Plans.resendCancel("d1", resends) { sent++; throw RelayException(503, "http_503") }
+        assertEquals(3, sent)
+        now += 29_000
+        Plans.resendCancel("d1", resends) { sent++ }
+        assertEquals(3, sent)
+        now += 1_000
+        Plans.resendCancel("d1", resends) { sent++ }
+        assertEquals(4, sent)
+        // Taken: done.
+        now += 3_600_000
+        Plans.resendCancel("d1", resends) { sent++ }
+        assertEquals(4, sent)
+        assertEquals(15 * 60_000L, CancelResends.backoffMs(20))
     }
 }

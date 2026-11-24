@@ -100,18 +100,29 @@ class SealctlTestCase: XCTestCase {
 
     /// Taps a text field and types once it has keyboard focus. A tap made while the screen still
     /// moves can land before the field takes focus, and `typeText` then fails with "Neither element
-    /// nor any descendant has keyboard focus": the field is tapped once more if focus has not come.
+    /// nor any descendant has keyboard focus". On a slow simulator (main runs 45242033275 and
+    /// 45155371322: the restore before it took twice as long as in the other tests) focus can take
+    /// longer than one short wait. So: up to three taps, each followed by up to 10 s of waiting for
+    /// focus (on the field or inside it), all within 40 s; a tap only while focus has not come.
+    /// The failure carries the UI tree, so the run keeps its screenshot.
     func enter(_ text: String, into field: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
         let focused = NSPredicate(format: "hasKeyboardFocus == true")
-        for attempt in 0..<2 {
-            waitHittable(field)
-            field.tap()
-            let got = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: focused, object: field)], timeout: 5)
-            if got == .completed { break }
-            if attempt == 1 {
-                XCTFail("no keyboard focus: \(field.identifier)", file: file, line: line)
+        let inside = field.descendants(matching: .any).matching(focused).firstMatch
+        func hasFocus() -> Bool { field.exists && (focused.evaluate(with: field) || inside.exists) }
+        let deadline = Date().addingTimeInterval(40)
+        var taps = 0
+        while !hasFocus() {
+            guard taps < 3, Date() < deadline else {
+                let keyboard = app.keyboards.firstMatch.exists ? "a keyboard is up" : "no keyboard"
+                XCTFail("no keyboard focus: \(Self.shown(field.identifier)) after \(taps) taps, \(keyboard)\n\(uiTree(3000))",
+                        file: file, line: line)
                 return
             }
+            waitHittable(field)
+            field.tap()
+            taps += 1
+            let wait = min(deadline, Date().addingTimeInterval(10))
+            while !hasFocus() && Date() < wait { Thread.sleep(forTimeInterval: 0.25) }
         }
         field.typeText(text)
     }

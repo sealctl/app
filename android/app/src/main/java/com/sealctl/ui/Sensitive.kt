@@ -26,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.fragment.app.FragmentActivity
+import com.sealctl.app.Delays
 import com.sealctl.app.Graph
 import com.sealctl.app.MainActivity
 import com.sealctl.app.Route
@@ -149,7 +150,7 @@ fun SensitiveScreen(activity: MainActivity, requestId: String) {
                 val ok = engine.confirmSensitive(w)
                 // Still waiting: the reply did not go and can be confirmed again.
                 val still = engine.waiting.value.any { it.relay.id == w.relay.id && !it.expired }
-                step = if (!ok) { error = if (still) Texts.ANSWER_NOT_SENT else Texts.stoppedWaiting(name); SStep.Plan } else if (engine.delaySecs(w.verdict.delaySecs.toInt()) > 0) SStep.Delay else SStep.Done
+                step = if (!ok) { error = if (still) Texts.ANSWER_NOT_SENT else Texts.stoppedWaiting(name); SStep.Plan } else if (engine.local.value.delayed.any { it.id == w.relay.id }) SStep.Delay else SStep.Done
             }
         }, onDeny = { deny() })
         SStep.CardWords -> CardWords(activity, positions = 2, groups = 2, title = "Use your card", onPassed = {
@@ -235,10 +236,12 @@ private fun PlanView(w: Waiting, name: String, level3: Boolean, error: String?, 
         }
         if (level3) {
             Gap(4)
+            // The rule the confirm applies (SPEC.md 9.6), from the place the phone is in now.
+            val delayed = Delays.atConfirm(w.verdict.delaySecs.toInt(), w.verdict.level.toInt(), engine.delayLifted()) > 0
             when {
-                kind == PlaceKind.TRUSTED -> Body("At ${place ?: "your trusted place"}: ${Texts.AT_TRUSTED}")
-                kind == PlaceKind.NO_LOCATION -> Body(Texts.AWAY_NO_LOCATION)
-                else -> Body(Texts.AWAY)
+                !delayed -> Body("At ${place ?: "your trusted place"}: ${Texts.AT_TRUSTED}")
+                kind == PlaceKind.OTHER -> Body(Texts.AWAY)
+                else -> Body(Texts.AWAY_NO_LOCATION)
             }
         }
         if (w.verdict.needsCardWords) Muted("This phone has no strong fingerprint or face unlock: two words from your card confirm it instead.")

@@ -830,18 +830,22 @@ class Engine(
     }
 
     /** The level 3 delay in seconds (shortened only in debug builds that ask for it). */
-    fun delaySecs(verdictDelay: Int): Int =
-        if (verdictDelay > 0 && BuildConfig.DEBUG && BuildConfig.TEST_DELAY_SECS > 0) BuildConfig.TEST_DELAY_SECS else verdictDelay
+    fun delaySecs(verdictDelay: Int): Int = Delays.shortened(verdictDelay, testDelaySecs())
+
+    /** The shortened level 3 delay a debug build asks for; 0 in release builds. */
+    private fun testDelaySecs(): Int = if (BuildConfig.DEBUG) BuildConfig.TEST_DELAY_SECS else 0
 
     /**
      * After biometrics: answer a level 2 or 3 request. `unseal` signs the plan, with the
      * not-before time two hours on away from a trusted place.
      */
     suspend fun confirmSensitive(w: Waiting): Boolean {
+        // One reading of the place, for both the delay and the reply.
         val place = placeKind()
+        val lifted = place == PlaceKind.TRUSTED && placeSettled()
         return when (w.verdict.kind) {
             RequestKind.UNSEAL -> {
-                val delay = delaySecs(w.verdict.delaySecs.toInt())
+                val delay = Delays.atConfirm(w.verdict.delaySecs.toInt(), w.verdict.level.toInt(), lifted, testDelaySecs())
                 val notBefore = System.currentTimeMillis() + delay * 1000L
                 val ok = answerCard(w) { c ->
                     send(c.request, c.relay, Decision.Plan(place, notBefore.toULong()), "confirmed", allowed = true,
@@ -954,7 +958,7 @@ class Engine(
     /** Starts a level 3 action on the phone: at once at a trusted place, else after the hour. */
     suspend fun startPhoneAction(what: String): DelayedAction? {
         if (delayLifted()) return null
-        val delay = delaySecs(7200)
+        val delay = delaySecs(Delays.LEVEL3_SECS)
         val id = randomId()
         val d = relay.addDelayed(id, delay)
         val action = DelayedAction(id, what, null, d.releaseAt.toULong(), d.expires.toULong(), "waiting", null)

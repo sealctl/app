@@ -74,8 +74,8 @@ final class Gate {
 // A test that hangs fails at its time limit, with its name, instead of holding the job.
 @Suite(.enabled(if: relayBin != nil && machineBin != nil), .serialized, .timeLimit(.minutes(3)))
 struct TimingTests {
-    func paired(_ relay: LocalRelay, places: PlacesProvider? = nil) async throws -> (AppEngine, RecordingNotifier, FakeMachine) {
-        let (engine, _, notifier) = try await makeEngine(relayURL: relay.url, places: places)
+    func paired(_ relay: LocalRelay, places: PlacesProvider? = nil, testDelay: Int = 2) async throws -> (AppEngine, RecordingNotifier, FakeMachine) {
+        let (engine, _, notifier) = try await makeEngine(testDelay: testDelay, relayURL: relay.url, places: places)
         try await onboard(engine)
         let m = FakeMachine(relay: relay.url)
         let link = m.home.appendingPathComponent("link")
@@ -414,6 +414,39 @@ struct TimingTests {
         let log = await engine.usage(machine: nil)
         #expect(!log.contains { $0.outcome == "expired" }, "\(log.map(\.outcome))")
         #expect(!engine.waiting.contains { $0.id == w.id })
+    }
+
+    /// A level 3 request that arrived at the trusted place, confirmed after the phone left it:
+    /// the two-hour delay is decided at the confirm, so the approval still waits (SPEC.md 9.6).
+    /// The real delay (no test shortening), so the not-before time is two hours on.
+    @Test func leavingThePlaceBeforeALevelThreeConfirmKeepsTheDelay() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, _, m) = try await paired(relay, places: StubPlaces(), testDelay: 0)
+        try await atDesk(engine)
+        let r = try m.start(["request", "--kind", "unseal", "--all", "--match", "--plan", "volume:safe:volume:vol-1"])
+        let w = try await firstRequest(engine, r)
+        #expect(w.verdict.level == 3)
+        // Decided at the desk: no delay when the request arrived.
+        #expect(w.verdict.delaySecs == 0)
+        #expect(w.request.matchChoices().count == 3)
+        #expect(w.request.checkMatch(pick: try await r.number()))
+        await engine.onPlaceTransition(["p1"], entered: false)
+        #expect(!engine.delayLifted())
+        let before = nowMs()
+        #expect(await engine.confirmSensitive(w))
+        let plan = try #require(engine.local.plans.first { $0.requestId == w.id })
+        #expect(plan.state == "delayed")
+        #expect(Int64(plan.notBefore) >= before + 7_200_000)
+        #expect(plan.delayId == w.id)
+        let d = try #require(engine.local.delayed.first { $0.id == w.id })
+        #expect(d.state == "waiting")
+        #expect(Int64(d.releaseAt) >= before + 7_200_000)
+        // The relay holds the approval for the two hours: the machine is told to wait.
+        let found = try await r.find("DELAYED id=\\S+ releaseAt=(\\d+)")
+        let releaseAt = try #require(Int64(found))
+        #expect(releaseAt >= before + 7_200_000 - 5_000)
+        r.process.terminate()
     }
 
     /// A level 2 confirm the relay does not take keeps the card, and a second confirm from the

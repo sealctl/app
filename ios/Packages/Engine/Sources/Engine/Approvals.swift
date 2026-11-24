@@ -505,14 +505,28 @@ extension AppEngine {
         verdictDelay > 0 && config.testDelaySecs > 0 ? config.testDelaySecs : verdictDelay
     }
 
+    /// Two hours: a level 3 approval away from a trusted place (9.6).
+    public static let levelThreeDelaySecs = 7200
+
+    /// The delay of a confirm, decided when the person confirms: the two hours at level 3
+    /// unless the place the phone is in now lifts them, and never less than the verdict's
+    /// from when the request arrived (the phone may have left the place, or the place been
+    /// removed, while the card was open) (9.6).
+    public static func confirmDelay(arrival: Int, level: Int, liftedNow: Bool) -> Int {
+        max(arrival, level >= 3 && !liftedNow ? levelThreeDelaySecs : 0)
+    }
+
     /// After biometrics: answers a level 2 or 3 request. `unseal` signs the plan, with the
     /// not-before time two hours on away from a trusted place.
     public func confirmSensitive(_ w: Waiting) async -> Bool {
         let w = current(w)
+        // One reading of the place, for both the delay and the reply.
         let place = placeKind()
+        let lifted = place == .trusted && placeSettledNow()
         switch w.verdict.kind {
         case .unseal:
-            let delay = delaySecs(Int(w.verdict.delaySecs))
+            let delay = delaySecs(Self.confirmDelay(arrival: Int(w.verdict.delaySecs), level: Int(w.verdict.level),
+                                                    liftedNow: lifted))
             let notBefore = nowMs() + Int64(delay) * 1000
             let sent = await answerCard(w) {
                 await send(w.request, w.relay, .plan(place: place, notBefore: UInt64(notBefore)), outcome: "confirmed",
@@ -634,7 +648,7 @@ extension AppEngine {
     /// delayed record the relay keeps for the hour.
     public func startPhoneAction(_ what: String) async throws -> DelayedAction? {
         if delayLifted() { return nil }
-        let delay = delaySecs(7200)
+        let delay = delaySecs(Self.levelThreeDelaySecs)
         let id = randomId()
         let d = try await relay.addDelayed(id: id, delay: delay)
         let action = DelayedAction(id: id, what: what, machine: nil, releaseAt: UInt64(clamping: d.releaseAt),

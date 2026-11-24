@@ -127,7 +127,8 @@ struct SensitiveView: View {
                 return
             }
             haptic(true)
-            step = e.delaySecs(Int(w.verdict.delaySecs)) > 0 && w.verdict.kind == .unseal ? .delay : .done
+            // The confirm decides the delay (9.6): it recorded one when the approval waits.
+            step = w.verdict.kind == .unseal && e.local.delayed.contains { $0.id == w.id } ? .delay : .done
         }
     }
 }
@@ -208,10 +209,15 @@ private struct PlanView: View {
             }
             if level3 {
                 Gap(4)
-                switch e.placeKind() {
-                case .trusted: BodyText("At \(e.currentPlaceName ?? "your trusted place"): \(Texts.atTrusted)")
-                case .noLocation: BodyText(Texts.awayNoLocation)
-                case .other: BodyText(Texts.away)
+                // The rule the confirm applies (9.6), from the place the phone is in now.
+                let delayed = AppEngine.confirmDelay(arrival: Int(w.verdict.delaySecs), level: Int(w.verdict.level),
+                                                     liftedNow: e.delayLifted()) > 0
+                if !delayed {
+                    BodyText("At \(e.currentPlaceName ?? "your trusted place"): \(Texts.atTrusted)")
+                } else if e.placeKind() == .other {
+                    BodyText(Texts.away)
+                } else {
+                    BodyText(Texts.awayNoLocation)
                 }
             }
             if w.verdict.needsCardWords {

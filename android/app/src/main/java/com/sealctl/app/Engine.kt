@@ -182,11 +182,8 @@ class Engine(
     private val inFlight = InFlight()
     /** Cancels sent again from the relay's list, and what the relay answered (SPEC.md 11.23). */
     private val cancelResends = CancelResends()
-    /**
-     * Delayed ids this install is registering with the relay: the relay's list may show one
-     * before it is recorded here, and it is not another install's (SPEC.md 11.23).
-     */
-    private val startingDelayed: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    /** Delayed ids this install is registering with the relay (SPEC.md 11.23). */
+    private val startingDelayed = StartingDelayed()
     /** Exits from trusted places so far, to tell whether one came while an answer was on its way. */
     private val placeExits = AtomicInteger(0)
     private var uploadJob: Job? = null
@@ -932,7 +929,9 @@ class Engine(
         for (d in list) {
             val mine = local.value.delayed.firstOrNull { it.id == d.id }
             if (mine == null) {
-                if (d.id !in startingDelayed) applyLocal(LocalEvent.PutDelayed(Plans.fromRelay(d)))
+                startingDelayed.fromRelay(d, stored = { id -> local.value.delayed.any { it.id == id } }) {
+                    applyLocal(LocalEvent.PutDelayed(it))
+                }
             } else if (mine.state != d.state && mine.state != "cancelled") {
                 if (d.state == "cancelled") delayedCancelled(d.id, d.by)
                 else applyLocal(LocalEvent.PutDelayed(mine.copy(state = d.state)))
@@ -1005,13 +1004,9 @@ class Engine(
         if (delayLifted()) return null
         val delay = delaySecs(Delays.LEVEL3_SECS)
         val id = randomId()
-        startingDelayed.add(id)
-        val action = try {
-            val d = relay.addDelayed(id, delay)
+        val action = startingDelayed.start(id, add = { relay.addDelayed(id, delay) }) { d ->
             DelayedAction(id, what, null, d.releaseAt.toULong(), d.expires.toULong(), "waiting", null)
                 .also { applyLocal(LocalEvent.PutDelayed(it)) }
-        } finally {
-            startingDelayed.remove(id)
         }
         val at = action.releaseAt.toLong()
         ReleaseWorker.schedule(context, id, what, at)

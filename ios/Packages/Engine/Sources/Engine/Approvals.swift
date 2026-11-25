@@ -684,8 +684,13 @@ extension AppEngine {
         if delayLifted() { return nil }
         let delay = delaySecs(Self.levelThreeDelaySecs)
         let id = randomId()
+        // The relay sends its `delayed` push before it answers: the extension knows the id first.
         startingDelayed.insert(id)
-        defer { startingDelayed.remove(id) }
+        writeSnapshot()
+        defer {
+            startingDelayed.remove(id)
+            writeSnapshot()
+        }
         let d = try await relay.addDelayed(id: id, delay: delay)
         let action = DelayedAction(id: id, what: what, machine: nil, releaseAt: UInt64(clamping: d.releaseAt),
                                    expires: UInt64(clamping: d.expires),

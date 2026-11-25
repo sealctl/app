@@ -143,7 +143,7 @@ public final class AppEngine {
         guard phase == .ready || { if case .onboarding = phase { return true }; return false }() else { return }
         files.writeSnapshot(ExtensionSnapshot(state: state, local: local, currentPlace: currentPlace,
                                               placesOn: places?.hasForeground ?? false, relay: config.relayURL,
-                                              clock: db.relayClock()))
+                                              clock: db.relayClock(), starting: startingDelayed))
     }
 
     public var liveMachines: [Machine] { state.machines.filter { !$0.deleted } }

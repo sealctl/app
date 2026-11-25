@@ -280,6 +280,19 @@ final class LocalRelay: @unchecked Sendable {
         return String(decoding: try await Self.session.data(for: req).0, as: UTF8.self)
     }
 
+    /// Waits until a call held by `/test/hold` on `path` has taken effect and waits for its
+    /// answer, within 5 seconds; false if none does.
+    func untilHeld(_ path: String) async throws -> Bool {
+        for _ in 0..<5 {
+            // The relay answers within a second, as soon as a call is held.
+            let out = try await control("/test/held", #"{"path": "\#(path)"}"#)
+            if let n = (try JSONSerialization.jsonObject(with: Data(out.utf8)) as? [String: Any])?["held"] as? Int, n > 0 {
+                return true
+            }
+        }
+        return false
+    }
+
     /// Waits until the relay holds `n` phone sockets open, within 5 seconds; false if it never does.
     func untilPhoneSockets(_ n: Int) async throws -> Bool {
         let end = Date().addingTimeInterval(5)

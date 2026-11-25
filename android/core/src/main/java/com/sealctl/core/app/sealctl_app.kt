@@ -708,6 +708,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_sealctl_app_checksum_func_activity_row(
     ): Int
+    external fun uniffi_sealctl_app_checksum_func_machine_short_name(
+    ): Int
     external fun uniffi_sealctl_app_checksum_func_card_choices(
     ): Int
     external fun uniffi_sealctl_app_checksum_func_card_positions(
@@ -741,6 +743,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_sealctl_app_checksum_func_place_kind(
     ): Int
     external fun uniffi_sealctl_app_checksum_func_place_settled(
+    ): Int
+    external fun uniffi_sealctl_app_checksum_func_machine_model_name(
     ): Int
     external fun uniffi_sealctl_app_checksum_func_merge_state(
     ): Int
@@ -879,6 +883,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_activity_row(`entry`: RustBuffer.ByValue,`machine`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_sealctl_app_fn_func_machine_short_name(`machine`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_card_choices(`words`: Long,`position`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_card_positions(`count`: Int,`groups`: Int,uniffi_out_err: UniffiRustCallStatus, 
@@ -913,6 +919,8 @@ internal object UniffiLib {
     ): RustBufferPlace.ByValue
     external fun uniffi_sealctl_app_fn_func_place_settled(`place`: RustBuffer.ByValue,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_sealctl_app_fn_func_machine_model_name(`model`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_merge_state(`local`: RustBuffer.ByValue,`remote`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_distance_m(`lat1`: Double,`lon1`: Double,`lat2`: Double,`lon2`: Double,uniffi_out_err: UniffiRustCallStatus, 
@@ -1050,6 +1058,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_sealctl_app_checksum_func_activity_row() and 0xFFFF) != 46249) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_sealctl_app_checksum_func_machine_short_name() and 0xFFFF) != 57194) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_sealctl_app_checksum_func_card_choices() and 0xFFFF) != 45350) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1099,6 +1110,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_func_place_settled() and 0xFFFF) != 45654) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_sealctl_app_checksum_func_machine_model_name() and 0xFFFF) != 64728) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_func_merge_state() and 0xFFFF) != 39551) {
@@ -7583,6 +7597,22 @@ object CoreExceptionExternalErrorHandler : UniffiRustCallStatusErrorHandler<Core
     
 
         /**
+         * A machine's short name, as the Activity rows and the Machines list show it (SPEC.md 11.12,
+         * 11.17): its nickname, else its host without `user@` and `.local`, with the tag when another
+         * machine has the same name. Made safe to show (SPEC.md 11.7) and at most 60 characters.
+         */ fun `machineShortName`(`machine`: Machine): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_func_machine_short_name(
+    
+        
+        FfiConverterTypeMachine.lower(`machine`),_status)
+}
+    )
+    }
+    
+
+        /**
          * Four choices for word `position` (1 to 24): the right word and three BIP39 words with the
          * same first letter, shuffled.
          */ fun `cardChoices`(`words`: Words, `position`: kotlin.UInt): List<kotlin.String> {
@@ -7843,6 +7873,22 @@ object CoreExceptionExternalErrorHandler : UniffiRustCallStatusErrorHandler<Core
         
         FfiConverterTypeTrustedPlace.lower(`place`),
         FfiConverterULong.lower(`now`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The model as the Machines list shows it: `Mac16,10` → `Mac mini`, `MacBookPro18,3` →
+         * `MacBook Pro`; any other value as reported, made safe to show (SPEC.md 11.7) and at most
+         * 60 characters. Empty when the machine reported nothing.
+         */ fun `machineModelName`(`model`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_func_machine_model_name(
+    
+        
+        FfiConverterString.lower(`model`),_status)
 }
     )
     }

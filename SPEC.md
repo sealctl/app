@@ -942,7 +942,7 @@ Shown when a scanned machine has the same `user@host` as a paired one. Exact wor
 
 ### 11.7 The approval card and notifications
 
-The card is a sheet over any screen. In the foreground it appears as soon as the request arrives. A notification tap opens it.
+The card is a sheet over any screen. In the foreground it appears as soon as the request arrives. A notification tap opens it. It stays until the request is answered, closed or gone: it can't be swiped down or tapped away. On Android, back leaves the app with the card still waiting, and closes a card whose request stopped waiting (Close).
 
 **Layout:**
 

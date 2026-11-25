@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -31,6 +33,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -57,7 +60,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.sealctl.app.ActivityDays
+import com.sealctl.app.ActivityPage
 import com.sealctl.app.Graph
 import com.sealctl.app.HeatGrid
 import com.sealctl.app.Route
@@ -66,7 +69,6 @@ import com.sealctl.app.Ui
 import com.sealctl.core.app.ActivityRow
 import com.sealctl.core.app.ActivityTone
 import com.sealctl.core.app.MonthSummary
-import com.sealctl.core.app.activityRow
 import com.sealctl.designsystem.Muted
 import com.sealctl.designsystem.Sealctl
 import com.sealctl.designsystem.SurfaceCard
@@ -75,54 +77,72 @@ import java.time.ZoneId
 import java.time.format.TextStyle as DateTextStyle
 import java.time.temporal.WeekFields
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 /**
  * Activity (SPEC.md 11.12): the month's summary, hand-back reports, the newest day open and the
  * ten days before today closed, and, on the main tab, the heatmap of the last year.
  */
 @Composable
-fun ActivityList(machine: String?) {
+fun ActivityScreen(title: String, onBack: (() -> Unit)?, machine: String?) {
     val engine = Graph.engine
     val state by engine.state.collectAsState()
     val locale = LocalConfiguration.current.locales[0]
     val zone = ZoneId.systemDefault()
     val today = LocalDate.now(zone)
-    val days = remember(state, machine, today) {
-        com.sealctl.app.safe { ActivityDays.load(engine.store, machine, today, zone) } ?: emptyList()
+    // The counts are the phone's, not a machine's: the heatmap shows on the main tab only.
+    val grid = remember(today, locale, machine) { if (machine == null) HeatGrid(today, WeekFields.of(locale).firstDayOfWeek) else null }
+    // Read again when the state changes (a report, an answer), off the main thread; the last
+    // page stays on screen meanwhile. Null until the first read. Changes that come together (the
+    // app coming back refreshes several things) are read once, and a page equal to the one shown
+    // is not shown again.
+    val page by produceState<ActivityPage?>(null, state, machine, today, grid) {
+        if (value != null) delay(RELOAD_AFTER_MS)
+        val read = withContext(Dispatchers.IO) { ActivityPage.load(engine, machine, today, zone, grid) }
+        if (read != value) value = read.reusing(value)
     }
     // Which days the person opened or closed; in memory only. The newest day starts open.
     val toggled = remember(machine) { mutableStateMapOf<LocalDate, Boolean>() }
+    val reports = state.reports.sortedByDescending { it.time }.take(5)
 
-    SummaryCard(state.summaries, Texts.isoDate(System.currentTimeMillis()).take(7), locale)
-    for (r in state.reports.sortedByDescending { it.time }.take(5)) {
-        SurfaceCard(Modifier.clickable { Ui.push(Route.Report(r.id)) }) {
-            Text("${r.machineName} handed everything back", fontWeight = FontWeight.SemiBold, color = Sealctl.colors.ink)
-            Muted("${r.items.count { it.state == "done" }} of ${r.items.size} done · ${Texts.mediumDate(r.time.toLong())}")
-        }
-    }
-    if (days.isEmpty()) {
-        Muted("Nothing yet. Every use of your keys shows here.")
-    }
-    for ((i, day) in days.withIndex()) {
-        val open = toggled[day.date] ?: (i == 0)
-        DayHeader(Texts.mediumDate(day.date, locale), Texts.dayCounts(day.counts), day.date.toString(), open) { toggled[day.date] = !open }
-        if (open) {
-            val rows = remember(day.entries, state) { day.entries.map { e -> Texts.time(e.time.toLong()) to activityRow(e, engine.machine(e.machine)) } }
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                for ((time, row) in rows) ActivityLine(time, row)
+    // A lazy list: a day can hold hundreds of uses, and only those on screen are drawn.
+    LazyPage(title, onBack) {
+        item("summary") { SummaryCard(state.summaries, Texts.isoDate(System.currentTimeMillis()).take(7), locale) }
+        items(reports, key = { "report ${it.id}" }) { r ->
+            SurfaceCard(Modifier.padding(top = GAP_ITEMS).clickable { Ui.push(Route.Report(r.id)) }) {
+                Text("${r.machineName} handed everything back", fontWeight = FontWeight.SemiBold, color = Sealctl.colors.ink)
+                Muted("${r.items.count { it.state == "done" }} of ${r.items.size} done · ${Texts.mediumDate(r.time.toLong())}")
             }
         }
-    }
-    // The counts are the phone's, not a machine's: the heatmap shows on the main tab only.
-    if (machine == null) {
-        val grid = remember(today, locale) { HeatGrid(today, WeekFields.of(locale).firstDayOfWeek) }
-        val cells = remember(state, grid) {
-            val counts = com.sealctl.app.safe { engine.store.dailyCounts(grid.start.toString(), today.toString(), engine.offset()) } ?: emptyList()
-            grid.cells(counts)
+        val p = page ?: return@LazyPage
+        if (p.days.isEmpty()) item("empty") {
+            Muted("Nothing yet. Every use of your keys shows here.", Modifier.padding(top = GAP_ITEMS))
         }
-        Heatmap(grid, cells, locale)
+        for ((i, day) in p.days.withIndex()) {
+            val open = toggled[day.date] ?: (i == 0)
+            item("day ${day.date}") {
+                Box(Modifier.padding(top = GAP_ITEMS)) {
+                    DayHeader(Texts.mediumDate(day.date, locale), Texts.dayCounts(day.counts), day.date.toString(), open) { toggled[day.date] = !open }
+                }
+            }
+            if (open) itemsIndexed(day.rows, key = { j, _ -> "use ${day.date} $j" }) { j, r ->
+                Box(Modifier.padding(top = if (j == 0) GAP_ITEMS else GAP_ROWS)) { ActivityLine(r.first, r.second) }
+            }
+        }
+        if (grid != null && p.cells != null) item("heatmap") {
+            Box(Modifier.padding(top = GAP_ITEMS)) { Heatmap(grid, p.cells, locale) }
+        }
     }
 }
+
+/** Gaps as on other pages: 12 dp between items, 10 dp between a day's uses. */
+private val GAP_ITEMS = 12.dp
+private val GAP_ROWS = 10.dp
+
+/** How long a change waits for the next one before Activity reads the store again. */
+private const val RELOAD_AFTER_MS = 300L
 
 /** This month's figures, with the previous months behind a chevron. */
 @Composable

@@ -98,4 +98,33 @@ class ActivityDaysTest {
         assertEquals("1,204 key uses in the last year", Texts.heatTitle(1204, Locale.US))
         assertEquals("Nov 25, 2026: 1 key use, 2 declined", Texts.heatDay(today, 1, 2, Locale.US))
     }
+
+    @Test
+    fun aNewPageKeepsTheRowsAndCellsThatDidNotChange() {
+        fun row(subject: String) = Texts.time(0) to com.sealctl.core.app.ActivityRow(subject, "In session", com.sealctl.core.app.ActivityTone.NORMAL, emptyList())
+        fun cell(used: Long) = HeatGrid.Cell(today, used, 0, 1)
+        val old = ActivityPage(
+            listOf(
+                ActivityPage.ShownDay(today, ActivityCounts(2u, 0u), listOf(row("A"), row("B"))),
+                ActivityPage.ShownDay(today.minusDays(1), ActivityCounts(1u, 0u), listOf(row("C"))),
+            ),
+            listOf(cell(3)),
+        )
+        // Read again after one more use today: equal, but new objects.
+        val read = ActivityPage(
+            listOf(
+                ActivityPage.ShownDay(today, ActivityCounts(3u, 0u), listOf(row("NEW"), row("A"), row("B"))),
+                ActivityPage.ShownDay(today.minusDays(1), ActivityCounts(1u, 0u), listOf(row("C"))),
+            ),
+            listOf(cell(3)),
+        )
+        val page = read.reusing(old)
+        assertEquals(read, page)
+        // The rows already shown are the same objects, so the screen leaves them as drawn.
+        assertTrue(page.days[0].rows[1] === old.days[0].rows[0])
+        assertTrue(page.days[0].rows[2] === old.days[0].rows[1])
+        assertTrue(page.days[0].rows[0] === read.days[0].rows[0])
+        assertTrue(page.days[1] === old.days[1])
+        assertTrue(page.cells === old.cells)
+    }
 }

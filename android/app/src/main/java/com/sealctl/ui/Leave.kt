@@ -4,10 +4,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -31,7 +29,6 @@ import com.sealctl.designsystem.PrimaryButton
 import com.sealctl.designsystem.SecondaryButton
 import com.sealctl.designsystem.Sealctl
 import com.sealctl.designsystem.Title
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -109,8 +106,7 @@ fun LeaveScreen(activity: MainActivity) {
         2 -> EachComputer(onContinue = { go(3) }, onSkip = { key -> go(2, local.leaveSkipped + key) }, onBack = { cancel() })
         3 -> {
             val pending = local.delayed.lastOrNull { it.what == "leave" && it.state in setOf("waiting", "released") }
-            var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-            LaunchedEffect(Unit) { while (true) { delay(1000); now = System.currentTimeMillis() } }
+            val now by rememberNow()
             if (pending != null && pending.releaseAt.toLong() > now) {
                 DelayView(pending.id, "Leaving sealctl")
                 return
@@ -231,7 +227,8 @@ private fun EachComputer(onContinue: () -> Unit, onSkip: (String) -> Unit, onBac
     val state by engine.state.collectAsState()
     val delayed = local.delayed
     var skipping by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) { while (true) { engine.refreshMachines(); engine.refreshDelayed(); delay(5_000) } }
+    // Asks the relay every 5 s while this screen is on show, not in the background.
+    WhileStarted(5_000) { engine.refreshMachines(); engine.refreshDelayed() }
     // Every machine paired when leaving began; one that unpaired itself shows as handed back.
     val machines = state.machines.filter { !it.deleted }
     val rows = machines.map { m ->

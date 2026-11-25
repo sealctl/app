@@ -16,9 +16,9 @@ data class MachineView(
     val row: String,
     val detail: String,
     val leftSecs: Long?,
-) {
     /** The model as the list names it ("Mac mini" for `Mac16,10`), or null when none was reported. */
-    val model: String? get() = machine.model?.let { machineModelName(it) }?.ifEmpty { null }
+    val model: String? = modelOf(machine),
+) {
 
     /** "seen 1 h ago" */
     fun seen(now: Long = System.currentTimeMillis()): String = "seen ${Texts.ago(machine.lastSeen?.toLong(), now)}"
@@ -35,18 +35,30 @@ data class MachineView(
         listOfNotNull(name, row, model, seen(now), unseen(now)).joinToString(", ")
 
     companion object {
-        fun of(m: Machine, engine: Engine, now: Long = System.currentTimeMillis()): MachineView {
-            val name = machineShortName(m)
+        /** [modelOf] reads it from the shared core: the list reads it once per change, not every second. */
+        fun modelOf(m: Machine): String? = m.model?.let { machineModelName(it) }?.ifEmpty { null }
+
+        /**
+         * [name] is [machineShortName] of [m] and [model] its [modelOf]; the list passes the ones
+         * it keeps, read from the shared core once per change of the machines.
+         */
+        fun of(
+            m: Machine,
+            engine: Engine,
+            now: Long = System.currentTimeMillis(),
+            name: String = machineShortName(m),
+            model: String? = modelOf(m),
+        ): MachineView {
             val waiting = engine.waiting.value.firstOrNull { it.machine.key == m.key && !it.expired }
             if (waiting != null) {
                 val secs = (now - waiting.relay.created.coerceAtMost(now)) / 1000
                 return MachineView(m, name, MachineState.Waiting, "Waiting · %d:%02d".format(secs / 60, secs % 60),
-                    "A request is on this phone.", null)
+                    "A request is on this phone.", null, model)
             }
             val st = m.lastStatus
             if (st == null) {
                 return MachineView(m, name, MachineState.Unknown, "Seen ${Texts.ago(m.lastSeen?.toLong(), now)}",
-                    "This machine hasn't reported its state yet.", null)
+                    "This machine hasn't reported its state yet.", null, model)
             }
             val reported = st.reportedAt.toLong()
             if (st.session == "open") {
@@ -60,12 +72,12 @@ data class MachineView(
                         if (opened != null) append(". ")
                         st.stop?.let { append("Hard stop at ${Texts.time(it.toLong())}.") }
                     }.trim()
-                    return MachineView(m, name, MachineState.Open, "Open · ${Texts.duration(left)} left", detail, left)
+                    return MachineView(m, name, MachineState.Open, "Open · ${Texts.duration(left)} left", detail, left, model)
                 }
                 return MachineView(m, name, MachineState.Locked, "Locked · last report ${Texts.ago(reported, now)}",
-                    "No keys in memory. Volumes unmounted.", null)
+                    "No keys in memory. Volumes unmounted.", null, model)
             }
-            return MachineView(m, name, MachineState.Locked, "Locked", "No keys in memory. Volumes unmounted.", null)
+            return MachineView(m, name, MachineState.Locked, "Locked", "No keys in memory. Volumes unmounted.", null, model)
         }
 
         /** Waiting, then Open, then Locked, then by last seen (SPEC.md 11.17). */

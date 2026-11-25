@@ -1,8 +1,11 @@
 package com.sealctl.ui
 
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -12,13 +15,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalBottomSheetProperties
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -50,25 +52,51 @@ import com.sealctl.designsystem.PrimaryButton
 import com.sealctl.designsystem.SecondaryButton
 import com.sealctl.designsystem.Sealctl
 import com.sealctl.designsystem.StateDot
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/** The approval card as a sheet (SPEC.md 11.7): the oldest waiting request first. */
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * The approval card as a sheet (SPEC.md 11.7): the oldest waiting request first. It stays until
+ * the request is answered, closed or gone. Back leaves the app with the card still waiting, and
+ * closes a card whose request stopped waiting.
+ */
 @Composable
 fun ApprovalSheet(list: List<Waiting>) {
     val focus by Ui.focusRequest.collectAsState()
     val w = list.firstOrNull { it.relay.id == focus } ?: list.minBy { it.seenAt }
-    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val activity = LocalActivity.current
     // The card's own window: FLAG_SECURE whatever the activity has (SPEC.md 11.21).
     SecureScreen()
-    ModalBottomSheet(
-        onDismissRequest = { /* stays until answered or closed */ },
-        sheetState = sheet,
-        containerColor = Sealctl.colors.surface,
-        properties = ModalBottomSheetProperties(securePolicy = SecureFlagPolicy.SecureOn),
-    ) {
+    CardSheet(onBack = { if (w.expired) Graph.engine.dismiss(w.relay.id) else activity?.moveTaskToBack(true) }) {
         ApprovalCard(w, more = list.size - 1)
+    }
+}
+
+/**
+ * A sheet that only its caller removes: no swipe, tap outside or back hides it, and back runs
+ * [onBack] instead. A sheet hidden while still composed keeps its full-screen window, which
+ * shows nothing and takes every touch: the app looks frozen until the request leaves.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CardSheet(onBack: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { it != SheetValue.Hidden })
+    ModalBottomSheet(
+        // Called by the sheet only when it was hidden, which the state above never allows.
+        onDismissRequest = {},
+        sheetState = sheet,
+        sheetGesturesEnabled = false,
+        containerColor = Sealctl.colors.surface,
+        dragHandle = null,
+        properties = ModalBottomSheetProperties(
+            securePolicy = SecureFlagPolicy.SecureOn,
+            shouldDismissOnBackPress = false,
+            shouldDismissOnClickOutside = false,
+        ),
+    ) {
+        // Inside the sheet: back goes to its window, not the activity's.
+        BackHandler(onBack = onBack)
+        Gap(16)
+        content()
     }
 }
 
@@ -78,8 +106,7 @@ fun ApprovalCard(w: Waiting, more: Int) {
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
     var busy by remember(w.relay.id) { mutableStateOf(false) }
-    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(w.relay.id) { while (true) { now = System.currentTimeMillis(); delay(1000) } }
+    val now by rememberNow()
     val name = engine.displayName(w.machine)
     // Machine-controlled values are sanitised and cut; a tap on the title or facts shows them whole.
     var whole by remember(w.relay.id) { mutableStateOf(false) }

@@ -1,10 +1,12 @@
 package com.sealctl.app
 
 import com.sealctl.core.app.ActivityCounts
+import com.sealctl.core.app.ActivityRow
 import com.sealctl.core.app.DailyCount
 import com.sealctl.core.app.Store
 import com.sealctl.core.app.UsageEntry
 import com.sealctl.core.app.activityCounts
+import com.sealctl.core.app.activityRow
 import com.sealctl.core.app.heatLevels
 import java.time.DayOfWeek
 import java.time.Instant
@@ -42,6 +44,47 @@ object ActivityDays {
     }
 
     fun dateOf(e: UsageEntry, zone: ZoneId): LocalDate = Instant.ofEpochMilli(e.time.toLong()).atZone(zone).toLocalDate()
+}
+
+/**
+ * What the Activity screen shows from the store (SPEC.md 11.12): the listed days with their
+ * rows, and on the main tab the heatmap's cells. Read off the main thread: the store is one
+ * connection behind a lock, which a sync, a prune or a status report may hold.
+ */
+data class ActivityPage(val days: List<ShownDay>, val cells: List<HeatGrid.Cell>?) {
+    /** A listed day: its date, its figures and its rows (the time, then the row), newest first. */
+    data class ShownDay(val date: LocalDate, val counts: ActivityCounts, val rows: List<Pair<String, ActivityRow>>)
+
+    /**
+     * This page with the days, rows and cells that equal [old]'s taken from [old]: a screen
+     * redraws only what changed (a new use redraws its row, not the hundreds already shown).
+     */
+    fun reusing(old: ActivityPage?): ActivityPage {
+        if (old == null) return this
+        val oldDays = old.days.associateBy { it }
+        val oldRows = old.days.flatMap { it.rows }.associateBy { it }
+        return ActivityPage(
+            days.map { d -> oldDays[d] ?: d.copy(rows = d.rows.map { oldRows[it] ?: it }) },
+            if (cells == old.cells) old.cells else cells,
+        )
+    }
+
+    companion object {
+        /** [grid] is the heatmap's, on the main tab; null for one machine's log. */
+        fun load(engine: Engine, machine: String?, today: LocalDate, zone: ZoneId, grid: HeatGrid?): ActivityPage {
+            val days = safe { ActivityDays.load(engine.store, machine, today, zone) } ?: emptyList()
+            // A row names its machine by its name, nickname and tag: the rest of the record (its
+            // last status above all) is left out, as each row passes it through the FFI.
+            val machines = engine.liveMachines().associate { it.key to it.copy(lastStatus = null, boxKey = "", relay = "", hint = null) }
+            val shown = days.map { d ->
+                ShownDay(d.date, d.counts, d.entries.map { e -> Texts.time(e.time.toLong()) to activityRow(e, machines[e.machine]) })
+            }
+            val cells = grid?.let { g ->
+                g.cells(safe { engine.store.dailyCounts(g.start.toString(), today.toString(), engine.offset()) } ?: emptyList())
+            }
+            return ActivityPage(shown, cells)
+        }
+    }
 }
 
 /**

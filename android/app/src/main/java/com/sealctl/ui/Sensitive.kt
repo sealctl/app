@@ -10,11 +10,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -51,7 +49,6 @@ import com.sealctl.vault.GateNeedsCardException
 import com.sealctl.vault.KeysInvalidatedException
 import com.sealctl.vault.NoBiometricsException
 import com.sealctl.vault.Vault
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** The biometric gate of levels 2 and 3 (SPEC.md 9.6). */
@@ -281,9 +278,9 @@ fun DelayView(id: String, title: String) {
     val scope = rememberCoroutineScope()
     val local by engine.local.collectAsState()
     val d = local.delayed.firstOrNull { it.id == id }
-    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(id) { while (true) { now = System.currentTimeMillis(); delay(1000) } }
-    LaunchedEffect(id) { while (true) { engine.refreshDelayed(); delay(15_000) } }
+    val now by rememberNow()
+    // A cancel from a computer shows within 15 s while this screen is on show; not in the background.
+    WhileStarted(15_000, id) { engine.refreshDelayed() }
     Page(null, bottom = {
         if (d?.state == "waiting") PrimaryButton("Cancel", { scope.launch { engine.cancelDelayed(id) } })
         else PrimaryButton("Close", { Ui.pop() })

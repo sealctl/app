@@ -70,6 +70,8 @@ const MAX_HELD: usize = 16;
 const HELD_MS: u64 = 24 * 3_600_000;
 const MAX_DELAYED: usize = 4;
 const DELAYED_KEEP_MS: u64 = 900_000;
+/// A record with no machine (an action on the phone): an hour after `releaseAt` to finish it.
+const PHONE_ACTION_KEEP_MS: u64 = 3_600_000;
 const MAX_DEVICES: usize = 4;
 const ABUSE_LIMIT: u32 = 5000;
 const WINDOW_SECS: u64 = 300;
@@ -711,6 +713,11 @@ fn create_delayed(
 ) -> u64 {
     let now = r.now_ms();
     let release_at = now + delay * 1000;
+    let keep = if machine.is_some() {
+        DELAYED_KEEP_MS
+    } else {
+        PHONE_ACTION_KEEP_MS
+    };
     let p = phone_mut(r, phone);
     p.delayed.insert(
         id.to_owned(),
@@ -719,7 +726,7 @@ fn create_delayed(
             sealed,
             created: now,
             release_at,
-            expires: release_at + DELAYED_KEEP_MS,
+            expires: release_at + keep,
             cancelled: None,
         },
     );
@@ -978,7 +985,7 @@ fn dispatch(
             r.push_all(phone, "delayed", &id, release_at);
             reply(
                 StatusCode::CREATED,
-                json!({"id": id, "releaseAt": release_at, "expires": release_at + DELAYED_KEEP_MS}),
+                json!({"id": id, "releaseAt": release_at, "expires": release_at + PHONE_ACTION_KEEP_MS}),
             )
         }
         ListDelayed => {

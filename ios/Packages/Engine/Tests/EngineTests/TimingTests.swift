@@ -104,8 +104,10 @@ final class Gate {
 // A test that hangs fails at its time limit, with its name, instead of holding the job.
 @Suite(.enabled(if: relayBin != nil && machineBin != nil), .serialized, .timeLimit(.minutes(3)))
 struct TimingTests {
-    func paired(_ relay: LocalRelay, places: PlacesProvider? = nil, testDelay: Int = 2) async throws -> (AppEngine, RecordingNotifier, FakeMachine) {
-        let (engine, _, notifier) = try await makeEngine(testDelay: testDelay, relayURL: relay.url, places: places)
+    func paired(_ relay: LocalRelay, places: PlacesProvider? = nil, testDelay: Int = 2,
+                callResourceTimeout: TimeInterval? = nil) async throws -> (AppEngine, RecordingNotifier, FakeMachine) {
+        let (engine, _, notifier) = try await makeEngine(testDelay: testDelay, relayURL: relay.url, places: places,
+                                                         callResourceTimeout: callResourceTimeout)
         try await onboard(engine)
         let m = FakeMachine(relay: relay.url)
         let link = m.home.appendingPathComponent("link")
@@ -515,6 +517,42 @@ struct TimingTests {
         #expect(await engine.answer(w.id, .allowOnce))
         let (code, out) = await m.waitAsync(r)
         #expect(code == 0, "\(out)")
+    }
+
+    /// The phone socket closes when the app leaves the foreground however long it was open, and
+    /// a request sent after that is not taken up in the background: it waits for its push and
+    /// the next catch-up (SPEC.md 8.3). The socket used to share the relay calls' URLSession,
+    /// whose resource timeout (30 s; 1 s here) marks a WebSocket task completed while its
+    /// connection stays open, after which `cancel` does nothing: the relay kept sending requests
+    /// to the background app, which opened them there.
+    @Test func socketOlderThanACallStillClosesInTheBackground() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, notifier, m) = try await paired(relay, callResourceTimeout: 1)
+        await engine.onForeground()
+        #expect(try await relay.untilPhoneSockets(1))
+        // Past the calls' resource timeout: a URLSession timer, so this one waits in time.
+        try await Task.sleep(for: .seconds(2))
+        await engine.onBackground()
+        #expect(try await relay.untilPhoneSockets(0), "the socket outlived the foreground")
+        let run = try openRequest(m)
+        // On the relay's list: the relay has sent it to every phone socket it holds.
+        var listed: RelayRequest?
+        for _ in 0..<100 where listed == nil {
+            listed = try await engine.relay.requests().first
+            if listed == nil { try await Task.sleep(for: .milliseconds(100)) }
+        }
+        let id = try #require(listed).id
+        #expect(engine.waiting.isEmpty)
+        #expect(!notifier.posted.contains { $0.0 == id })
+        // Back in the foreground (here the push's catch-up), the request is on the card and its
+        // answer goes.
+        await engine.onForeground()
+        let w = try #require(engine.waiting.first { $0.id == id })
+        #expect(await engine.answer(w.id, .allowOnce))
+        let (code, out) = await m.waitAsync(run)
+        #expect(code == 0, "\(out)")
+        await engine.onBackground()
     }
 
     /// Leave sealctl after step 5: coming back to the app calls nothing on the relay (no socket,

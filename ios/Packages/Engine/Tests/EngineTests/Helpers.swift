@@ -54,12 +54,15 @@ final class StubPlaces: PlacesProvider {
 
 @MainActor
 func makeEngine(testDelay: Int = 2, vault: MemoryVault = MemoryVault(), relayURL: String? = nil,
-                places: PlacesProvider? = nil) async throws -> (AppEngine, MemoryVault, RecordingNotifier) {
+                places: PlacesProvider? = nil,
+                callResourceTimeout: TimeInterval? = nil) async throws -> (AppEngine, MemoryVault, RecordingNotifier) {
     let dir = tempDir()
     let db = try Database(path: dir.appendingPathComponent("sealctl.db").path)
     let notifier = RecordingNotifier()
     let url = relayURL ?? testRelay ?? "http://127.0.0.1:8787"
-    let engine = await AppEngine(vault: vault, db: db, config: EngineConfig(relayURL: url, testDelaySecs: testDelay),
+    var config = EngineConfig(relayURL: url, testDelaySecs: testDelay)
+    if let callResourceTimeout { config.callResourceTimeout = callResourceTimeout }
+    let engine = await AppEngine(vault: vault, db: db, config: config,
                                  files: SharedFiles(root: dir.appendingPathComponent("shared")), notifier: notifier, places: places)
     return (engine, vault, notifier)
 }
@@ -275,6 +278,17 @@ final class LocalRelay: @unchecked Sendable {
         req.httpMethod = "POST"
         req.httpBody = Data(body.utf8)
         return String(decoding: try await Self.session.data(for: req).0, as: UTF8.self)
+    }
+
+    /// Waits until the relay holds `n` phone sockets open, within 5 seconds; false if it never does.
+    func untilPhoneSockets(_ n: Int) async throws -> Bool {
+        let end = Date().addingTimeInterval(5)
+        while Date() < end {
+            let (data, _) = try await Self.session.data(from: URL(string: url + "/test/sockets")!)
+            if (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["phoneSockets"] as? Int == n { return true }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        return false
     }
 
     func stop() {

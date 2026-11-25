@@ -1564,6 +1564,12 @@ async fn test_route(shared: Shared, req: Request<Body>) -> Response {
         }
         ("GET", "/test/replies") => ok(json!({"replies": r.replies})),
         ("GET", "/test/pushes") => ok(json!({"pushes": r.pushes})),
+        // Phone sockets the relay holds open, across phones: one that outlives the app's
+        // foreground still gets requests (SPEC.md 8.3).
+        ("GET", "/test/sockets") => {
+            let n: usize = r.phones.values().map(|p| p.sockets.len()).sum();
+            ok(json!({"phoneSockets": n}))
+        }
         ("POST", "/test/reset") => {
             for p in r.phones.values() {
                 for w in p.waits.values() {

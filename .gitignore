@@ -9,6 +9,7 @@
 /ios/Packages/*/.build/
 /ios/Packages/*/.swiftpm/
 /ios/sealctl.xcodeproj/
+/ios/sealctl-personal.xcodeproj/
 /ios/App/Info.plist
 /ios/App/sealctl.entitlements
 /ios/NotifyExtension/Info.plist

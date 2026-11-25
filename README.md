@@ -55,6 +55,13 @@ cd ios && xcodegen generate            # sealctl.xcodeproj (not committed)
 xcodebuild test -project sealctl.xcodeproj -scheme sealctl -destination 'platform=iOS Simulator,name=iPhone 17'
 ```
 
+To run the app on your own iPhone or iPad with a free (personal) Apple developer team, connect
+it and run `scripts/install-ios-personal.sh <team-id> <device-udid>`. It builds
+`ios/project-personal.yml` (bundle id `com.sealctl.app.personal`), which has no push, no Time
+Sensitive notifications, no Notification Service Extension, no sealctl.com links and no app
+group, because a personal team cannot sign them: requests appear while the app is open. A free
+team's install expires after 7 days; run the script again to renew it.
+
 The packages' unit tests also run on a Mac without the simulator (`ios/scripts/swift-test.sh
 <Package>`); the Relay and Engine tests then talk to the fake relay and fake machine:
 

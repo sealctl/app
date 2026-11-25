@@ -108,10 +108,12 @@ app/
     build-core-ios.sh         XCFramework and Swift bindings
     build-core-android.sh     .so files and Kotlin bindings, packaged as the :core module
     check-core.sh             fails if the generated bindings differ from what is committed
+    install-ios-personal.sh   local install with a free Apple team (ios/project-personal.yml)
   brand/                      app-icon.svg, mark.svg, mark-dark.svg, tokens (copied from the brand kit)
   .github/CODEOWNERS          the maintainer owns everything; ios/ and android/ may gain platform owners
   ios/
     project.yml               XcodeGen project (the .xcodeproj is generated, not committed)
+    project-personal.yml      local-only variant for a free Apple team: no push, extension or app group
     App/                      app target: scenes, AppDelegate, notification delegate
     NotifyExtension/          Notification Service Extension target
     Packages/

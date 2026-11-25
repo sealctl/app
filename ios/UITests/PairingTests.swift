@@ -12,7 +12,8 @@ final class PairingTests: SealctlTestCase {
         restoreVectorWords()
         see("No machines yet.")
         pairFakeMachine("m1", name: "dev@mbp.example.com", hint: "serial-1")
-        see("dev@mbp.example.com", 10)
+        // The list shows the short name (11.17).
+        see("mbp.example.com, ", 10)
 
         // The same name and the same hardware: "Already paired".
         let job = Harness.machine("m2", ["pair", "--name", "dev@mbp.example.com", "--hint-raw", "serial-1", "--no-wait",
@@ -24,7 +25,7 @@ final class PairingTests: SealctlTestCase {
         confirmPairing("dev@mbp.example.com", button: "Pair as new")
         XCTAssertEqual(Harness.machine("m2", ["pair-wait", "--wait-secs", "30"]).wait(40).0, 0)
         // Both show their tag.
-        see("dev@mbp.example.com #", 10)
+        see("mbp.example.com #", 10)
 
         // A different hint: "Same machine?" and Yes, replace it.
         let job3 = Harness.machine("m3", ["pair", "--name", "dev@mbp.example.com", "--hint-raw", "serial-9", "--model",

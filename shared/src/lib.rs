@@ -12,6 +12,7 @@ pub mod codec;
 pub mod day;
 pub mod decide;
 pub mod error;
+pub mod machine_model;
 pub mod merge;
 pub mod model;
 pub mod places;

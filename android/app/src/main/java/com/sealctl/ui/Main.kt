@@ -41,9 +41,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sealctl.app.Graph
@@ -190,23 +190,16 @@ private fun MachinesTab() {
     }
 }
 
+/** A machine on the list (11.17): its short name, its state, then the model and when it was seen. */
 @Composable
 private fun MachineRow(v: MachineView) {
-    SurfaceCard(Modifier.clickable { Ui.push(Route.MachineDetail(v.machine.key)) }.semantics { contentDescription = "${v.name}, ${v.row}" }) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                if (v.machine.nickname != null) Text(v.name, fontWeight = FontWeight.SemiBold, color = Sealctl.colors.ink)
-                else Mono(v.name, weight = FontWeight.SemiBold)
-            }
+    SurfaceCard(Modifier.clickable { Ui.push(Route.MachineDetail(v.machine.key)) }.clearAndSetSemantics { contentDescription = v.label() }) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(v.name, fontWeight = FontWeight.SemiBold, color = Sealctl.colors.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
             StateLabel(v.state, v.row)
+            Muted(v.sub())
+            v.unseen()?.let { Text(it, color = Sealctl.colors.waiting, fontSize = 14.sp) }
         }
-        val sub = listOfNotNull(
-            if (v.machine.nickname != null) Texts.shown(v.machine.name, Texts.MAX_NAME) else null,
-            v.machine.model,
-            "seen ${Texts.ago(v.machine.lastSeen?.toLong())}",
-        ).joinToString(" · ")
-        Muted(sub)
-        if (v.machine.flagged) Text("Not seen for ${(System.currentTimeMillis() - (v.machine.lastSeen?.toLong() ?: 0)) / 86_400_000} days", color = Sealctl.colors.waiting, fontSize = 14.sp)
     }
 }
 

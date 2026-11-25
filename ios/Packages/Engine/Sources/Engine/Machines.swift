@@ -214,11 +214,13 @@ public struct PairError: Error, Equatable, Sendable {
     public init(_ text: String) { self.text = text }
 }
 
-/// A machine's row: its state and the texts of SPEC.md 11.8.
+/// A machine's state (SPEC.md 11.8).
 public enum MachineState: Sendable, Equatable {
     case open, waiting, locked, unknown
 }
 
+/// A machine's row: its state and the texts of SPEC.md 11.8. `name` is the short name the list
+/// shows (SPEC.md 11.17), the same as the Activity rows: the nickname, else the host.
 public struct MachineView: Sendable, Identifiable {
     public let machine: Machine
     public let name: String
@@ -228,9 +230,28 @@ public struct MachineView: Sendable, Identifiable {
     public let leftSecs: Int64?
     public var id: String { machine.key }
 
+    /// The model as the list names it ("Mac mini" for `Mac16,10`), or nil when none was reported.
+    public var model: String? { machine.model.map { machineModelName(model: $0) }.flatMap { $0.isEmpty ? nil : $0 } }
+
+    /// "seen 1 h ago"
+    public func seen(now: Int64 = nowMs()) -> String { "seen \(Texts.ago(machine.lastSeen.map { Int64($0) }, now: now))" }
+
+    /// The card's muted line (SPEC.md 11.17): "Mac mini · seen 1 h ago".
+    public func sub(now: Int64 = nowMs()) -> String { [model, seen(now: now)].compactMap { $0 }.joined(separator: " · ") }
+
+    /// "Not seen for 94 days" for a machine unseen for 90 days, else nil.
+    public func unseen(now: Int64 = nowMs()) -> String? {
+        machine.flagged ? "Not seen for \((now - Int64(machine.lastSeen ?? 0)) / 86_400_000) days" : nil
+    }
+
+    /// The card's one label: "Devs-Mac-mini, Locked · last report 1 h ago, Mac mini, seen 1 h ago".
+    public func label(now: Int64 = nowMs()) -> String {
+        [name, spoken, model, seen(now: now), unseen(now: now)].compactMap { $0 }.joined(separator: ", ")
+    }
+
     @MainActor
     public static func of(_ m: Machine, _ engine: AppEngine, now: Int64 = nowMs()) -> MachineView {
-        let name = engine.displayName(m)
+        let name = machineShortName(machine: m)
         if let w = engine.waiting.first(where: { $0.machine.key == m.key && !$0.expired }) {
             let secs = (now - min(w.relay.created, now)) / 1000
             return MachineView(machine: m, name: name, state: .waiting, row: String(format: "Waiting · %d:%02d", secs / 60, secs % 60),
@@ -254,7 +275,7 @@ public struct MachineView: Sendable, Identifiable {
                 return MachineView(machine: m, name: name, state: .open, row: "Open · \(Texts.duration(left)) left",
                                    detail: detail.trimmingCharacters(in: .whitespaces), leftSecs: left)
             }
-            return MachineView(machine: m, name: name, state: .locked, row: "Locked (last report \(Texts.ago(reported, now: now)))",
+            return MachineView(machine: m, name: name, state: .locked, row: "Locked · last report \(Texts.ago(reported, now: now))",
                                detail: "No keys in memory. Volumes unmounted.", leftSecs: nil)
         }
         return MachineView(machine: m, name: name, state: .locked, row: "Locked", detail: "No keys in memory. Volumes unmounted.",

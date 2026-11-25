@@ -1009,7 +1009,7 @@ Each machine row shows one state, from the machine's last status (`GET .../statu
 | Waiting | "Waiting · 0:12" | "A request is on this phone." [Show] |
 | Unknown | "Seen 2 h ago" | "This machine hasn't reported its state yet." |
 
-"Time left" counts down locally from the reported idle allowance and is corrected at each report. A machine that has not reported for longer than its allowance shows "Locked" with "(last report 3 h ago)".
+"Time left" counts down locally from the reported idle allowance and is corrected at each report. A machine that has not reported for longer than its allowance shows "Locked · last report 3 h ago".
 
 ### 11.9 Places
 
@@ -1213,15 +1213,25 @@ The 2-year reminder (10.1) opens 11.14.
 
 **List.** Sorted Waiting, then Open, then Locked, then by last seen.
 
-> `dev@mbp.example.com`                      Open · 2 h 10 min left
+Each machine is a card of three lines:
+
+> **Devs-MacBook-Pro**
+> ● Open · 2 h 10 min left
 > MacBook Pro · seen 2 min ago
 
-With a nickname:
+> **Work laptop**
+> ● Locked · last report 1 h ago
+> Mac mini · seen 1 h ago
 
-> **Work laptop**                            Locked
-> `dev@mbp.example.com` · seen yesterday
+- The name, in the normal font, semibold, on one line (cut with "…" when too long): the nickname, else the host without `user@` and a trailing `.local` (`dev@Devs-MacBook-Pro.local` → `Devs-MacBook-Pro`). It is the same short name the Activity rows show (11.12), made by `machine_short_name` in the shared crate.
+- The state: its dot and its row text (11.8), in the state's colour.
+- Muted: the model, then when it was last seen. A Mac's model identifier is shown as its family (`Mac16,10` → "Mac mini"; MacBook Air, MacBook Pro, iMac, Mac Studio, Mac Pro) by `machine_model_name` in the shared crate; an identifier it does not know, and a Linux machine's product name, are shown as reported. No model reported: "seen 2 min ago" alone.
 
-When two machines share a name, both show their tag after the name: `dev@mbp.example.com #k7m2`. A machine unseen for 90 days shows "Not seen for 94 days" in amber.
+When two machines share a name, both show their tag after the name: `Devs-MacBook-Pro #k7m2`. A machine unseen for 90 days shows "Not seen for 94 days" in amber under the card's lines.
+
+The card is one element for screen readers: "Work laptop, Locked · last report 1 h ago, Mac mini, seen 1 h ago" (on iPhone the Open state is read in words: "Open, 2 hours, 10 minutes left").
+
+The full `user@host` and the model as reported are in the detail.
 
 Toolbar: [Pair a machine], [Lock all]. Lock all sends a lock to every Open machine: "Locked 2 machines."
 
@@ -1233,7 +1243,7 @@ Empty: "No machines yet. On your computer, run `sealctl pair` and scan the code.
 > Open · 2 h 10 min left. Opened at 09:02 at Desk. Hard stop at 02:00.
 > [Lock now]
 > Nickname: [Work laptop]  (1 to 40 characters; empty removes it)
-> macOS 26 · MacBook Pro · paired 2026-11-21 · seen 2 min ago
+> macOS 26 · Mac15,6 · paired 2026-11-21 · seen 2 min ago
 > Keys it used → (Activity filtered to this machine)
 > What it holds → (Inventory filtered to this machine)
 > [Unpair]

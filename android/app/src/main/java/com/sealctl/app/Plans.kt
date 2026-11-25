@@ -3,6 +3,7 @@ package com.sealctl.app
 import com.sealctl.core.app.DelayedAction
 import com.sealctl.core.app.PlanApprovalRecord
 import com.sealctl.relay.RateLimitedException
+import com.sealctl.relay.RelayDelayed
 import com.sealctl.relay.RelayException
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -12,6 +13,15 @@ import kotlin.coroutines.cancellation.CancellationException
  * phone learnt of the cancel (here, the socket, a push or the relay list).
  */
 internal object Plans {
+    /**
+     * A record on the relay's list this install does not know: approved on another install for
+     * a machine (`unseal_all`), or a phone-only action another install started, whose record
+     * carries no kind ([Texts.OTHER_DEVICE], SPEC.md 11.23).
+     */
+    fun fromRelay(d: RelayDelayed): DelayedAction =
+        DelayedAction(d.id, if (d.machine != null) "unseal_all" else Texts.OTHER_DEVICE, d.machine,
+            d.releaseAt.toULong(), d.expires.toULong(), d.state, d.by)
+
     /** Plans of [machine] that may still hand out keys. */
     fun live(plans: List<PlanApprovalRecord>, delayed: List<DelayedAction>, machine: String): List<PlanApprovalRecord> {
         val cancelled = delayed.filter { it.state == "cancelled" }.map { it.id }.toSet()

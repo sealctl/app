@@ -50,6 +50,7 @@ public struct ExtensionHandler: Sendable {
     /// Returns the content to deliver, or nil to deliver the push unchanged.
     public func handle(_ content: UNMutableNotificationContent) async -> UNNotificationContent? {
         let info = content.userInfo
+        if (info["type"] as? String) == "delayed", let id = info["id"] as? String { return await delayed(content, id: id) }
         guard (info["type"] as? String) == "request", let id = info["id"] as? String else { return nil }
         // Before the first unlock since boot the phone keys can't be read.
         guard let keys = await vault.readPhoneKeys(), let snap = files.readSnapshot(), let state = snap.decodedState() else {
@@ -155,6 +156,22 @@ public struct ExtensionHandler: Sendable {
         }
         let w = Waiting(relay: r, request: req, verdict: verdict, machine: machine, seenAt: now, plan: req.plan())
         Notes.fill(content, w, machineName: name, biometry: biometry)
+        return content
+    }
+
+    /// A relay `delayed` push (10.1). The relay's record of a phone-only action carries no kind,
+    /// so one this install did not start is named as started on another of your devices
+    /// (11.23). Anything else, or any failure, leaves the push as the relay sent it.
+    func delayed(_ content: UNMutableNotificationContent, id: String) async -> UNNotificationContent? {
+        guard let snap = files.readSnapshot(), let known = snap.knownDelayed, !known.contains(id),
+              let keys = await vault.readPhoneKeys() else { return nil }
+        let relay = RelayClient(baseURL: snap.relay, keys: { keys })
+        guard let d = try? await relay.listDelayed().first(where: { $0.id == id }), d.machine == nil, d.state == "waiting"
+        else { return nil }
+        let note = Texts.delayedNote(Texts.otherDevice, at: d.releaseAt)
+        content.title = note.title
+        content.body = note.body
+        content.userInfo["screen"] = "delayed:\(id)"
         return content
     }
 

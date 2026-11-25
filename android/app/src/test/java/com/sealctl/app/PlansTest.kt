@@ -9,6 +9,7 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import com.sealctl.relay.RateLimitedException
+import com.sealctl.relay.RelayDelayed
 import com.sealctl.relay.RelayException
 import java.io.IOException
 import kotlinx.coroutines.test.runTest
@@ -150,5 +151,27 @@ class PlansTest {
         Plans.resendCancel("d1", resends) { sent++ }
         assertEquals(4, sent)
         assertEquals(15 * 60_000L, CancelResends.backoffMs(20))
+    }
+
+    @Test
+    fun aPhoneOnlyRecordFromAnotherInstallIsNamedAsSuch() {
+        // Another install with the same words started showing the words: the relay's record
+        // has no machine and no kind (SPEC.md 11.23).
+        val other = Plans.fromRelay(RelayDelayed("d1", null, 1_000, 7_201_000, 8_101_000, "waiting"))
+        assertEquals(Texts.OTHER_DEVICE, other.what)
+        assertNull(other.machine)
+        assertEquals("Started on another of your devices", Texts.delayScreenTitle(other.what, null))
+        assertEquals(Texts.otherDeviceBody(7_201_000), Texts.delayWaiting(other.what, 7_201_000))
+        assertEquals("A protected action started on another of your devices", Texts.delayedNote(other.what, 7_201_000).first)
+        assertTrue(Texts.delayedAt(other.what, "This phone", 7_201_000).startsWith("A protected action started on another of your devices"))
+
+        // Another install approved `unseal --all` for a machine: still that machine's leaving.
+        val machine = Plans.fromRelay(RelayDelayed("d2", "m1", 1_000, 7_201_000, 8_101_000, "waiting"))
+        assertEquals("unseal_all", machine.what)
+        assertEquals("Leaving sealctl on dev@mbp.example.com", Texts.delayScreenTitle(machine.what, "dev@mbp.example.com"))
+        assertEquals("Leaving sealctl on this computer", Texts.delayScreenTitle(machine.what, null))
+        assertEquals(Texts.DELAY_BODY, Texts.delayWaiting(machine.what, 7_201_000))
+        assertEquals(Texts.DELAYED_TITLE to Texts.DELAYED_BODY, Texts.delayedNote(machine.what, 7_201_000))
+        assertEquals(Texts.handsBackAt("dev@mbp.example.com", 7_201_000), Texts.delayedAt(machine.what, "dev@mbp.example.com", 7_201_000))
     }
 }

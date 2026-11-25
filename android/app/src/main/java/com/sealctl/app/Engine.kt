@@ -182,6 +182,11 @@ class Engine(
     private val inFlight = InFlight()
     /** Cancels sent again from the relay's list, and what the relay answered (SPEC.md 11.23). */
     private val cancelResends = CancelResends()
+    /**
+     * Delayed ids this install is registering with the relay: the relay's list may show one
+     * before it is recorded here, and it is not another install's (SPEC.md 11.23).
+     */
+    private val startingDelayed: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
     /** Exits from trusted places so far, to tell whether one came while an answer was on its way. */
     private val placeExits = AtomicInteger(0)
     private var uploadJob: Job? = null
@@ -927,8 +932,7 @@ class Engine(
         for (d in list) {
             val mine = local.value.delayed.firstOrNull { it.id == d.id }
             if (mine == null) {
-                applyLocal(LocalEvent.PutDelayed(DelayedAction(d.id, if (d.machine != null) "unseal_all" else "unknown", d.machine,
-                    d.releaseAt.toULong(), d.expires.toULong(), d.state, d.by)))
+                if (d.id !in startingDelayed) applyLocal(LocalEvent.PutDelayed(Plans.fromRelay(d)))
             } else if (mine.state != d.state && mine.state != "cancelled") {
                 if (d.state == "cancelled") delayedCancelled(d.id, d.by)
                 else applyLocal(LocalEvent.PutDelayed(mine.copy(state = d.state)))
@@ -1001,11 +1005,17 @@ class Engine(
         if (delayLifted()) return null
         val delay = delaySecs(Delays.LEVEL3_SECS)
         val id = randomId()
-        val d = relay.addDelayed(id, delay)
-        val action = DelayedAction(id, what, null, d.releaseAt.toULong(), d.expires.toULong(), "waiting", null)
-        applyLocal(LocalEvent.PutDelayed(action))
-        ReleaseWorker.schedule(context, id, what, d.releaseAt)
-        scope.launch { sendNotice(what, "pending", null, id, d.releaseAt) }
+        startingDelayed.add(id)
+        val action = try {
+            val d = relay.addDelayed(id, delay)
+            DelayedAction(id, what, null, d.releaseAt.toULong(), d.expires.toULong(), "waiting", null)
+                .also { applyLocal(LocalEvent.PutDelayed(it)) }
+        } finally {
+            startingDelayed.remove(id)
+        }
+        val at = action.releaseAt.toLong()
+        ReleaseWorker.schedule(context, id, what, at)
+        scope.launch { sendNotice(what, "pending", null, id, at) }
         return action
     }
 
@@ -1230,7 +1240,10 @@ class Engine(
                 "test" -> Notify.show(context, Notify.REQUESTS, "test", Texts.TEST_PUSH, null, timeoutMs = 60_000)
                 "delayed" -> {
                     refreshDelayed()
-                    Notify.show(context, Notify.SENSITIVE, "delayed-$id", Texts.DELAYED_TITLE, Texts.DELAYED_BODY, screen = "delayed:$id")
+                    // A phone-only delay another install started is named as such (SPEC.md 10.1).
+                    val d = local.value.delayed.firstOrNull { it.id == id }
+                    val (title, body) = Texts.delayedNote(d?.what, d?.releaseAt?.toLong() ?: expires)
+                    Notify.show(context, Notify.SENSITIVE, "delayed-$id", title, body, screen = "delayed:$id")
                 }
                 "cancelled" -> {
                     refreshDelayed()

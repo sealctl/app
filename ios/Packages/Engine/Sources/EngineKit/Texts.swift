@@ -257,8 +257,56 @@ public enum Texts {
         switch what {
         case "words": return "Your words can be shown at \(time(at))."
         case "delete": return "Your relay data is deleted at \(time(at))."
+        case otherDevice: return "\(otherDeviceNote) goes ahead at \(time(at))."
         default: return handsBackAt(name, at: at)
         }
+    }
+
+    /// The kind of a phone-only delay another install with the same words started: the relay's
+    /// record carries no kind, so it may be any of the actions on the phone (SPEC.md 11.23).
+    public static let otherDevice = "unknown"
+    public static let otherDeviceTitle = "Started on another of your devices"
+    public static let otherDeviceNote = "A protected action started on another of your devices"
+    public static func otherDeviceBody(_ at: Int64) -> String {
+        "Showing your words, deleting your relay data or leaving sealctl was started on another phone or tablet "
+            + "with your words. It goes ahead at \(time(at)). Not you? Cancel it."
+    }
+
+    /// The title of a delayed action's screen, by its kind; `name` is the machine's, for `unseal_all`.
+    public static func delayScreenTitle(_ what: String?, name: String?) -> String {
+        switch what {
+        case "words": return "Showing your words"
+        case "delete": return "Deleting your relay data"
+        case "leave": return "Leaving sealctl"
+        case otherDevice: return otherDeviceTitle
+        default: return leaving(name ?? "this computer")
+        }
+    }
+
+    /// The text under the countdown while a delayed action waits.
+    public static func delayWaiting(_ what: String?, at: Int64) -> String {
+        what == otherDevice ? otherDeviceBody(at) : delayBody
+    }
+
+    /// A delayed action cancelled on this phone.
+    public static func delayCancelledHere(_ what: String?) -> String {
+        what == "unseal_all" ? cancelledHere : "Cancelled. Nothing happened."
+    }
+
+    /// A delayed action whose wait is over.
+    public static func delayOver(_ what: String?) -> String {
+        switch what {
+        case "unseal_all": return "The hour is over. The computer goes ahead."
+        case otherDevice: return "The wait is over. The phone or tablet that started it can go ahead."
+        default: return "The hour is over."
+        }
+    }
+
+    /// A delayed action the relay no longer has, or none at all.
+    public static func delayGone(_ what: String?) -> String {
+        what == otherDevice
+            ? "This is no longer waiting: the phone or tablet that started it finished it, or it expired."
+            : "This waited too long. Start again."
     }
     public static func handedBack(_ name: String, done: Int, failed: Int) -> String { "\(name) handed back \(done) objects. \(failed) failed." }
 
@@ -291,6 +339,12 @@ public enum Texts {
     public static let requestBody = "A machine is asking for a key. Open to see the request."
     public static let delayedTitle = "Approved on your phone"
     public static let delayedBody = "Something sensitive was approved on your phone and starts in two hours. Open sealctl to see it or cancel it."
+    /// The note of a relay `delayed` push, by the kind of the record it announces.
+    public static func delayedNote(_ what: String?, at: Int64) -> (title: String, body: String) {
+        what == otherDevice
+            ? (otherDeviceNote, "It goes ahead at \(time(at)). Open sealctl to see it or cancel it.")
+            : (delayedTitle, delayedBody)
+    }
     public static let cancelledTitle = "Cancelled"
     public static let cancelledBody = "A pending sensitive action was cancelled."
     public static let placeLearned = "Trust this place? You opened your machines here on 3 mornings."

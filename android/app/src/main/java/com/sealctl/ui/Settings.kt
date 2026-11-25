@@ -529,7 +529,7 @@ private fun PhoneAction(
         return
     }
     if (pending != null && pending.releaseAt.toLong() > now) {
-        DelayView(pending.id, when (what) { "words" -> "Showing your words"; "delete" -> "Deleting your relay data"; else -> "Leaving sealctl" })
+        DelayView(pending.id, Texts.delayScreenTitle(what, null))
         return
     }
     Page(null, bottom = {

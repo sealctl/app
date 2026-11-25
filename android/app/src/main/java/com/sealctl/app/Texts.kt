@@ -220,8 +220,46 @@ object Texts {
     fun delayedAt(what: String, name: String, at: Long) = when (what) {
         "words" -> "Your words can be shown at ${time(at)}."
         "delete" -> "Your relay data is deleted at ${time(at)}."
+        OTHER_DEVICE -> "$OTHER_DEVICE_NOTE goes ahead at ${time(at)}."
         else -> handsBackAt(name, at)
     }
+
+    /**
+     * The kind of a phone-only delay another install with the same words started: the relay's
+     * record carries no kind, so it may be any of the actions on the phone (SPEC.md 11.23).
+     */
+    const val OTHER_DEVICE = "unknown"
+    const val OTHER_DEVICE_TITLE = "Started on another of your devices"
+    const val OTHER_DEVICE_NOTE = "A protected action started on another of your devices"
+    fun otherDeviceBody(at: Long) = "Showing your words, deleting your relay data or leaving sealctl was started on " +
+        "another phone or tablet with your words. It goes ahead at ${time(at)}. Not you? Cancel it."
+
+    /** The title of a delayed action's screen, by its kind; [name] is the machine's, for `unseal_all`. */
+    fun delayScreenTitle(what: String?, name: String?) = when (what) {
+        "words" -> "Showing your words"
+        "delete" -> "Deleting your relay data"
+        "leave" -> "Leaving sealctl"
+        OTHER_DEVICE -> OTHER_DEVICE_TITLE
+        else -> leaving(name ?: "this computer")
+    }
+
+    /** The text under the countdown while a delayed action waits. */
+    fun delayWaiting(what: String?, at: Long) = if (what == OTHER_DEVICE) otherDeviceBody(at) else DELAY_BODY
+
+    /** A delayed action cancelled on this phone. */
+    fun delayCancelledHere(what: String?) = if (what == "unseal_all") CANCELLED_HERE else "Cancelled. Nothing happened."
+
+    /** A delayed action whose wait is over. */
+    fun delayOver(what: String?) = when (what) {
+        "unseal_all" -> "The hour is over. The computer goes ahead."
+        OTHER_DEVICE -> "The wait is over. The phone or tablet that started it can go ahead."
+        else -> "The hour is over."
+    }
+
+    /** A delayed action the relay no longer has, or none at all. */
+    fun delayGone(what: String?) =
+        if (what == OTHER_DEVICE) "This is no longer waiting: the phone or tablet that started it finished it, or it expired."
+        else "This waited too long. Start again."
     fun handedBack(name: String, done: Int, failed: Int) = "$name handed back $done objects. $failed failed."
 
     // ---------- pairing and errors (11.5, 11.20) ----------
@@ -247,6 +285,10 @@ object Texts {
     const val TEST_PUSH = "Test from the relay. Requests reach this phone."
     const val DELAYED_TITLE = "Approved on your phone"
     const val DELAYED_BODY = "Something sensitive was approved on your phone and starts in two hours. Open sealctl to see it or cancel it."
+    /** The note of a relay `delayed` push, by the kind of the record it announces (title, body). */
+    fun delayedNote(what: String?, at: Long): Pair<String, String> =
+        if (what == OTHER_DEVICE) OTHER_DEVICE_NOTE to "It goes ahead at ${time(at)}. Open sealctl to see it or cancel it."
+        else DELAYED_TITLE to DELAYED_BODY
     const val CANCELLED_TITLE = "Cancelled"
     const val CANCELLED_BODY = "A pending sensitive action was cancelled."
     const val PLACE_LEARNED = "Trust this place? You opened your machines here on 3 mornings."

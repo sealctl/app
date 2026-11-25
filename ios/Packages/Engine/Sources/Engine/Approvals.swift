@@ -587,6 +587,15 @@ extension AppEngine {
 
     // MARK: delayed approvals (11.23)
 
+    /// A record on the relay's list this install does not know: approved on another install for
+    /// a machine (`unseal_all`), or a phone-only action another install started, whose record
+    /// carries no kind (`Texts.otherDevice`, SPEC.md 11.23).
+    nonisolated static func fromRelay(_ d: RelayDelayed) -> DelayedAction {
+        DelayedAction(id: d.id, what: d.machine != nil ? "unseal_all" : Texts.otherDevice, machine: d.machine,
+                      releaseAt: UInt64(clamping: d.releaseAt), expires: UInt64(clamping: d.expires), state: d.state,
+                      cancelledBy: d.state == "cancelled" ? d.by : nil)
+    }
+
     /// Brings the delayed records up to the relay's list. False when the relay could not be asked.
     @discardableResult
     public func refreshDelayed() async -> Bool {
@@ -607,11 +616,8 @@ extension AppEngine {
                     do { try await relay.cancelDelayed(d.id, userTapped: false) } catch { failure = error }
                     cancelResends.answered(d.id, error: failure, now: now())
                 }
-            } else {
-                await applyLocal(.putDelayed(action: DelayedAction(
-                    id: d.id, what: d.machine != nil ? "unseal_all" : "unknown", machine: d.machine,
-                    releaseAt: UInt64(clamping: d.releaseAt), expires: UInt64(clamping: d.expires), state: d.state,
-                    cancelledBy: d.state == "cancelled" ? d.by : nil)))
+            } else if !startingDelayed.contains(d.id) {
+                await applyLocal(.putDelayed(action: Self.fromRelay(d)))
             }
         }
         await cancelPlansOfCancelledDelays()
@@ -678,6 +684,8 @@ extension AppEngine {
         if delayLifted() { return nil }
         let delay = delaySecs(Self.levelThreeDelaySecs)
         let id = randomId()
+        startingDelayed.insert(id)
+        defer { startingDelayed.remove(id) }
         let d = try await relay.addDelayed(id: id, delay: delay)
         let action = DelayedAction(id: id, what: what, machine: nil, releaseAt: UInt64(clamping: d.releaseAt),
                                    expires: UInt64(clamping: d.expires),

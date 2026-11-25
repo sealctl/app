@@ -38,6 +38,10 @@ public struct ExtensionSnapshot: Codable, Sendable {
     public var written: Int64
     /// The relay's time the app last learned (SPEC.md 8.1); nil in a snapshot written before it.
     public var clock: Clock?
+    /// Ids of the delayed actions whose kind this install knows: started here, or for a machine.
+    /// A `delayed` push for any other phone-only record was started on another install (11.23).
+    /// Nil in a snapshot written before it.
+    public var knownDelayed: [String]?
 
     /// `RelayClock` as the snapshot keeps it.
     public struct Clock: Codable, Sendable {
@@ -56,6 +60,7 @@ public struct ExtensionSnapshot: Codable, Sendable {
             Plan(machine: $0.machine, requestId: $0.requestId, planHash: $0.planHash, keys: $0.keys.map { [$0.purpose, $0.id] },
                  notBefore: $0.notBefore, state: $0.state, delayId: $0.delayId, all: $0.all)
         }
+        knownDelayed = local.delayed.filter { $0.what != Texts.otherDevice }.map(\.id)
         self.currentPlace = currentPlace
         self.placesOn = placesOn
         self.relay = relay

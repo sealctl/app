@@ -127,8 +127,9 @@ fun ActivityScreen(title: String, onBack: (() -> Unit)?, machine: String?) {
                     DayHeader(Texts.mediumDate(day.date, locale), Texts.dayCounts(day.counts), day.date.toString(), open) { toggled[day.date] = !open }
                 }
             }
-            if (open) itemsIndexed(day.rows, key = { j, _ -> "use ${day.date} $j" }) { j, r ->
-                Box(Modifier.padding(top = if (j == 0) GAP_ITEMS else GAP_ROWS)) { ActivityLine(r.first, r.second) }
+            // Keyed by the use, not its place: a new use at the top leaves the rows below as drawn.
+            if (open) itemsIndexed(day.rows, key = { _, u -> u.key }) { j, u ->
+                Box(Modifier.padding(top = if (j == 0) GAP_ITEMS else GAP_ROWS)) { ActivityLine(u.time, u.row) }
             }
         }
         if (grid != null && p.cells != null) item("heatmap") {

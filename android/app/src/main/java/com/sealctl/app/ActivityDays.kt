@@ -52,8 +52,11 @@ object ActivityDays {
  * connection behind a lock, which a sync, a prune or a status report may hold.
  */
 data class ActivityPage(val days: List<ShownDay>, val cells: List<HeatGrid.Cell>?) {
-    /** A listed day: its date, its figures and its rows (the time, then the row), newest first. */
-    data class ShownDay(val date: LocalDate, val counts: ActivityCounts, val rows: List<Pair<String, ActivityRow>>)
+    /** A listed day: its date, its figures and its uses, newest first. */
+    data class ShownDay(val date: LocalDate, val counts: ActivityCounts, val rows: List<Use>)
+
+    /** One use as a row: [key] names it in the list whatever comes before it, [time] is shown. */
+    data class Use(val key: String, val time: String, val row: ActivityRow)
 
     /**
      * This page with the days, rows and cells that equal [old]'s taken from [old]: a screen
@@ -77,7 +80,13 @@ data class ActivityPage(val days: List<ShownDay>, val cells: List<HeatGrid.Cell>
             // last status above all) is left out, as each row passes it through the FFI.
             val machines = engine.liveMachines().associate { it.key to it.copy(lastStatus = null, boxKey = "", relay = "", hint = null) }
             val shown = days.map { d ->
-                ShownDay(d.date, d.counts, d.entries.map { e -> Texts.time(e.time.toLong()) to activityRow(e, machines[e.machine]) })
+                val seen = HashMap<String, Int>()
+                ShownDay(d.date, d.counts, d.entries.map { e ->
+                    // The same use reported twice in one millisecond still gets a key of its own.
+                    val base = "${e.time}|${e.machine}|${e.key}|${e.outcome}"
+                    val n = seen.merge(base, 1, Int::plus)!!
+                    Use("$base|$n", Texts.time(e.time.toLong()), activityRow(e, machines[e.machine]))
+                })
             }
             val cells = grid?.let { g ->
                 g.cells(safe { engine.store.dailyCounts(g.start.toString(), today.toString(), engine.offset()) } ?: emptyList())

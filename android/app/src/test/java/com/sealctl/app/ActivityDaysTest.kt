@@ -101,7 +101,7 @@ class ActivityDaysTest {
 
     @Test
     fun aNewPageKeepsTheRowsAndCellsThatDidNotChange() {
-        fun row(subject: String) = Texts.time(0) to com.sealctl.core.app.ActivityRow(subject, "In session", com.sealctl.core.app.ActivityTone.NORMAL, emptyList())
+        fun row(subject: String) = ActivityPage.Use(subject, Texts.time(0), com.sealctl.core.app.ActivityRow(subject, "In session", com.sealctl.core.app.ActivityTone.NORMAL, emptyList()))
         fun cell(used: Long) = HeatGrid.Cell(today, used, 0, 1)
         val old = ActivityPage(
             listOf(

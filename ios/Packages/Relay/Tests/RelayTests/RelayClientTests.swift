@@ -63,15 +63,29 @@ struct RelayClientTests {
         #expect(try await c.listPush().isEmpty)
     }
 
+    /// Runs `body` with the relay's clock `secs` ahead, and puts it back before returning, also
+    /// when `body` throws. A reset left to a `defer { Task { ... } }` could land after the next
+    /// test had set its own offset (run 45603025961: `relayTimesReachTheClock` saw offset 0).
+    func withRelayAhead(_ secs: Int, _ body: () async throws -> Void) async throws {
+        _ = try await control("/test/clock", ["offset": .number(Double(secs))])
+        do {
+            try await body()
+        } catch {
+            _ = try? await control("/test/clock", ["offset": 0])
+            throw error
+        }
+        _ = try await control("/test/clock", ["offset": 0])
+    }
+
     @Test func clockSkewIsCorrectedOnce() async throws {
         let keys = try fresh()
-        _ = try await control("/test/clock", ["offset": 900])
-        defer { Task { _ = try? await control("/test/clock", ["offset": 0]) } }
-        let c = RelayClient(baseURL: testRelay!, keys: { keys })
-        #expect(try await c.machines().isEmpty)
-        let offset = await c.clockOffsetSecs
-        #expect(offset > 800)
-        _ = try await control("/test/clock", ["offset": 0])
+        try await withRelayAhead(900) {
+            let c = RelayClient(baseURL: testRelay!, keys: { keys })
+            let machines = try await c.machines()
+            #expect(machines.isEmpty)
+            let offset = await c.clockOffsetSecs
+            #expect(offset > 800)
+        }
     }
 
     /// SPEC.md 8.1: the relay's time (health, `clock_skew`) and accepted signed times go to
@@ -79,16 +93,17 @@ struct RelayClientTests {
     @Test func relayTimesReachTheClock() async throws {
         let keys = try fresh()
         let seen = Seen()
-        _ = try await control("/test/clock", ["offset": 900])
-        defer { Task { _ = try? await control("/test/clock", ["offset": 0]) } }
-        let c = RelayClient(baseURL: testRelay!, keys: { keys },
-                            onRelayTime: { t in Task { await seen.time(t) } },
-                            onAccepted: { t in Task { await seen.accepted(t) } })
-        let t = try #require(await c.relayTime())
-        let system = Int64(Date().timeIntervalSince1970 * 1000)
-        #expect(abs(t - (system + 900_000)) < 5_000)
-        #expect(try await c.machines().isEmpty)
-        _ = try await control("/test/clock", ["offset": 0])
+        var system: Int64 = 0
+        try await withRelayAhead(900) {
+            let c = RelayClient(baseURL: testRelay!, keys: { keys },
+                                onRelayTime: { t in Task { await seen.time(t) } },
+                                onAccepted: { t in Task { await seen.accepted(t) } })
+            let t = try #require(await c.relayTime())
+            system = Int64(Date().timeIntervalSince1970 * 1000)
+            #expect(abs(t - (system + 900_000)) < 5_000)
+            let machines = try await c.machines()
+            #expect(machines.isEmpty)
+        }
         try await Task.sleep(nanoseconds: 200_000_000)
         let times = await seen.times
         let accepted = await seen.acceptedTimes

@@ -118,6 +118,16 @@ enum FakeRelay {
     static func near(_ near: Bool?) { HTTP.call("POST", "\(Env.relay)/test/near", ["near": near.map { $0 as Any } ?? NSNull()]) }
     static func fail(_ body: [String: Any]) { HTTP.call("POST", "\(Env.relay)/test/fail", body) }
     static func clock(_ offset: Int) { HTTP.call("POST", "\(Env.relay)/test/clock", ["offset": offset]) }
+
+    /// Waits until the relay holds `n` phone sockets open; false if it does not within `timeout`.
+    static func untilPhoneSockets(_ n: Int, timeout: TimeInterval) -> Bool {
+        let end = Date().addingTimeInterval(timeout)
+        repeat {
+            if HTTP.call("GET", "\(Env.relay)/test/sockets")["phoneSockets"] as? Int == n { return true }
+            Thread.sleep(forTimeInterval: 0.25)
+        } while Date() < end
+        return false
+    }
 }
 
 /// Simulated biometrics through the simulator's own notifications (the test runner runs

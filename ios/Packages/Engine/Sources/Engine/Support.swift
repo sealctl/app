@@ -77,6 +77,8 @@ public struct EngineConfig: Sendable {
     public var sandboxPush: Bool
     public var version: String
     public var build: String
+    /// The longest a relay call may take, seconds. Tests shorten it; the app never does.
+    var callResourceTimeout: TimeInterval = 30
 
     public init(relayURL: String, testDelaySecs: Int = 0, sandboxPush: Bool = true, version: String = "1.0.0", build: String = "1") {
         self.relayURL = relayURL

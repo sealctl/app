@@ -75,6 +75,9 @@ public actor PhoneSocket {
             try await ws.send(.string("ping"))
             while !Task.isCancelled {
                 let message = try await ws.receive()
+                // Stopped while this waited: the app has left the foreground. A request that
+                // came anyway is left to its push and the next catch-up (8.3, 8.4).
+                if Task.isCancelled { break }
                 guard case .string(let text) = message else { continue }
                 if text == "pong" {
                     lastPong = Date()

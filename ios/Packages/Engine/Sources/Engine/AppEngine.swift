@@ -85,7 +85,8 @@ public final class AppEngine {
         let box = KeyBox(vault: vault)
         keyBox = box
         relay = RelayClient(baseURL: config.relayURL, keys: { await box.get() },
-                            onRelayTime: { db.relayTime($0) }, onAccepted: { db.relayAccepted($0) })
+                            onRelayTime: { db.relayTime($0) }, onAccepted: { db.relayAccepted($0) },
+                            callResourceTimeout: config.callResourceTimeout)
         words.engine = self
         biometryName = await vault.biometryName()
         watchNetwork()

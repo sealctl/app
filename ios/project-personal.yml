@@ -1,0 +1,40 @@
+# A local-only variant of project.yml for installing the app on your own iPhone or iPad with
+# a free (personal) Apple developer team. Never shipped. scripts/install-ios-personal.sh
+# generates ios/sealctl-personal.xcodeproj from it and builds it; the script says what it drops.
+#
+# It includes project.yml and changes only what a personal team cannot sign:
+# - bundle id com.sealctl.app.personal, so it never collides with the shipped app's id;
+# - no Notification Service Extension, no push, no Time Sensitive notifications, no
+#   associated domains (sealctl.com links), no app group;
+# - the shared keychain group stays (personal teams can sign it); with no app group the app
+#   keeps its files in its own Application Support (SharedFiles.standard).
+#
+# `:REPLACE` swaps a whole value instead of merging it (XcodeGen includes).
+include:
+  - project.yml
+name: sealctl-personal
+targets:
+  sealctl:
+    dependencies:REPLACE:
+      - package: SealCore
+      - package: Vault
+      - package: Relay
+      - package: Places
+      - package: Engine
+        product: Engine
+      - package: Engine
+        product: EngineKit
+      - package: DesignSystem
+    entitlements:REPLACE:
+      path: build/personal/sealctl.entitlements
+      properties:
+        keychain-access-groups: ["$(AppIdentifierPrefix)com.sealctl.shared"]
+    info:
+      # Same properties as project.yml, written to ios/build/personal so the shipped
+      # App/Info.plist is left alone.
+      path: build/personal/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sealctl.app.personal
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: Apple Development

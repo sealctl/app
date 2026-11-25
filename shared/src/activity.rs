@@ -194,14 +194,27 @@ fn capitalised(s: &str) -> String {
     }
 }
 
-/// The machine on the second line: its nickname, else its host without `user@` and `.local`
-/// (with the tag when another machine has the same name); "unpaired (<8 characters>)" when
-/// it is not paired.
+/// The machine on the second line: its short name ([`machine_short_name`]); "unpaired
+/// (<8 characters>)" when it is not paired.
 fn machine_label(machine: Option<&Machine>, key: &str) -> String {
-    let Some(m) = machine else {
-        let head: String = key.chars().take(8).collect();
-        return format!("unpaired ({})", display_text(head, 0));
-    };
+    match machine {
+        Some(m) => short_name(m),
+        None => {
+            let head: String = key.chars().take(8).collect();
+            format!("unpaired ({})", display_text(head, 0))
+        }
+    }
+}
+
+/// A machine's short name, as the Activity rows and the Machines list show it (SPEC.md 11.12,
+/// 11.17): its nickname, else its host without `user@` and `.local`, with the tag when another
+/// machine has the same name. Made safe to show (SPEC.md 11.7) and at most 60 characters.
+#[uniffi::export]
+pub fn machine_short_name(machine: Machine) -> String {
+    short_name(&machine)
+}
+
+fn short_name(m: &Machine) -> String {
     if let Some(n) = m.nickname.as_deref().filter(|n| !n.is_empty()) {
         return shown(n, MAX_NAME);
     }
@@ -530,6 +543,39 @@ mod tests {
             activity_row(e, Some(tagged)).details,
             [format!("Devs-Mac-mini #{tag}")]
         );
+    }
+
+    #[test]
+    fn the_machines_list_uses_the_same_short_name() {
+        assert_eq!(machine_short_name(mac_mini()), "Devs-Mac-mini");
+        let nick = Machine {
+            nickname: Some("Work laptop".into()),
+            ..mac_mini()
+        };
+        assert_eq!(machine_short_name(nick), "Work laptop");
+        // an empty nickname is no nickname
+        let empty = Machine {
+            nickname: Some(String::new()),
+            ..mac_mini()
+        };
+        assert_eq!(machine_short_name(empty), "Devs-Mac-mini");
+        // no host after `user@`: the whole name
+        let odd = Machine {
+            name: "dev@".into(),
+            ..mac_mini()
+        };
+        assert_eq!(machine_short_name(odd), "dev@");
+        let bidi = Machine {
+            name: "dev@box\u{202E}gpj.local".into(),
+            ..mac_mini()
+        };
+        assert_eq!(machine_short_name(bidi), "box\u{FFFD}gpj");
+        let tagged = Machine {
+            tag_shown: true,
+            ..mac_mini()
+        };
+        let tag = sealctl_core::machine_tag(mac_mini().key).unwrap();
+        assert_eq!(machine_short_name(tagged), format!("Devs-Mac-mini #{tag}"));
     }
 
     #[test]

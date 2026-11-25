@@ -47,7 +47,8 @@ final class CLIEndToEndTests: SealctlTestCase {
     func testRealCLIEndToEnd() {
         if Env.fakeRelay { restoreVectorWords() } else { onboardNewWords() }
         pairCLI()
-        see(machineName, 10)
+        // The list shows the short name (11.17).
+        see("ci.example.com, ", 10)
 
         // open (level 1, One tap): the session opens.
         var (code, out) = run(["open"], card: "Open \(machineName)?", button: "Allow for this session")

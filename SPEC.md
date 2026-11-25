@@ -1010,7 +1010,7 @@ Each machine row shows one state, from the machine's last status (`GET .../statu
 | Waiting | "Waiting · 0:12" | "A request is on this phone." [Show] |
 | Unknown | "Seen 2 h ago" | "This machine hasn't reported its state yet." |
 
-"Time left" counts down locally from the reported idle allowance and is corrected at each report. A machine that has not reported for longer than its allowance shows "Locked" with "(last report 3 h ago)".
+"Time left" counts down locally from the reported idle allowance and is corrected at each report. A machine that has not reported for longer than its allowance shows "Locked · last report 3 h ago".
 
 ### 11.9 Places
 
@@ -1214,15 +1214,25 @@ The 2-year reminder (10.1) opens 11.14.
 
 **List.** Sorted Waiting, then Open, then Locked, then by last seen.
 
-> `dev@mbp.example.com`                      Open · 2 h 10 min left
+Each machine is a card of three lines:
+
+> **Devs-MacBook-Pro**
+> ● Open · 2 h 10 min left
 > MacBook Pro · seen 2 min ago
 
-With a nickname:
+> **Work laptop**
+> ● Locked · last report 1 h ago
+> Mac mini · seen 1 h ago
 
-> **Work laptop**                            Locked
-> `dev@mbp.example.com` · seen yesterday
+- The name, in the normal font, semibold, on one line (cut with "…" when too long): the nickname, else the host without `user@` and a trailing `.local` (`dev@Devs-MacBook-Pro.local` → `Devs-MacBook-Pro`). It is the same short name the Activity rows show (11.12), made by `machine_short_name` in the shared crate.
+- The state: its dot and its row text (11.8), in the state's colour.
+- Muted: the model, then when it was last seen. A Mac's model identifier is shown as its family (`Mac16,10` → "Mac mini"; MacBook Air, MacBook Pro, iMac, Mac Studio, Mac Pro) by `machine_model_name` in the shared crate; an identifier it does not know, and a Linux machine's product name, are shown as reported. No model reported: "seen 2 min ago" alone.
 
-When two machines share a name, both show their tag after the name: `dev@mbp.example.com #k7m2`. A machine unseen for 90 days shows "Not seen for 94 days" in amber.
+When two machines share a name, both show their tag after the name: `Devs-MacBook-Pro #k7m2`. A machine unseen for 90 days shows "Not seen for 94 days" in amber under the card's lines.
+
+The card is one element for screen readers: "Work laptop, Locked · last report 1 h ago, Mac mini, seen 1 h ago" (on iPhone the Open state is read in words: "Open, 2 hours, 10 minutes left").
+
+The full `user@host` and the model as reported are in the detail.
 
 Toolbar: [Pair a machine], [Lock all]. Lock all sends a lock to every Open machine: "Locked 2 machines."
 
@@ -1234,7 +1244,7 @@ Empty: "No machines yet. On your computer, run `sealctl pair` and scan the code.
 > Open · 2 h 10 min left. Opened at 09:02 at Desk. Hard stop at 02:00.
 > [Lock now]
 > Nickname: [Work laptop]  (1 to 40 characters; empty removes it)
-> macOS 26 · MacBook Pro · paired 2026-11-21 · seen 2 min ago
+> macOS 26 · Mac15,6 · paired 2026-11-21 · seen 2 min ago
 > Keys it used → (Activity filtered to this machine)
 > What it holds → (Inventory filtered to this machine)
 > [Unpair]
@@ -1487,7 +1497,7 @@ The screens for levels 2 and 3 (9.6). They are full-screen, never a sheet, and n
 - A banner on the Machines tab while any delay runs: "dev@mbp.example.com hands everything back at 11:00." [Show] [Cancel]. Cancel needs no biometrics: stopping is always allowed.
 - Cancelled here: "Cancelled. Nothing was handed back." (an action on the phone: "Cancelled. Nothing happened."). Cancelled from a computer: "Cancelled from dev@box.example.com." The app then sends every machine a `notice` with `state: "cancelled"`.
 - A cancel here is recorded on the phone before the relay is asked, so its plan hands out no more keys whatever the relay answers: `404 gone` (the machine already fetched the approval, or the record expired) or no answer at all. The `notice` goes to every machine either way. A cancel the relay did not get is sent again whenever the phone reads the relay's list and finds that record still `waiting` or `released`. A cancel sent again keeps what the relay answered: once the relay takes it, or gives an answer that will not change (`404 gone`, `403`, any other `4xx`), it is not sent again; a `429` waits out its window, and no answer or a `5xx` waits 15 seconds, twice as long after each further failure, up to 15 minutes.
-- For an action on the phone, at `releaseAt` a local notification says "Ready: open sealctl to finish …" (10.1). A cancel removes it, however the phone hears of it (socket, push, the relay's list, `finish`); on Android the job that posts it asks the relay first. Opening it asks for biometrics, then calls `finish`; only on `200` does the action run. `409 cancelled`: "Cancelled from dev@box.example.com. Nothing happened." The finish is offered until the relay record expires, 15 minutes after `releaseAt`; after that: "This waited too long. Start again."
+- For an action on the phone, at `releaseAt` a local notification says "Ready: open sealctl to finish …" (10.1). A cancel removes it, however the phone hears of it (socket, push, the relay's list, `finish`); on Android the job that posts it asks the relay first. Opening it asks for biometrics, then calls `finish`; only on `200` does the action run. `409 cancelled`: "Cancelled from dev@box.example.com. Nothing happened." The finish is offered until the relay record expires, an hour after `releaseAt` (the app takes `expires` from the relay); after that: "This waited too long. Start again."
 - For `unseal --all`, nothing is needed from the phone when the hour ends: the computer fetches the approval from the relay.
 - Other installs with the same words show the delay too (from the relay's note) and can cancel it.
 - Notes, pushes and the relay's list can arrive in any order. Once the phone has recorded a delayed action as cancelled, finished, gone or expired, a later write from an older read (the list fetched just before a cancel note) never makes it wait again; only a known end (cancelled, with who cancelled, or finished) replaces "gone" or "expired". A cancelled plan approval stays cancelled, and a plan approval whose delayed action is cancelled is cancelled too, whichever of the two the phone recorded first (a cancel can arrive while the approval is still being posted); approving the same plan again is a new request with its own record.

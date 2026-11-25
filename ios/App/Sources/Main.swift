@@ -165,6 +165,7 @@ struct MachinesTab: View {
     }
 }
 
+/// A machine on the list (11.17): its short name, its state, then the model and when it was seen.
 struct MachineRow: View {
     @Environment(Router.self) private var router
     let v: MachineView
@@ -173,27 +174,17 @@ struct MachineRow: View {
     var body: some View {
         Button { router.push(.machineDetail(v.machine.key)) } label: {
             SurfaceCard {
-                HStack(alignment: .firstTextBaseline) {
-                    if v.machine.nickname != nil {
-                        Text(v.name).fontWeight(.semibold).foregroundStyle(Palette.ink)
-                    } else {
-                        MonoText(v.name, weight: .semibold)
-                    }
-                    Spacer()
-                    StateLabel(v.state.kind, v.row, spoken: v.spoken)
-                }
-                let sub = [v.machine.nickname != nil ? shown(v.machine.name) : nil, v.machine.model.map { shown($0) },
-                           "seen \(Texts.ago(v.machine.lastSeen.map { Int64($0) }, now: now))"].compactMap { $0 }
-                Text(sub.joined(separator: " · ")).font(.subheadline).foregroundStyle(Palette.muted)
-                if v.machine.flagged {
-                    Text("Not seen for \((now - Int64(v.machine.lastSeen ?? 0)) / 86_400_000) days").font(.subheadline)
-                        .foregroundStyle(Palette.waiting)
+                Text(v.name).fontWeight(.semibold).foregroundStyle(Palette.ink).lineLimit(1).truncationMode(.tail)
+                StateLabel(v.state.kind, v.row, spoken: v.spoken)
+                Text(v.sub(now: now)).font(.subheadline).foregroundStyle(Palette.muted)
+                if let unseen = v.unseen(now: now) {
+                    Text(unseen).font(.subheadline).foregroundStyle(Palette.waiting)
                 }
             }
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(v.name), \(v.spoken)")
+        .accessibilityLabel(v.label(now: now))
         .accessibilityIdentifier("machine \(v.machine.name)")
     }
 }

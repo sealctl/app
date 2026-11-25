@@ -7069,6 +7069,19 @@ public func activityRow(entry: UsageEntry, machine: Machine?) -> ActivityRow  {
 })
 }
 /**
+ * A machine's short name, as the Activity rows and the Machines list show it (SPEC.md 11.12,
+ * 11.17): its nickname, else its host without `user@` and `.local`, with the tag when another
+ * machine has the same name. Made safe to show (SPEC.md 11.7) and at most 60 characters.
+ */
+public func machineShortName(machine: Machine) -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_func_machine_short_name(
+        FfiConverterTypeMachine_lower(machine),uniffiCallStatus
+    )
+})
+}
+/**
  * Four choices for word `position` (1 to 24): the right word and three BIP39 words with the
  * same first letter, shuffled.
  */
@@ -7283,6 +7296,19 @@ public func placeSettled(place: TrustedPlace, now: UInt64) -> Bool  {
 })
 }
 /**
+ * The model as the Machines list shows it: `Mac16,10` → `Mac mini`, `MacBookPro18,3` →
+ * `MacBook Pro`; any other value as reported, made safe to show (SPEC.md 11.7) and at most
+ * 60 characters. Empty when the machine reported nothing.
+ */
+public func machineModelName(model: String) -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_func_machine_model_name(
+        FfiConverterString.lower(model),uniffiCallStatus
+    )
+})
+}
+/**
  * The merge of two states. Commutative and idempotent.
  */
 public func mergeState(local: State, remote: State) -> State  {
@@ -7386,6 +7412,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sealctl_app_checksum_func_activity_row() != 46249) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sealctl_app_checksum_func_machine_short_name() != 57194) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sealctl_app_checksum_func_card_choices() != 45350) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -7435,6 +7464,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_func_place_settled() != 45654) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sealctl_app_checksum_func_machine_model_name() != 64728) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_func_merge_state() != 39551) {

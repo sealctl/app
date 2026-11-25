@@ -684,3 +684,60 @@ async fn moves_need_a_proof_from_the_current_phone() {
         assert_eq!(s, want, "{res}");
     }
 }
+
+/// `/test/hold` lets a call take effect and holds back its answer until `/test/release`, so a
+/// test can see "the relay has the record, the app does not have its answer yet".
+#[tokio::test(flavor = "multi_thread")]
+async fn a_held_answer_waits_for_its_release() {
+    let relay = relay().await;
+    let phone = Phone::b();
+    let p = phone.id();
+    let list = format!("/v1/phones/{p}/delayed");
+    relay
+        .plain(
+            "POST",
+            "/test/hold",
+            Some(&json!({"method": "POST", "path": "/delayed"})),
+        )
+        .await
+        .unwrap();
+    let (_, none) = relay
+        .plain("POST", "/test/held", Some(&json!({"path": "/delayed"})))
+        .await
+        .unwrap();
+    assert_eq!(none["held"], 0);
+    let id = new_request_id().unwrap();
+    let (signer, body) = (phone.signer(), json!({"id": id, "delay": 3600}));
+    let add = relay.call(&signer, "POST", &list, Some(&body));
+    let check = async {
+        let (_, held) = relay
+            .plain("POST", "/test/held", Some(&json!({"path": "/delayed"})))
+            .await
+            .unwrap();
+        assert_eq!(held["held"], 1);
+        // Held: the record is on the list, and other calls on the path are not held.
+        let (s, res) = relay
+            .call(&phone.signer(), "GET", &list, None)
+            .await
+            .unwrap();
+        assert_eq!(s, 200);
+        assert_eq!(res["delayed"][0]["id"], json!(id));
+        relay
+            .plain("POST", "/test/release", Some(&json!({"path": "/delayed"})))
+            .await
+            .unwrap();
+    };
+    let ((s, res), ()) = tokio::join!(async { add.await.unwrap() }, check);
+    assert_eq!(s, 201, "{res}");
+    // Released: the next call is answered at once.
+    let (s, _) = relay
+        .call(
+            &phone.signer(),
+            "POST",
+            &list,
+            Some(&json!({"id": new_request_id().unwrap(), "delay": 3600})),
+        )
+        .await
+        .unwrap();
+    assert_eq!(s, 201);
+}

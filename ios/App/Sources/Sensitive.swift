@@ -262,17 +262,17 @@ struct DelayView: View {
                 case "waiting":
                     Text(Texts.startsAt(Int64(d!.releaseAt), now: now)).font(.title3.weight(.semibold)).foregroundStyle(Palette.waiting)
                         .accessibilityIdentifier("countdown")
-                    BodyText(Texts.delayBody)
+                    BodyText(Texts.delayWaiting(d?.what, at: Int64(d!.releaseAt)))
                 case "cancelled":
                     if d?.cancelledBy == nil || d?.cancelledBy == "phone" {
-                        BodyText(d?.what == "unseal_all" ? Texts.cancelledHere : "Cancelled. Nothing happened.")
+                        BodyText(Texts.delayCancelledHere(d?.what))
                     } else {
                         BodyText(Texts.cancelledFrom(d!.cancelledBy.flatMap { e.machine($0) }.map(e.displayName) ?? "a computer"))
                     }
                 case "released", "finished":
-                    BodyText(d?.what == "unseal_all" ? "The hour is over. The computer goes ahead." : "The hour is over.")
+                    BodyText(Texts.delayOver(d?.what))
                 default:
-                    BodyText("This waited too long. Start again.")
+                    BodyText(Texts.delayGone(d?.what))
                 }
             } bottom: {
                 if d?.state == "waiting" {
@@ -298,13 +298,7 @@ struct DelayedView: View {
     var body: some View {
         let e = model.engine!
         let d = e.local.delayed.first { $0.id == id }
-        let title: String = switch d?.what {
-        case "words": "Showing your words"
-        case "delete": "Deleting your relay data"
-        case "leave": "Leaving sealctl"
-        default: Texts.leaving(d?.machine.flatMap { e.machine($0) }.map(e.displayName) ?? "this computer")
-        }
-        DelayView(id: id, title: title)
+        DelayView(id: id, title: Texts.delayScreenTitle(d?.what, name: d?.machine.flatMap { e.machine($0) }.map(e.displayName)))
     }
 }
 

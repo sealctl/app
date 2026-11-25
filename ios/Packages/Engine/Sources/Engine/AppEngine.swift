@@ -49,6 +49,9 @@ public final class AppEngine {
     @ObservationIgnored var assemblers: [String: PlanAssembler] = [:]
     /// Cancels sent again from the relay's list, and what the relay answered (SPEC.md 11.23).
     @ObservationIgnored var cancelResends = CancelResends()
+    /// Delayed ids this install is registering with the relay: the relay's list may show one
+    /// before it is recorded here, and it is not another install's (11.23).
+    @ObservationIgnored var startingDelayed: Set<String> = []
     @ObservationIgnored let approvals = SerialQueue()
     @ObservationIgnored var socket: PhoneSocket?
     @ObservationIgnored var uploadTask: Task<Void, Never>?
@@ -140,7 +143,7 @@ public final class AppEngine {
         guard phase == .ready || { if case .onboarding = phase { return true }; return false }() else { return }
         files.writeSnapshot(ExtensionSnapshot(state: state, local: local, currentPlace: currentPlace,
                                               placesOn: places?.hasForeground ?? false, relay: config.relayURL,
-                                              clock: db.relayClock()))
+                                              clock: db.relayClock(), starting: startingDelayed))
     }
 
     public var liveMachines: [Machine] { state.machines.filter { !$0.deleted } }

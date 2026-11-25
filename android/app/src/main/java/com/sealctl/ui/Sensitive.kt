@@ -293,12 +293,12 @@ fun DelayView(id: String, title: String) {
         when (d?.state) {
             "waiting" -> {
                 Text(Texts.startsAt(d.releaseAt.toLong(), now), fontSize = 20.sp, color = Sealctl.colors.waiting, fontWeight = FontWeight.SemiBold)
-                Body(Texts.DELAY_BODY)
+                Body(Texts.delayWaiting(d.what, d.releaseAt.toLong()))
             }
-            "cancelled" -> Body(if (d.cancelledBy == null || d.cancelledBy == "phone") Texts.CANCELLED_HERE
+            "cancelled" -> Body(if (d.cancelledBy == null || d.cancelledBy == "phone") Texts.delayCancelledHere(d.what)
                 else Texts.cancelledFrom(engine.machine(d.cancelledBy!!)?.let { engine.displayName(it) } ?: "a computer"))
-            "released", "finished" -> Body("The hour is over. The computer goes ahead.")
-            else -> Body("This waited too long. Start again.")
+            "released", "finished" -> Body(Texts.delayOver(d.what))
+            else -> Body(Texts.delayGone(d?.what))
         }
     }
 }
@@ -307,13 +307,7 @@ fun DelayView(id: String, title: String) {
 fun DelayedScreen(id: String) {
     val engine = Graph.engine
     val d = engine.local.collectAsState().value.delayed.firstOrNull { it.id == id }
-    val title = when (d?.what) {
-        "words" -> "Showing your words"
-        "delete" -> "Deleting your relay data"
-        "leave" -> "Leaving sealctl"
-        else -> Texts.leaving(d?.machine?.let { k -> engine.machine(k)?.let { engine.displayName(it) } } ?: "this computer")
-    }
-    DelayView(id, title)
+    DelayView(id, Texts.delayScreenTitle(d?.what, d?.machine?.let { k -> engine.machine(k)?.let { engine.displayName(it) } }))
 }
 
 /** The hand-back report (SPEC.md 11.23 Report). */

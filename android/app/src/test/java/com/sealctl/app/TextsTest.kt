@@ -48,4 +48,33 @@ class TextsTest {
         assertEquals("aider", Texts.agentName("aider"))
         assertEquals("Ready: open sealctl to finish showing your words.", Texts.ready("words"))
     }
+
+    @Test
+    fun delayedActionsByKind() {
+        val at = 7_201_000L
+        assertEquals("Showing your words", Texts.delayScreenTitle("words", null))
+        assertEquals("Deleting your relay data", Texts.delayScreenTitle("delete", null))
+        assertEquals("Leaving sealctl", Texts.delayScreenTitle("leave", null))
+        assertEquals("Leaving sealctl on dev@mbp.example.com", Texts.delayScreenTitle("unseal_all", "dev@mbp.example.com"))
+        assertEquals("Started on another of your devices", Texts.delayScreenTitle("unknown", null))
+        assertEquals(
+            "Showing your words, deleting your relay data or leaving sealctl was started on another phone or tablet " +
+                "with your words. It goes ahead at ${Texts.time(at)}. Not you? Cancel it.",
+            Texts.delayWaiting("unknown", at),
+        )
+        assertEquals(Texts.DELAY_BODY, Texts.delayWaiting("words", at))
+        assertEquals("A protected action started on another of your devices goes ahead at ${Texts.time(at)}.", Texts.delayedAt("unknown", "This phone", at))
+        assertEquals(
+            "A protected action started on another of your devices" to "It goes ahead at ${Texts.time(at)}. Open sealctl to see it or cancel it.",
+            Texts.delayedNote("unknown", at),
+        )
+        assertEquals(Texts.DELAYED_TITLE to Texts.DELAYED_BODY, Texts.delayedNote("words", at))
+        assertEquals(Texts.DELAYED_TITLE to Texts.DELAYED_BODY, Texts.delayedNote(null, at))
+        assertEquals("Cancelled. Nothing was handed back.", Texts.delayCancelledHere("unseal_all"))
+        assertEquals("Cancelled. Nothing happened.", Texts.delayCancelledHere("unknown"))
+        assertEquals("The hour is over. The computer goes ahead.", Texts.delayOver("unseal_all"))
+        assertEquals("The wait is over. The phone or tablet that started it can go ahead.", Texts.delayOver("unknown"))
+        assertEquals("This waited too long. Start again.", Texts.delayGone("words"))
+        assertTrue(Texts.delayGone("unknown").startsWith("This is no longer waiting"))
+    }
 }

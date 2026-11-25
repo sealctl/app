@@ -529,7 +529,7 @@ struct PhoneAction<Intro: View>: View {
             } else if let id = delayId ?? pending.flatMap({ Int64($0.releaseAt) > now ? $0.id : nil }),
                       let d = e.local.delayed.first(where: { $0.id == id }),
                       (d.state == "waiting" && Int64(d.releaseAt) > now) || (d.state == "cancelled" && delayId == id) {
-                DelayView(id: id, title: what == "words" ? "Showing your words" : what == "delete" ? "Deleting your relay data" : "Leaving sealctl")
+                DelayView(id: id, title: Texts.delayScreenTitle(what, name: nil))
                     .onAppear { if d.state == "waiting" { delayId = id } }
                     .onChange(of: d.state) { _, st in if st == "waiting" { delayId = id } }
             } else {

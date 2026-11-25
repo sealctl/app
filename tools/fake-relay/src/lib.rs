@@ -3,6 +3,10 @@
 //! It implements the routes of the real relay, including the planned ones (push devices,
 //! machine channel, delayed approvals, deleting a phone), checks every signature with
 //! `sealctl-core`, and adds unsigned test controls under `/test/` for loopback callers only.
+//!
+//! `/test/hold` holds back the answer to a call (by method and path end) after it has taken
+//! effect, until `/test/release`; `/test/held` waits until such a call is waiting. Tests use it
+//! to order "the relay has the record" before "the app has its answer", without a sleep.
 
 use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, SocketAddr};
@@ -23,7 +27,7 @@ use sealctl_core::pairing::verify_move_proof;
 use sealctl_core::relay_auth::{verify_relay_headers, RelayHeaders};
 use sealctl_core::CoreError;
 use serde_json::{json, Map, Value};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 /// A log line on stderr, stamped with UTC time to the millisecond, so a CI log lines up with
 /// the UI tests' xcresult timeline. Ids and paths only: never a sealed body.
@@ -165,6 +169,16 @@ struct Fail {
     extra: Map<String, Value>,
 }
 
+/// Answers held back by `/test/hold` until `/test/release`.
+struct Hold {
+    method: String,
+    /// The end of the path: `/delayed` holds `POST /v1/phones/{phone}/delayed` only.
+    path: String,
+    open: watch::Sender<bool>,
+    /// Calls waiting on it so far.
+    held: watch::Sender<u32>,
+}
+
 #[derive(Default)]
 struct Relay {
     phones: HashMap<String, Phone>,
@@ -172,6 +186,7 @@ struct Relay {
     offset_secs: i64,
     near: Option<bool>,
     fails: Vec<Fail>,
+    holds: Vec<Hold>,
     replies: Vec<Value>,
     pushes: Vec<Value>,
     next_conn: u64,
@@ -578,8 +593,22 @@ async fn handle(shared: Shared, req: Request<Body>) -> Response {
         return upgrade_socket(shared, ws, phone, signer, route, peer);
     }
 
-    let mut r = shared.lock().unwrap();
-    dispatch(&mut r, route, &phone, &signer, input, peer)
+    let (res, gate) = {
+        let mut r = shared.lock().unwrap();
+        let res = dispatch(&mut r, route, &phone, &signer, input, peer);
+        let gate = r
+            .holds
+            .iter()
+            .find(|h| h.method == method.as_str() && path.ends_with(&h.path))
+            .map(|h| (h.open.subscribe(), h.held.clone()));
+        (res, gate)
+    };
+    // Held by /test/hold: the call has taken effect, its answer waits for /test/release.
+    if let Some((mut open, held)) = gate {
+        held.send_modify(|n| *n += 1);
+        let _ = open.wait_for(|o| *o).await;
+    }
+    res
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -1529,8 +1558,57 @@ async fn test_route(shared: Shared, req: Request<Body>) -> Response {
         .await
         .unwrap_or_default();
     let input: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    let path_of = |input: &Value| {
+        input
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    if (method.as_str(), path.as_str()) == ("POST", "/test/held") {
+        // Waits up to a second for a call held on `path`; answers how many are waiting.
+        let want = path_of(&input);
+        let Some(mut held) = shared
+            .lock()
+            .unwrap()
+            .holds
+            .iter()
+            .find(|h| h.path == want)
+            .map(|h| h.held.subscribe())
+        else {
+            return fail(404, "no_hold");
+        };
+        let _ = tokio::time::timeout(Duration::from_secs(1), held.wait_for(|n| *n > 0)).await;
+        let n = *held.borrow();
+        return ok(json!({"held": n}));
+    }
     let mut r = shared.lock().unwrap();
     match (method.as_str(), path.as_str()) {
+        ("POST", "/test/hold") => {
+            let method = input
+                .get("method")
+                .and_then(Value::as_str)
+                .unwrap_or("POST")
+                .to_owned();
+            r.holds.push(Hold {
+                method,
+                path: path_of(&input),
+                open: watch::channel(false).0,
+                held: watch::channel(0).0,
+            });
+            ok(json!({"ok": true}))
+        }
+        ("POST", "/test/release") => {
+            let want = path_of(&input);
+            r.holds.retain(|h| {
+                let keep = h.path != want;
+                if !keep {
+                    h.open.send_replace(true);
+                }
+                keep
+            });
+            ok(json!({"ok": true}))
+        }
         ("POST", "/test/near") => {
             r.near = input.get("near").and_then(Value::as_bool);
             ok(json!({"near": r.near}))
@@ -1571,6 +1649,9 @@ async fn test_route(shared: Shared, req: Request<Body>) -> Response {
             ok(json!({"phoneSockets": n}))
         }
         ("POST", "/test/reset") => {
+            for h in &r.holds {
+                h.open.send_replace(true);
+            }
             for p in r.phones.values() {
                 for w in p.waits.values() {
                     close_with(&w.tx, None, 1000);

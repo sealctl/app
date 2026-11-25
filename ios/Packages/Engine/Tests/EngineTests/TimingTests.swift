@@ -622,6 +622,72 @@ extension TimingTests {
         #expect(out?.categoryIdentifier.hasPrefix("REQUEST_") != true)
         r.process.terminate()
     }
+
+    /// Showing the words started on another install with the same words: the relay's record
+    /// carries no kind, so this install names it as started on another of your devices, on its
+    /// screen and in the push, never as leaving a computer. Its own action's push is left as
+    /// the relay sent it (SPEC.md 10.1 step 6, 11.23).
+    @Test func phoneOnlyDelayFromAnotherInstallIsNamedAsSuch() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, _, _) = try await paired(relay)
+        let mine = try #require(try await engine.startPhoneAction("words"))
+        // The other install has the same phone keys; nothing it does reaches this one's records.
+        let other = try await engine.relay.addDelayed(id: randomId(), delay: 3600)
+        #expect(await engine.refreshDelayed())
+        let d = try #require(engine.local.delayed.first { $0.id == other.id })
+        #expect(d.what == Texts.otherDevice)
+        #expect(Texts.delayScreenTitle(d.what, name: nil) == "Started on another of your devices")
+        #expect(engine.local.delayed.first { $0.id == mine.id }?.what == "words")
+
+        let handler = ExtensionHandler(vault: engine.vault, files: engine.files)
+        let out = await handler.handle(delayedPush(other.id))
+        #expect(out?.title == "A protected action started on another of your devices")
+        #expect(out?.body == "It goes ahead at \(Texts.time(other.releaseAt)). Open sealctl to see it or cancel it.")
+        #expect(out?.userInfo["screen"] as? String == "delayed:\(other.id)")
+        let own = await handler.handle(delayedPush(mine.id))
+        #expect(own == nil)
+        // Cancelled before the push is handled: left as the relay sent it.
+        #expect(await engine.cancelDelayed(other.id))
+        let cancelled = await handler.handle(delayedPush(other.id))
+        #expect(cancelled == nil)
+    }
+
+    /// This install starts showing the words: the relay has the record (and sends its `delayed`
+    /// push) before its answer reaches the app. Neither a refresh of the relay's list then nor
+    /// the extension's handling of that push names it as another device's (SPEC.md 10.1, 11.23).
+    @Test func aDelayThisInstallIsStartingIsNotAnotherDevices() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, _, _) = try await paired(relay)
+        try await relay.control("/test/hold", #"{"method": "POST", "path": "/delayed"}"#)
+        let start = Task { try await engine.startPhoneAction("words") }
+        #expect(try await relay.untilHeld("/delayed"))
+        let id = try #require(try await engine.relay.listDelayed().first?.id)
+
+        // A push, the socket or a screen refreshes the list while the answer is held.
+        #expect(await engine.refreshDelayed())
+        #expect(!engine.local.delayed.contains { $0.what == Texts.otherDevice })
+        // The relay's push for it reaches the extension now: delivered as the relay sent it.
+        let handler = ExtensionHandler(vault: engine.vault, files: engine.files)
+        let out = await handler.handle(delayedPush(id))
+        #expect(out == nil, "\(out?.title ?? "")")
+
+        try await relay.control("/test/release", #"{"path": "/delayed"}"#)
+        let mine = try #require(try await start.value)
+        #expect(mine.id == id)
+        #expect(engine.local.delayed.map(\.what) == ["words"])
+        #expect(await handler.handle(delayedPush(id)) == nil)
+    }
+}
+
+/// A relay `delayed` push as it reaches the extension (SPEC.md 10.1).
+private func delayedPush(_ id: String) -> UNMutableNotificationContent {
+    let c = UNMutableNotificationContent()
+    c.title = Texts.delayedTitle
+    c.body = Texts.delayedBody
+    c.userInfo = ["type": "delayed", "id": id]
+    return c
 }
 #endif
 

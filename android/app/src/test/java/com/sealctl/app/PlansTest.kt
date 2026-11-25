@@ -9,8 +9,11 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import com.sealctl.relay.RateLimitedException
+import com.sealctl.relay.RelayDelayed
 import com.sealctl.relay.RelayException
 import java.io.IOException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 
@@ -150,5 +153,79 @@ class PlansTest {
         Plans.resendCancel("d1", resends) { sent++ }
         assertEquals(4, sent)
         assertEquals(15 * 60_000L, CancelResends.backoffMs(20))
+    }
+
+    @Test
+    fun aPhoneOnlyRecordFromAnotherInstallIsNamedAsSuch() {
+        // Another install with the same words started showing the words: the relay's record
+        // has no machine and no kind (SPEC.md 11.23).
+        val other = Plans.fromRelay(RelayDelayed("d1", null, 1_000, 7_201_000, 8_101_000, "waiting"))
+        assertEquals(Texts.OTHER_DEVICE, other.what)
+        assertNull(other.machine)
+        assertEquals("Started on another of your devices", Texts.delayScreenTitle(other.what, null))
+        assertEquals(Texts.otherDeviceBody(7_201_000), Texts.delayWaiting(other.what, 7_201_000))
+        assertEquals("A protected action started on another of your devices", Texts.delayedNote(other.what, 7_201_000).first)
+        assertTrue(Texts.delayedAt(other.what, "This phone", 7_201_000).startsWith("A protected action started on another of your devices"))
+
+        // Another install approved `unseal --all` for a machine: still that machine's leaving.
+        val machine = Plans.fromRelay(RelayDelayed("d2", "m1", 1_000, 7_201_000, 8_101_000, "waiting"))
+        assertEquals("unseal_all", machine.what)
+        assertEquals("Leaving sealctl on dev@mbp.example.com", Texts.delayScreenTitle(machine.what, "dev@mbp.example.com"))
+        assertEquals("Leaving sealctl on this computer", Texts.delayScreenTitle(machine.what, null))
+        assertEquals(Texts.DELAY_BODY, Texts.delayWaiting(machine.what, 7_201_000))
+        assertEquals(Texts.DELAYED_TITLE to Texts.DELAYED_BODY, Texts.delayedNote(machine.what, 7_201_000))
+        assertEquals(Texts.handsBackAt("dev@mbp.example.com", 7_201_000), Texts.delayedAt(machine.what, "dev@mbp.example.com", 7_201_000))
+    }
+
+    /** This install's records, written the way `PutDelayed` writes them: by id, replacing. */
+    private class Records {
+        val list = mutableListOf<DelayedAction>()
+        fun put(d: DelayedAction) { list.removeAll { it.id == d.id }; list += d }
+        fun stored(id: String) = list.any { it.id == id }
+    }
+
+    private val onRelay = RelayDelayed("d1", null, 1_000, 7_201_000, 10_801_000, "waiting")
+
+    private fun words(d: RelayDelayed) =
+        DelayedAction(d.id, "words", null, d.releaseAt.toULong(), d.expires.toULong(), "waiting", null)
+
+    @Test
+    fun aDelayThisInstallIsStartingIsNotAnotherDevices() = runTest {
+        // The relay has the record; its answer has not reached this install (SPEC.md 11.23).
+        val starting = StartingDelayed()
+        val records = Records()
+        val held = CompletableDeferred<Unit>()
+        val answer = CompletableDeferred<RelayDelayed>()
+        val start = async {
+            starting.start("d1", add = { held.complete(Unit); answer.await() }) { d -> words(d).also(records::put) }
+        }
+        held.await()
+        // A push, the socket or a screen refreshes the relay's list now.
+        starting.fromRelay(onRelay, records::stored, records::put)
+        assertEquals(emptyList<String>(), records.list.map { it.what })
+        answer.complete(onRelay)
+        start.await()
+        assertEquals(listOf("words"), records.list.map { it.what })
+    }
+
+    @Test
+    fun aRefreshThatFoundNoRecordBeforeTheStartStoredItKeepsIt() = runTest {
+        // The refresh read this install's records (none for d1), then the start stored "words"
+        // and finished, then the refresh writes what it found on the relay's list.
+        val starting = StartingDelayed()
+        val records = Records()
+        starting.start("d1", add = { onRelay }) { d -> words(d).also(records::put) }
+        starting.fromRelay(onRelay, records::stored, records::put)
+        assertEquals(listOf("words"), records.list.map { it.what })
+    }
+
+    @Test
+    fun aRecordNoInstallHereIsStartingIsAnotherDevices() = runTest {
+        val starting = StartingDelayed()
+        val records = Records()
+        // A start that failed holds its id no longer.
+        runCatching { starting.start("d1", add = { throw IOException("offline") }) { d: RelayDelayed -> words(d) } }
+        starting.fromRelay(onRelay, records::stored, records::put)
+        assertEquals(listOf(Texts.OTHER_DEVICE), records.list.map { it.what })
     }
 }

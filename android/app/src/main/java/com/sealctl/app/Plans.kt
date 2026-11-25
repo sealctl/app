@@ -3,6 +3,7 @@ package com.sealctl.app
 import com.sealctl.core.app.DelayedAction
 import com.sealctl.core.app.PlanApprovalRecord
 import com.sealctl.relay.RateLimitedException
+import com.sealctl.relay.RelayDelayed
 import com.sealctl.relay.RelayException
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -12,6 +13,15 @@ import kotlin.coroutines.cancellation.CancellationException
  * phone learnt of the cancel (here, the socket, a push or the relay list).
  */
 internal object Plans {
+    /**
+     * A record on the relay's list this install does not know: approved on another install for
+     * a machine (`unseal_all`), or a phone-only action another install started, whose record
+     * carries no kind ([Texts.OTHER_DEVICE], SPEC.md 11.23).
+     */
+    fun fromRelay(d: RelayDelayed): DelayedAction =
+        DelayedAction(d.id, if (d.machine != null) "unseal_all" else Texts.OTHER_DEVICE, d.machine,
+            d.releaseAt.toULong(), d.expires.toULong(), d.state, d.by)
+
     /** Plans of [machine] that may still hand out keys. */
     fun live(plans: List<PlanApprovalRecord>, delayed: List<DelayedAction>, machine: String): List<PlanApprovalRecord> {
         val cancelled = delayed.filter { it.state == "cancelled" }.map { it.id }.toSet()
@@ -130,5 +140,35 @@ internal class CancelResends(private val now: () -> Long = System::currentTimeMi
 
         /** The wait after [failures] tries with no usable answer: 15 s doubling, at most 15 minutes. */
         fun backoffMs(failures: Int): Long = minOf(15_000L shl (failures - 1).coerceIn(0, 6), 15 * 60_000L)
+    }
+}
+
+/**
+ * Delayed ids this install is registering with the relay (SPEC.md 11.23). The relay's list can
+ * show one before its answer reaches the app; it is this install's, not another's. The start's
+ * write and a refresh's check take the same lock, and the refresh looks for a stored record
+ * again under it, so a refresh that found none before the start stored its own never writes
+ * it back as another install's.
+ */
+internal class StartingDelayed {
+    private val ids = HashSet<String>()
+
+    /** Holds [id] while [add] registers it with the relay, then [record]s what the relay answered. */
+    suspend fun <T, R> start(id: String, add: suspend () -> T, record: (T) -> R): R {
+        synchronized(this) { ids += id }
+        try {
+            val answer = add()
+            return synchronized(this) { record(answer) }
+        } finally {
+            synchronized(this) { ids -= id }
+        }
+    }
+
+    /**
+     * [put]s a record on the relay's list as another install's ([Plans.fromRelay]), unless it is
+     * being started here or [stored] finds it stored meanwhile.
+     */
+    fun fromRelay(d: RelayDelayed, stored: (String) -> Boolean, put: (DelayedAction) -> Unit) {
+        synchronized(this) { if (d.id !in ids && !stored(d.id)) put(Plans.fromRelay(d)) }
     }
 }

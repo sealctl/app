@@ -437,6 +437,12 @@ async fn delayed_reply_and_phone_action() {
         .await
         .unwrap();
     assert_eq!(s, 201, "{res}");
+    // kept an hour after `releaseAt` for the person to come back and finish it
+    assert_eq!(
+        res["expires"].as_u64(),
+        res["releaseAt"].as_u64().map(|r| r + 3_600_000),
+        "{res}"
+    );
     let finish = format!("/v1/phones/{p}/delayed/{id}/finish");
     let (s, res) = relay
         .call(&phone.signer(), "POST", &finish, None)

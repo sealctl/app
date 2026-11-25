@@ -97,7 +97,8 @@ public struct RelayDevice: Sendable, Equatable {
 
 /// The Relay API client (SPEC.md 8): every call signed by the phone key with the core's
 /// `relay_headers`, a clock offset corrected from `401 clock_skew`, the rate-limit window,
-/// an ephemeral `URLSession` (no cache, no cookies) and a 10-second timeout.
+/// an ephemeral `URLSession` (no cache, no cookies) and a 10-second timeout. The phone socket
+/// has a session of its own (`webSocket`).
 public actor RelayClient {
     public nonisolated let baseURL: String
     public nonisolated let host: String
@@ -108,13 +109,20 @@ public actor RelayClient {
     /// A signed call the relay accepted, with the `Sealctl-Time` it carried, in ms (SPEC.md 8.1).
     private let onAccepted: @Sendable (Int64) -> Void
     private let session: URLSession
+    /// The phone socket's session: as private as `session`, without its resource timeout. A
+    /// WebSocket task counts as completed once that timeout passes, while its connection stays
+    /// open and keeps delivering; `cancel` then does nothing. So a socket older than 30 seconds
+    /// was closed neither when the app left the foreground nor when the ping check found it
+    /// dead (SPEC.md 8.3). The foreground and the ping check bound the socket's life.
+    private let socketSession: URLSession
     public private(set) var clockOffsetSecs: Int64 = 0
     public private(set) var rateLimitedUntil: Int64 = 0
 
     public init(baseURL: String, keys: @escaping @Sendable () async -> PhoneKeys?,
                 now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) },
                 onRelayTime: @escaping @Sendable (Int64) -> Void = { _ in },
-                onAccepted: @escaping @Sendable (Int64) -> Void = { _ in }) {
+                onAccepted: @escaping @Sendable (Int64) -> Void = { _ in },
+                callResourceTimeout: TimeInterval = 30) {
         var base = baseURL
         while base.hasSuffix("/") { base.removeLast() }
         self.baseURL = base
@@ -123,14 +131,19 @@ public actor RelayClient {
         self.now = now
         self.onRelayTime = onRelayTime
         self.onAccepted = onAccepted
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 10
-        config.timeoutIntervalForResource = 30
-        config.requestCachePolicy = .reloadIgnoringLocalCacheData
-        config.urlCache = nil
-        config.httpCookieStorage = nil
-        config.httpShouldSetCookies = false
-        self.session = URLSession(configuration: config)
+        func configuration() -> URLSessionConfiguration {
+            let config = URLSessionConfiguration.ephemeral
+            config.timeoutIntervalForRequest = 10
+            config.requestCachePolicy = .reloadIgnoringLocalCacheData
+            config.urlCache = nil
+            config.httpCookieStorage = nil
+            config.httpShouldSetCookies = false
+            return config
+        }
+        let calls = configuration()
+        calls.timeoutIntervalForResource = callResourceTimeout
+        self.session = URLSession(configuration: calls)
+        self.socketSession = URLSession(configuration: configuration())
     }
 
     private func phoneKeys() async throws -> PhoneKeys {
@@ -365,6 +378,6 @@ public actor RelayClient {
     }
 
     public nonisolated func webSocket(_ request: URLRequest) -> URLSessionWebSocketTask {
-        session.webSocketTask(with: request)
+        socketSession.webSocketTask(with: request)
     }
 }

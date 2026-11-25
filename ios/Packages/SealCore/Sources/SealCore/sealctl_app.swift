@@ -714,6 +714,14 @@ public protocol StoreProtocol: AnyObject, Sendable {
     func closeRequest(id: String, outcome: String) throws 
     
     /**
+     * The daily counts from `from_day` to `to_day` (`YYYY-MM-DD`, both included), oldest
+     * first; days with nothing counted are left out (SPEC.md 11.12, the heatmap).
+     * `utc_offset_secs` is the phone's UTC offset now: it dates the one backfill from the
+     * usage rows of an older version, when that has not run yet.
+     */
+    func dailyCounts(fromDay: String, toDay: String, utcOffsetSecs: Int32) throws  -> [DailyCount]
+    
+    /**
      * Erases everything (Erase sealctl from this phone).
      */
     func erase() throws 
@@ -742,9 +750,12 @@ public protocol StoreProtocol: AnyObject, Sendable {
     func placeSettledNow(place: TrustedPlace) throws  -> Bool
     
     /**
-     * Applies the lifetimes (SPEC.md 5.4 `prune`) and trims the usage log.
+     * Applies the lifetimes (SPEC.md 5.4 `prune`), trims the usage log to 90 days and the
+     * daily counts to [`DAILY_KEEP_DAYS`]. `utc_offset_secs` is the phone's UTC offset now:
+     * the day the counts are kept from, and the date of the usage rows an older version
+     * stored, counted once before the first trim removes them.
      */
-    func prune(now: UInt64) throws  -> State
+    func prune(now: UInt64, utcOffsetSecs: Int32) throws  -> State
     
     /**
      * The relay accepted a call signed with `signed_ms` (the `Sealctl-Time` sent, in ms):
@@ -790,6 +801,12 @@ public protocol StoreProtocol: AnyObject, Sendable {
      * The usage log, newest first, optionally for one machine or key.
      */
     func usage(machine: String?, key: String?, limit: UInt32) throws  -> [UsageEntry]
+    
+    /**
+     * The usage log from `since` (Unix ms) on, newest first, optionally for one machine: the
+     * days the Activity screen lists (SPEC.md 11.12).
+     */
+    func usageSince(machine: String?, since: UInt64) throws  -> [UsageEntry]
     
 }
 /**
@@ -1006,6 +1023,24 @@ open func closeRequest(id: String, outcome: String)throws   {try rustCallWithErr
 }
     
     /**
+     * The daily counts from `from_day` to `to_day` (`YYYY-MM-DD`, both included), oldest
+     * first; days with nothing counted are left out (SPEC.md 11.12, the heatmap).
+     * `utc_offset_secs` is the phone's UTC offset now: it dates the one backfill from the
+     * usage rows of an older version, when that has not run yet.
+     */
+open func dailyCounts(fromDay: String, toDay: String, utcOffsetSecs: Int32)throws  -> [DailyCount]  {
+    return try  FfiConverterSequenceTypeDailyCount.lift(try rustCallWithError(FfiConverterTypeAppError_lift) {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_method_store_daily_counts(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(fromDay),
+        FfiConverterString.lower(toDay),
+        FfiConverterInt32.lower(utcOffsetSecs),uniffiCallStatus
+    )
+})
+}
+    
+    /**
      * Erases everything (Erase sealctl from this phone).
      */
 open func erase()throws   {try rustCallWithError(FfiConverterTypeAppError_lift) {
@@ -1072,14 +1107,18 @@ open func placeSettledNow(place: TrustedPlace)throws  -> Bool  {
 }
     
     /**
-     * Applies the lifetimes (SPEC.md 5.4 `prune`) and trims the usage log.
+     * Applies the lifetimes (SPEC.md 5.4 `prune`), trims the usage log to 90 days and the
+     * daily counts to [`DAILY_KEEP_DAYS`]. `utc_offset_secs` is the phone's UTC offset now:
+     * the day the counts are kept from, and the date of the usage rows an older version
+     * stored, counted once before the first trim removes them.
      */
-open func prune(now: UInt64)throws  -> State  {
+open func prune(now: UInt64, utcOffsetSecs: Int32)throws  -> State  {
     return try  FfiConverterTypeState_lift(try rustCallWithError(FfiConverterTypeAppError_lift) {
         uniffiCallStatus in
     uniffi_sealctl_app_fn_method_store_prune(
             self.uniffiCloneHandle(),
-        FfiConverterUInt64.lower(now),uniffiCallStatus
+        FfiConverterUInt64.lower(now),
+        FfiConverterInt32.lower(utcOffsetSecs),uniffiCallStatus
     )
 })
 }
@@ -1193,6 +1232,21 @@ open func usage(machine: String?, key: String?, limit: UInt32)throws  -> [UsageE
 })
 }
     
+    /**
+     * The usage log from `since` (Unix ms) on, newest first, optionally for one machine: the
+     * days the Activity screen lists (SPEC.md 11.12).
+     */
+open func usageSince(machine: String?, since: UInt64)throws  -> [UsageEntry]  {
+    return try  FfiConverterSequenceTypeUsageEntry.lift(try rustCallWithError(FfiConverterTypeAppError_lift) {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_method_store_usage_since(
+            self.uniffiCloneHandle(),
+        FfiConverterOptionString.lower(machine),
+        FfiConverterUInt64.lower(since),uniffiCallStatus
+    )
+})
+}
+    
 
     
 }
@@ -1239,6 +1293,75 @@ public func FfiConverterTypeStore_lower(_ value: Store) -> UInt64 {
 }
 
 
+
+
+/**
+ * The figures of a day's header in the Activity log.
+ */
+public struct ActivityCounts: Equatable, Hashable {
+    /**
+     * Entries that handed out keys or were used in a session ("37 uses").
+     */
+    public var uses: UInt32
+    /**
+     * Entries denied ("2 declined").
+     */
+    public var declined: UInt32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Entries that handed out keys or were used in a session ("37 uses").
+         */uses: UInt32, 
+        /**
+         * Entries denied ("2 declined").
+         */declined: UInt32) {
+        self.uses = uses
+        self.declined = declined
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ActivityCounts: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeActivityCounts: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ActivityCounts {
+        return
+            try ActivityCounts(
+                uses: FfiConverterUInt32.read(from: &buf), 
+                declined: FfiConverterUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ActivityCounts, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.uses, into: &buf)
+        FfiConverterUInt32.write(value.declined, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeActivityCounts_lift(_ buf: RustBuffer) throws -> ActivityCounts {
+    return try FfiConverterTypeActivityCounts.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeActivityCounts_lower(_ value: ActivityCounts) -> RustBuffer {
+    return FfiConverterTypeActivityCounts.lower(value)
+}
 
 
 /**
@@ -1463,6 +1586,86 @@ public func FfiConverterTypeClockNow_lift(_ buf: RustBuffer) throws -> ClockNow 
 #endif
 public func FfiConverterTypeClockNow_lower(_ value: ClockNow) -> RustBuffer {
     return FfiConverterTypeClockNow.lower(value)
+}
+
+
+/**
+ * Uses and declines counted on one local day (SPEC.md 6.4, 11.12): what the Activity heatmap
+ * shows for the last year, after the usage rows behind it are gone.
+ */
+public struct DailyCount: Equatable, Hashable {
+    /**
+     * `YYYY-MM-DD` by the phone's UTC offset when the use counted.
+     */
+    public var day: String
+    /**
+     * Keys used, counted as the month's "keys used".
+     */
+    public var used: UInt64
+    /**
+     * Deny answers, counted as the month's "requests declined".
+     */
+    public var declined: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * `YYYY-MM-DD` by the phone's UTC offset when the use counted.
+         */day: String, 
+        /**
+         * Keys used, counted as the month's "keys used".
+         */used: UInt64, 
+        /**
+         * Deny answers, counted as the month's "requests declined".
+         */declined: UInt64) {
+        self.day = day
+        self.used = used
+        self.declined = declined
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension DailyCount: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDailyCount: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DailyCount {
+        return
+            try DailyCount(
+                day: FfiConverterString.read(from: &buf), 
+                used: FfiConverterUInt64.read(from: &buf), 
+                declined: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: DailyCount, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.day, into: &buf)
+        FfiConverterUInt64.write(value.used, into: &buf)
+        FfiConverterUInt64.write(value.declined, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDailyCount_lift(_ buf: RustBuffer) throws -> DailyCount {
+    return try FfiConverterTypeDailyCount.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDailyCount_lower(_ value: DailyCount) -> RustBuffer {
+    return FfiConverterTypeDailyCount.lower(value)
 }
 
 
@@ -6499,6 +6702,31 @@ fileprivate struct FfiConverterSequenceUInt32: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceUInt64: FfiConverterRustBuffer {
+    typealias SwiftType = [UInt64]
+
+    public static func write(_ value: [UInt64], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterUInt64.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [UInt64] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [UInt64]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterUInt64.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
     typealias SwiftType = [String]
 
@@ -6516,6 +6744,31 @@ fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterString.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeDailyCount: FfiConverterRustBuffer {
+    typealias SwiftType = [DailyCount]
+
+    public static func write(_ value: [DailyCount], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeDailyCount.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [DailyCount] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [DailyCount]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeDailyCount.read(from: &buf))
         }
         return seq
     }
@@ -7056,6 +7309,18 @@ public func appRulesVersion() -> String  {
 })
 }
 /**
+ * The counts a day's header shows for its entries: every entry that was allowed is a use,
+ * `denied` is a decline, `expired` is neither (SPEC.md 11.12).
+ */
+public func activityCounts(entries: [UsageEntry]) -> ActivityCounts  {
+    return try!  FfiConverterTypeActivityCounts_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_func_activity_counts(
+        FfiConverterSequenceTypeUsageEntry.lower(entries),uniffiCallStatus
+    )
+})
+}
+/**
  * The Activity row of `entry`; `machine` is the paired machine it came from, `None` when it
  * is not (or no longer) paired.
  */
@@ -7065,6 +7330,21 @@ public func activityRow(entry: UsageEntry, machine: Machine?) -> ActivityRow  {
     uniffi_sealctl_app_fn_func_activity_row(
         FfiConverterTypeUsageEntry_lower(entry),
         FfiConverterOptionTypeMachine.lower(machine),uniffiCallStatus
+    )
+})
+}
+/**
+ * The heatmap's level of each day's count (SPEC.md 11.12): 0 for nothing, else 1 to 4 by the
+ * quartiles of the days that have a count, as GitHub's contribution graph does: a count up to
+ * the first quartile is 1, up to the median 2, up to the third quartile 3, above it 4. The
+ * quartiles are interpolated between the sorted counts, so the busiest day stands out even
+ * when only a few days have uses.
+ */
+public func heatLevels(counts: [UInt64]) -> [UInt32]  {
+    return try!  FfiConverterSequenceUInt32.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_func_heat_levels(
+        FfiConverterSequenceUInt64.lower(counts),uniffiCallStatus
     )
 })
 }
@@ -7409,7 +7689,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sealctl_app_checksum_func_app_rules_version() != 4703) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sealctl_app_checksum_func_activity_counts() != 37081) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sealctl_app_checksum_func_activity_row() != 46249) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sealctl_app_checksum_func_heat_levels() != 5124) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_func_machine_short_name() != 57194) {
@@ -7514,6 +7800,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sealctl_app_checksum_method_store_close_request() != 56401) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sealctl_app_checksum_method_store_daily_counts() != 41562) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sealctl_app_checksum_method_store_erase() != 22683) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -7529,7 +7818,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sealctl_app_checksum_method_store_place_settled_now() != 56412) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_sealctl_app_checksum_method_store_prune() != 25831) {
+    if (uniffi_sealctl_app_checksum_method_store_prune() != 13406) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_method_store_relay_accepted() != 22391) {
@@ -7554,6 +7843,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_method_store_usage() != 17434) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sealctl_app_checksum_method_store_usage_since() != 8701) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_constructor_store_open() != 12761) {

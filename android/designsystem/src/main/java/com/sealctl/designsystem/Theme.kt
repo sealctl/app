@@ -30,6 +30,11 @@ data class SealctlColors(
     val onAccent: Color,
     val open: Color,
     val waiting: Color,
+    /**
+     * The Activity heatmap (SPEC.md 11.12): no use, then four steps from the soft accent to
+     * the accent, each step clear of the last and the first clear of the card.
+     */
+    val heat: List<Color>,
 )
 
 val LightColors = SealctlColors(
@@ -45,6 +50,7 @@ val LightColors = SealctlColors(
     onAccent = Color(0xFFFFFFFF),
     open = Color(0xFF157F3C),
     waiting = Color(0xFFB45309),
+    heat = listOf(Color(0xFFE3E6EC), Color(0xFFDD969B), Color(0xFFCF7076), Color(0xFFC24951), Color(0xFFB4232C)),
 )
 
 val DarkColors = SealctlColors(
@@ -60,6 +66,7 @@ val DarkColors = SealctlColors(
     onAccent = Color(0xFF12151C),
     open = Color(0xFF4CC47C),
     waiting = Color(0xFFF0A54A),
+    heat = listOf(Color(0xFF242B3A), Color(0xFF893A3F), Color(0xFFB1454B), Color(0xFFD85157), Color(0xFFFF5C63)),
 )
 
 val LocalSealctlColors = staticCompositionLocalOf { LightColors }

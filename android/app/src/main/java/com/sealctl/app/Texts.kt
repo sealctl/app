@@ -1,6 +1,7 @@
 package com.sealctl.app
 
 import com.sealctl.core.RequestKind
+import com.sealctl.core.app.ActivityCounts
 import com.sealctl.core.app.ActivityRow
 import com.sealctl.core.app.ReplyOption
 import com.sealctl.core.app.displayText
@@ -9,6 +10,8 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
+import java.text.NumberFormat
+import java.util.Locale
 
 /**
  * The app's wording, exactly as SPEC.md 11 gives it. Kept in one place so it can move to
@@ -307,6 +310,41 @@ object Texts {
     /** One label for an Activity row, read in order: time, what was used, outcome, details. */
     fun activityLabel(time: String, row: ActivityRow): String =
         (listOf(time, row.subject, row.outcome) + row.details).joinToString(", ")
+
+    /**
+     * A month on its own, as a title ("November", "Listopad"): the standalone form, which
+     * differs from the form inside a date in Polish, Ukrainian, Russian and others ("listopada"),
+     * with its first letter capitalised for the locale.
+     */
+    fun monthName(month: java.time.Month, locale: Locale, style: java.time.format.TextStyle = java.time.format.TextStyle.FULL_STANDALONE): String =
+        month.getDisplayName(style, locale).replaceFirstChar { if (it.isLowerCase()) it.titlecase(locale) else it.toString() }
+
+    /** The summary title of a month `YYYY-MM`. */
+    fun monthTitle(ym: String, locale: Locale): String = monthName(java.time.YearMonth.parse(ym).month, locale)
+
+    /** The month summary's first figure: "312 keys used on 3 machines", "1 key used on 1 machine". */
+    fun keysUsed(keys: Long, machines: Int): String = "${count(keys, "key", "keys")} used on ${count(machines.toLong(), "machine", "machines")}"
+
+    /** The month summary's declines: "4 requests declined", "1 request declined". */
+    fun requestsDeclined(n: Long): String = "${count(n, "request", "requests")} declined"
+
+    /** `n` and the noun in the English singular for one, else the plural. */
+    private fun count(n: Long, one: String, other: String): String = "$n ${if (n == 1L) one else other}"
+
+    /** A day's header figures: "37 uses", "1 use · 2 declined". */
+    fun dayCounts(c: ActivityCounts): String =
+        listOfNotNull(if (c.uses == 1u) "1 use" else "${c.uses} uses", if (c.declined > 0u) "${c.declined} declined" else null).joinToString(" · ")
+
+    /** The heatmap's title: "1,204 key uses in the last year". */
+    fun heatTitle(total: Long, locale: Locale): String =
+        "${NumberFormat.getIntegerInstance(locale).format(total)} key ${if (total == 1L) "use" else "uses"} in the last year"
+
+    /** A heatmap day: "24 Nov 2026: 37 key uses, 2 declined". */
+    fun heatDay(date: LocalDate, used: Long, declined: Long, locale: Locale): String =
+        "${mediumDate(date, locale)}: $used key ${if (used == 1L) "use" else "uses"}" + if (declined > 0) ", $declined declined" else ""
+
+    fun mediumDate(date: LocalDate, locale: Locale): String =
+        DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(locale).format(date)
 
     // ---------- formatting ----------
 

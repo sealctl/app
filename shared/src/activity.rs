@@ -120,6 +120,18 @@ fn subject<'a>(
             None => ("Request".into(), None, false),
         };
     }
+    // An SSH signature a machine reports from its session names the stored key, `ssh/<name>`
+    // (the prefix sealctl keeps SSH keys under, docs/protocol.md), with the command its agent
+    // sends, "ssh signature with <name>": it reads as the same use asked for on the card,
+    // "SSH key <name>", rather than as a secret `<name>` in a project `ssh`.
+    if kind.is_none() {
+        if let Some(name) = key
+            .strip_prefix("ssh/")
+            .filter(|n| !n.is_empty() && command == Some(&*format!("ssh signature with {n}")))
+        {
+            return (format!("SSH key {}", shown(name, MAX_NAME)), None, false);
+        }
+    }
     let verb = command.and_then(|c| words(c).next());
     let kind = kind.or(if entry.outcome == "in_session" || key.contains('/') {
         // a session's uses are always secret names; `project/name` is a secret's name
@@ -162,6 +174,61 @@ fn subject<'a>(
         }
         _ => (shown(key, MAX_NAME), None, false),
     }
+}
+
+/// The figures of a day's header in the Activity log.
+#[derive(uniffi::Record, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ActivityCounts {
+    /// Entries that handed out keys or were used in a session ("37 uses").
+    pub uses: u32,
+    /// Entries denied ("2 declined").
+    pub declined: u32,
+}
+
+/// The counts a day's header shows for its entries: every entry that was allowed is a use,
+/// `denied` is a decline, `expired` is neither (SPEC.md 11.12).
+#[uniffi::export]
+pub fn activity_counts(entries: Vec<UsageEntry>) -> ActivityCounts {
+    let mut c = ActivityCounts::default();
+    for e in &entries {
+        match e.outcome.as_str() {
+            "denied" => c.declined += 1,
+            "expired" => {}
+            _ => c.uses += 1,
+        }
+    }
+    c
+}
+
+/// The heatmap's level of each day's count (SPEC.md 11.12): 0 for nothing, else 1 to 4 by the
+/// quartiles of the days that have a count, as GitHub's contribution graph does: a count up to
+/// the first quartile is 1, up to the median 2, up to the third quartile 3, above it 4. The
+/// quartiles are interpolated between the sorted counts, so the busiest day stands out even
+/// when only a few days have uses.
+#[uniffi::export]
+pub fn heat_levels(counts: Vec<u64>) -> Vec<u32> {
+    let mut used: Vec<u64> = counts.iter().copied().filter(|c| *c > 0).collect();
+    used.sort_unstable();
+    let quartile = |q: f64| -> f64 {
+        let pos = q * (used.len() - 1) as f64;
+        let (lo, hi) = (pos.floor() as usize, pos.ceil() as usize);
+        used[lo] as f64 + (used[hi] as f64 - used[lo] as f64) * (pos - lo as f64)
+    };
+    let cuts = if used.is_empty() {
+        [0.0; 3]
+    } else {
+        [quartile(0.25), quartile(0.5), quartile(0.75)]
+    };
+    counts
+        .iter()
+        .map(|&c| match c as f64 {
+            _ if c == 0 => 0,
+            c if c <= cuts[0] => 1,
+            c if c <= cuts[1] => 2,
+            c if c <= cuts[2] => 3,
+            _ => 4,
+        })
+        .collect()
 }
 
 /// The words of a command without a leading `sealctl`.
@@ -421,6 +488,72 @@ mod tests {
     }
 
     //   seal · seal volume safe 5D1E7B2A-… · dev@Devs-Mac-mini.local · Confirmed
+    // The same SSH signature, reported by the machine from its session (stored key
+    // `ssh/ed25519`, no kind) and asked for on the card (kind `ssh`), reads the same; it once
+    // read "ed25519" with "ssh · ssh signature with ed25519 · …" under it.
+    #[test]
+    fn an_ssh_signature_in_a_session_reads_as_the_ssh_key() {
+        let reported = UsageEntry {
+            command: Some("ssh signature with ed25519".into()),
+            ..entry("ssh/ed25519", "in_session")
+        };
+        let asked = UsageEntry {
+            kind: Some("ssh".into()),
+            command: Some("ssh signature with ed25519".into()),
+            ..entry("ed25519", "one_tap")
+        };
+        let want = ["ssh signature with ed25519", "Devs-Mac-mini"];
+        let r = activity_row(reported, Some(mac_mini()));
+        assert_eq!(r.subject, "SSH key ed25519");
+        assert_eq!(r.details, want);
+        let r = activity_row(asked, Some(mac_mini()));
+        assert_eq!(r.subject, "SSH key ed25519");
+        assert_eq!(r.details, want);
+        // a secret in a project named `ssh`, used by another command, stays a secret
+        let secret = UsageEntry {
+            command: Some("run -- deploy".into()),
+            ..entry("ssh/ed25519", "in_session")
+        };
+        let r = activity_row(secret, Some(mac_mini()));
+        assert_eq!(r.subject, "ed25519");
+        assert_eq!(r.details, ["ssh", "sealctl run -- deploy", "Devs-Mac-mini"]);
+    }
+
+    #[test]
+    fn a_day_counts_uses_and_declines() {
+        let day = vec![
+            entry("A", "one_tap"),
+            entry("B", "in_session"),
+            entry("C", "automatic"),
+            entry("D", "denied"),
+            entry("E", "expired"),
+            entry("F", "confirmed"),
+        ];
+        assert_eq!(
+            activity_counts(day),
+            ActivityCounts {
+                uses: 4,
+                declined: 1
+            }
+        );
+        assert_eq!(activity_counts(Vec::new()), ActivityCounts::default());
+    }
+
+    #[test]
+    fn heat_levels_follow_the_quartiles_of_the_days_with_uses() {
+        assert_eq!(heat_levels(vec![0, 0]), [0, 0]);
+        // quartiles of 1..=8: 2.75, 4.5, 6.25
+        assert_eq!(
+            heat_levels(vec![0, 1, 2, 3, 4, 5, 6, 7, 8]),
+            [0, 1, 1, 2, 2, 3, 3, 4, 4]
+        );
+        // one busy day among quiet ones stands out; equal days share a level
+        assert_eq!(heat_levels(vec![1, 1, 1, 1, 40]), [1, 1, 1, 1, 4]);
+        assert_eq!(heat_levels(vec![5, 0, 5]), [1, 0, 1]);
+        // two days: the busier one is the darkest
+        assert_eq!(heat_levels(vec![1, 40]), [1, 4]);
+    }
+
     #[test]
     fn a_seal_reads_as_the_action() {
         let seal = |kind: Option<&str>| UsageEntry {

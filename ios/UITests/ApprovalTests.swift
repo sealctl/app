@@ -63,7 +63,7 @@ final class ApprovalTests: SealctlTestCase {
         see("One tap")
         see("Denied")
         see("Allowed once")
-        see("1 requests declined")
+        see("1 request declined")
         tab("Inventory")
         see("Secret store")
         see("qHWf")

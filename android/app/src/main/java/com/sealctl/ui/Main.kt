@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -41,7 +40,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -52,10 +50,7 @@ import com.sealctl.app.MainActivity
 import com.sealctl.app.Route
 import com.sealctl.app.Texts
 import com.sealctl.app.Ui
-import com.sealctl.core.app.ActivityRow
-import com.sealctl.core.app.ActivityTone
 import com.sealctl.core.app.Asking
-import com.sealctl.core.app.activityRow
 import com.sealctl.designsystem.Banner
 import com.sealctl.designsystem.MachineState
 import com.sealctl.designsystem.Mono
@@ -199,62 +194,6 @@ private fun MachineRow(v: MachineView) {
             StateLabel(v.state, v.row)
             Muted(v.sub())
             v.unseen()?.let { Text(it, color = Sealctl.colors.waiting, fontSize = 14.sp) }
-        }
-    }
-}
-
-@Composable
-fun ActivityList(machine: String?) {
-    val engine = Graph.engine
-    val state by engine.state.collectAsState()
-    val entries = remember(state, machine) { com.sealctl.app.safe { engine.store.usage(machine, null, 500u) } ?: emptyList() }
-    val month = Texts.isoDate(System.currentTimeMillis()).take(7)
-    val summary = state.summaries.firstOrNull { it.month == month }
-    SurfaceCard {
-        Text(java.time.YearMonth.parse(month).month.getDisplayName(java.time.format.TextStyle.FULL, androidx.compose.ui.platform.LocalConfiguration.current.locales[0]),
-            fontWeight = FontWeight.SemiBold, color = Sealctl.colors.ink, fontSize = 18.sp)
-        Text("${summary?.keysUsed ?: 0} keys used on ${summary?.machines?.size ?: 0} machines", color = Sealctl.colors.ink2)
-        Text("${summary?.requestsDeclined ?: 0} requests declined", color = Sealctl.colors.ink2)
-        Muted("No key was written to disk.")
-    }
-    for (r in state.reports.sortedByDescending { it.time }.take(5)) {
-        SurfaceCard(Modifier.clickable { Ui.push(Route.Report(r.id)) }) {
-            Text("${r.machineName} handed everything back", fontWeight = FontWeight.SemiBold, color = Sealctl.colors.ink)
-            Muted("${r.items.count { it.state == "done" }} of ${r.items.size} done · ${Texts.mediumDate(r.time.toLong())}")
-        }
-    }
-    if (entries.isEmpty()) {
-        Muted("Nothing yet. Every use of your keys shows here.")
-        return
-    }
-    val rows = remember(entries, state) {
-        entries.map { e -> Texts.time(e.time.toLong()) to activityRow(e, engine.machine(e.machine)) }
-    }
-    for ((d, day) in entries.indices.groupBy { Texts.mediumDate(entries[it].time.toLong()) }) {
-        SectionLabel(d)
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            for (i in day) ActivityLine(rows[i].first, rows[i].second)
-        }
-    }
-}
-
-/** One use (11.12): the time, what was used and the outcome, then the details in muted text. */
-@Composable
-fun ActivityLine(time: String, row: ActivityRow) {
-    val c = Sealctl.colors
-    Row(Modifier.fillMaxWidth().clearAndSetSemantics { contentDescription = Texts.activityLabel(time, row) }) {
-        Text(time, Modifier.alignByBaseline().widthIn(min = 44.dp).padding(end = 8.dp), color = c.ink2, fontSize = 14.sp, style = TextStyle(fontFeatureSettings = "tnum"))
-        Column(Modifier.weight(1f).alignByBaseline()) {
-            Row {
-                Text(row.subject, Modifier.weight(1f).alignByBaseline(), color = c.ink, fontSize = 15.sp)
-                Text(
-                    row.outcome,
-                    Modifier.padding(start = 8.dp).alignByBaseline(),
-                    color = when (row.tone) { ActivityTone.DECLINED -> c.accent; ActivityTone.MUTED -> c.muted; ActivityTone.NORMAL -> c.ink2 },
-                    fontSize = 14.sp,
-                )
-            }
-            if (row.details.isNotEmpty()) Text(Texts.activityDetails(row), color = c.muted, fontSize = 13.sp)
         }
     }
 }

@@ -4,6 +4,36 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- Activity: a heatmap of the last year at the bottom of the tab, as GitHub's contribution graph:
+  53 weeks of key uses by day, a tap shows a day's figures, one VoiceOver or TalkBack element
+  that moves day by day or week by week. The phone keeps a small table of daily counts for it.
+
+### Changed
+
+- Activity: the newest day is open and each of the ten days before today with uses is one row
+  with its figures ("37 uses · 2 declined"); a tap opens or closes it. Older days are no longer
+  listed. The same for one machine's Activity.
+- Usage entries are kept 90 days (they were kept 13 months); "This machine was lost or stolen"
+  still reads its 90 days. The heatmap's daily counts are kept 400 days and are filled once from
+  the entries already on the phone. An entry a machine reports that is older than 90 days is no
+  longer recorded or counted.
+- iPhone: the lifetimes (and the usage log's trim) now apply when the app comes to the
+  foreground, at most once a day.
+- Android: Activity shows the previous months behind a chevron, as on iPhone.
+
+### Fixed
+
+- Month names in Activity use the standalone form, capitalised ("Listopad", not "listopada" in
+  Polish; also Ukrainian, Russian and other languages that inflect them).
+- An SSH signature a machine reports from its session reads "SSH key ed25519", as when the
+  phone asked, instead of "ed25519" with "ssh" repeated in its details.
+- The month summary says "1 key used on 1 machine" and "1 request declined" for one, instead of
+  "1 keys", "1 machines" and "1 requests".
+
 ## 0.1.0
 
 The sealctl phone app for iPhone and Android: it holds the root made from your 24 words and

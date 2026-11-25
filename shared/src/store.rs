@@ -1,5 +1,6 @@
 //! The local database (SPEC.md 6.4): one SQLite file. The relay state and the local records
-//! are JSON documents; the usage log is a table. No secret is ever stored here.
+//! are JSON documents; the usage log and the daily counts are tables. No secret is ever stored
+//! here.
 
 use std::sync::{Arc, Mutex};
 
@@ -10,16 +11,24 @@ use sealctl_core::{Request, RequestKind};
 use crate::cards::display_text;
 use crate::clock::{Boot, ClockNow, RelayClock};
 use crate::codec::{encode_state, shrink_to_fit};
-use crate::day::{day_end, local_month};
+use crate::day::{add_days, day_end, local_date, local_month};
 use crate::error::{AppError, Result};
 use crate::merge::{merge_state, normalise};
 use crate::model::*;
 use crate::places;
 use crate::prune::prune_state;
 
-/// Usage entries kept: 13 months, at most 50,000.
+/// Usage entries kept: 90 days, at most 50,000 (SPEC.md 6.4).
 pub const USAGE_MAX: i64 = 50_000;
-const USAGE_MONTHS_MS: u64 = 396 * 86_400_000;
+/// How long a usage entry is kept, and how old an entry a machine reports may be and still be
+/// recorded: 90 days. The "lost or stolen machine" screen reads the last 90 days.
+pub const USAGE_KEEP_MS: u64 = crate::prune::NINETY_DAYS_MS;
+/// Days of daily counts kept: the Activity heatmap's 53 weeks and a margin.
+pub const DAILY_KEEP_DAYS: i64 = 400;
+const _: () = assert!(DAILY_KEEP_DAYS > 53 * 7);
+/// The doc that says the daily counts still wait for their one backfill from the usage rows
+/// stored before the counts existed.
+const DAILY_BACKFILL: &str = "daily_backfill";
 /// Pending ids are kept 10 minutes past the time their signed body can be accepted.
 const PENDING_KEEP_MS: u64 = 10 * 60 * 1000;
 /// A request's id is kept as long as its signed time can still be accepted after it was first
@@ -311,9 +320,12 @@ impl Store {
         at: u64,
         now: u64,
     ) -> Result<AnsweredResult> {
-        let c = lock(&self.conn)?;
-        let mut s: State = read_doc(&c, "state")?;
-        let mut l: LocalState = read_doc(&c, "local")?;
+        let conn = lock(&self.conn)?;
+        let tx = conn.unchecked_transaction()?;
+        let c: &Connection = &tx;
+        backfill_daily(c, utc_offset_secs)?;
+        let mut s: State = read_doc(c, "state")?;
+        let mut l: LocalState = read_doc(c, "local")?;
         let machine = request.machine();
         let ctx = request.ctx().unwrap_or_default();
         let fp = s
@@ -341,7 +353,7 @@ impl Store {
             outcome: outcome.to_owned(),
             kind: subject_kind(request),
         };
-        insert_usage(&c, &entry)?;
+        insert_usage(c, &entry)?;
         let month = local_month(at, utc_offset_secs);
         let declined = u64::from(outcome == "denied");
         let keys = if allowed {
@@ -350,6 +362,7 @@ impl Store {
             0
         };
         add_to_summary(&mut s, month, &machine, keys, declined, now);
+        count_day(c, &local_date(at, utc_offset_secs), keys, declined)?;
 
         if allowed {
             for u in request.uses() {
@@ -432,8 +445,9 @@ impl Store {
         }
         l.dirty = true;
         let s = normalise(s);
-        write_doc(&c, "state", &s)?;
-        write_doc(&c, "local", &l)?;
+        write_doc(c, "state", &s)?;
+        write_doc(c, "local", &l)?;
+        tx.commit()?;
         Ok(AnsweredResult { first_of_day })
     }
 
@@ -514,8 +528,11 @@ impl Store {
         at: u64,
         now: u64,
     ) -> Result<ReportResult> {
-        let c = lock(&self.conn)?;
-        let mut s: State = read_doc(&c, "state")?;
+        let conn = lock(&self.conn)?;
+        let tx = conn.unchecked_transaction()?;
+        let c: &Connection = &tx;
+        backfill_daily(c, utc_offset_secs)?;
+        let mut s: State = read_doc(c, "state")?;
         let fp = s
             .words
             .as_ref()
@@ -553,10 +570,17 @@ impl Store {
         let mut uses = 0;
         // A machine resends its log until it is acknowledged, so a later status repeats the
         // entries an earlier one carried: an entry already recorded before this status is
-        // skipped (two equal entries inside one status are both kept).
+        // skipped (two equal entries inside one status are both kept). The check needs the
+        // stored row, and rows go after 90 days, so an entry older than that is neither stored
+        // nor counted: whether it was counted once before or never reached the phone, it can
+        // no longer be told apart from a resend (SPEC.md 6.4).
         let before: i64 =
             c.query_row("SELECT COALESCE(MAX(id), 0) FROM usage", [], |r| r.get(0))?;
+        let cutoff = now.saturating_sub(USAGE_KEEP_MS);
         for e in &status.log {
+            if e.time > 0 && e.time < cutoff {
+                continue;
+            }
             let entry = UsageEntry {
                 time: if e.time > 0 { e.time } else { at },
                 machine: machine.clone(),
@@ -575,22 +599,24 @@ impl Store {
                 // the JSON of a resent entry must equal what an earlier version stored
                 kind: None,
             };
-            if e.time > 0 && usage_recorded(&c, &entry, before)? {
+            if e.time > 0 && usage_recorded(c, &entry, before)? {
                 continue;
             }
-            insert_usage(&c, &entry)?;
+            insert_usage(c, &entry)?;
             uses += e.names.len().max(1) as u64;
         }
         if uses > 0 {
             add_to_summary(&mut s, month, &machine, uses, 0, now);
+            count_day(c, &local_date(at, utc_offset_secs), uses, 0)?;
         }
         for item in &status.inventory {
             upsert_inventory(&mut s, item_inventory(item, &machine, at, &fp), at, now);
         }
-        write_doc(&c, "state", &normalise(s))?;
-        let mut l: LocalState = read_doc(&c, "local")?;
+        write_doc(c, "state", &normalise(s))?;
+        let mut l: LocalState = read_doc(c, "local")?;
         l.dirty = true;
-        write_doc(&c, "local", &l)?;
+        write_doc(c, "local", &l)?;
+        tx.commit()?;
         Ok(ReportResult {
             ack: Some(status.seq),
             handback: None,
@@ -780,6 +806,7 @@ impl Store {
                time INTEGER NOT NULL, machine TEXT NOT NULL, key TEXT NOT NULL, json TEXT NOT NULL);
              CREATE INDEX IF NOT EXISTS usage_time ON usage(time);",
         )?;
+        create_daily(&conn)?;
         Ok(Arc::new(Self {
             conn: Mutex::new(conn),
             #[cfg(test)]
@@ -1095,6 +1122,49 @@ impl Store {
         Ok(out)
     }
 
+    /// The usage log from `since` (Unix ms) on, newest first, optionally for one machine: the
+    /// days the Activity screen lists (SPEC.md 11.12).
+    pub fn usage_since(&self, machine: Option<String>, since: u64) -> Result<Vec<UsageEntry>> {
+        let c = lock(&self.conn)?;
+        let mut stmt = c.prepare(
+            "SELECT json FROM usage WHERE time >= ?1 AND (?2 IS NULL OR machine = ?2)
+             ORDER BY time DESC, id DESC",
+        )?;
+        let rows = stmt.query_map(params![since, machine], |r| r.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(serde_json::from_str(&r?)?);
+        }
+        Ok(out)
+    }
+
+    /// The daily counts from `from_day` to `to_day` (`YYYY-MM-DD`, both included), oldest
+    /// first; days with nothing counted are left out (SPEC.md 11.12, the heatmap).
+    /// `utc_offset_secs` is the phone's UTC offset now: it dates the one backfill from the
+    /// usage rows of an older version, when that has not run yet.
+    pub fn daily_counts(
+        &self,
+        from_day: String,
+        to_day: String,
+        utc_offset_secs: i32,
+    ) -> Result<Vec<DailyCount>> {
+        let conn = lock(&self.conn)?;
+        let tx = conn.unchecked_transaction()?;
+        backfill_daily(&tx, utc_offset_secs)?;
+        tx.commit()?;
+        let mut stmt = conn.prepare(
+            "SELECT day, used, declined FROM daily WHERE day >= ?1 AND day <= ?2 ORDER BY day",
+        )?;
+        let rows = stmt.query_map(params![from_day, to_day], |r| {
+            Ok(DailyCount {
+                day: r.get(0)?,
+                used: r.get(1)?,
+                declined: r.get(2)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
     /// The summary of a month (`YYYY-MM`).
     pub fn summary(&self, month: String) -> Result<MonthSummary> {
         let s = self.snapshot()?;
@@ -1107,26 +1177,37 @@ impl Store {
             }))
     }
 
-    /// Applies the lifetimes (SPEC.md 5.4 `prune`) and trims the usage log.
-    pub fn prune(&self, now: u64) -> Result<State> {
-        let c = lock(&self.conn)?;
-        let s: State = read_doc(&c, "state")?;
+    /// Applies the lifetimes (SPEC.md 5.4 `prune`), trims the usage log to 90 days and the
+    /// daily counts to [`DAILY_KEEP_DAYS`]. `utc_offset_secs` is the phone's UTC offset now:
+    /// the day the counts are kept from, and the date of the usage rows an older version
+    /// stored, counted once before the first trim removes them.
+    pub fn prune(&self, now: u64, utc_offset_secs: i32) -> Result<State> {
+        let conn = lock(&self.conn)?;
+        let tx = conn.unchecked_transaction()?;
+        let c: &Connection = &tx;
+        backfill_daily(c, utc_offset_secs)?;
+        let s: State = read_doc(c, "state")?;
         let before = s.clone();
         let s = prune_state(s, now);
         if s != before {
-            write_doc(&c, "state", &s)?;
-            let mut l: LocalState = read_doc(&c, "local")?;
+            write_doc(c, "state", &s)?;
+            let mut l: LocalState = read_doc(c, "local")?;
             l.dirty = true;
-            write_doc(&c, "local", &l)?;
+            write_doc(c, "local", &l)?;
         }
         c.execute(
             "DELETE FROM usage WHERE time < ?1",
-            params![now.saturating_sub(USAGE_MONTHS_MS)],
+            params![now.saturating_sub(USAGE_KEEP_MS)],
         )?;
         c.execute(
             "DELETE FROM usage WHERE id NOT IN (SELECT id FROM usage ORDER BY time DESC LIMIT ?1)",
             params![USAGE_MAX],
         )?;
+        c.execute(
+            "DELETE FROM daily WHERE day < ?1",
+            params![add_days(local_date(now, utc_offset_secs), -DAILY_KEEP_DAYS)],
+        )?;
+        tx.commit()?;
         Ok(s)
     }
 
@@ -1245,7 +1326,7 @@ impl Store {
     /// Erases everything (Erase sealctl from this phone).
     pub fn erase(&self) -> Result<()> {
         let c = lock(&self.conn)?;
-        c.execute_batch("DELETE FROM doc; DELETE FROM usage;")?;
+        c.execute_batch("DELETE FROM doc; DELETE FROM usage; DELETE FROM daily;")?;
         Ok(())
     }
 }
@@ -1275,6 +1356,101 @@ fn usage_recorded(c: &Connection, e: &UsageEntry, max_id: i64) -> Result<bool> {
         params![e.time, e.machine, json, max_id],
         |r| r.get(0),
     )?)
+}
+
+/// Uses and declines counted on one local day (SPEC.md 6.4, 11.12): what the Activity heatmap
+/// shows for the last year, after the usage rows behind it are gone.
+#[derive(uniffi::Record, Debug, Clone, Default, PartialEq, Eq)]
+pub struct DailyCount {
+    /// `YYYY-MM-DD` by the phone's UTC offset when the use counted.
+    pub day: String,
+    /// Keys used, counted as the month's "keys used".
+    pub used: u64,
+    /// Deny answers, counted as the month's "requests declined".
+    pub declined: u64,
+}
+
+/// [`DAILY_BACKFILL`]: the usage rows up to `upto` (their ids) were stored before the daily
+/// counts existed and still wait to be counted.
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct DailyBackfill {
+    upto: i64,
+}
+
+/// Creates the daily counts. A database that has usage rows but no counts yet (stored by an
+/// older version) is marked to count those rows once, before a prune can remove them.
+fn create_daily(c: &Connection) -> Result<()> {
+    let tx = c.unchecked_transaction()?;
+    let exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'daily')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !exists {
+        tx.execute_batch(
+            "CREATE TABLE daily (
+               day TEXT PRIMARY KEY, used INTEGER NOT NULL DEFAULT 0,
+               declined INTEGER NOT NULL DEFAULT 0);",
+        )?;
+        let upto: i64 = tx.query_row("SELECT COALESCE(MAX(id), 0) FROM usage", [], |r| r.get(0))?;
+        if upto > 0 {
+            write_doc(&tx, DAILY_BACKFILL, &DailyBackfill { upto })?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// Counts, once, the usage rows an older version stored before the daily counts existed
+/// (SPEC.md 6.4). A row holds one entry, not how many keys its request handed out, and the
+/// time of the entry, not when a machine's report of it reached the phone: each row counts one
+/// use (or one decline, for `denied`; `expired` counts neither) on its own local day by
+/// `utc_offset_secs`. Rows stored after the counts existed (ids above the mark) were counted
+/// when they were stored.
+fn backfill_daily(c: &Connection, utc_offset_secs: i32) -> Result<()> {
+    let mark: DailyBackfill = read_doc(c, DAILY_BACKFILL)?;
+    if mark.upto <= 0 {
+        return Ok(());
+    }
+    let mut days: std::collections::BTreeMap<String, (u64, u64)> = Default::default();
+    {
+        let mut stmt = c.prepare("SELECT time, json FROM usage WHERE id <= ?1")?;
+        let rows = stmt.query_map(params![mark.upto], |r| {
+            Ok((r.get::<_, u64>(0)?, r.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (time, json) = row?;
+            let Ok(e) = serde_json::from_str::<UsageEntry>(&json) else {
+                continue;
+            };
+            let d = days.entry(local_date(time, utc_offset_secs)).or_default();
+            match e.outcome.as_str() {
+                "denied" => d.1 += 1,
+                "expired" => {}
+                _ => d.0 += 1,
+            }
+        }
+    }
+    for (day, (used, declined)) in days {
+        count_day(c, &day, used, declined)?;
+    }
+    c.execute("DELETE FROM doc WHERE key = ?1", params![DAILY_BACKFILL])?;
+    Ok(())
+}
+
+/// Adds uses and declines to a local day's counts.
+fn count_day(c: &Connection, day: &str, used: u64, declined: u64) -> Result<()> {
+    if used == 0 && declined == 0 {
+        return Ok(());
+    }
+    c.execute(
+        "INSERT INTO daily(day, used, declined) VALUES(?1, ?2, ?3)
+         ON CONFLICT(day) DO UPDATE SET used = used + excluded.used,
+           declined = declined + excluded.declined",
+        params![day, used, declined],
+    )?;
+    Ok(())
 }
 
 fn insert_usage(c: &Connection, e: &UsageEntry) -> Result<()> {
@@ -1710,7 +1886,7 @@ mod tests {
         assert_eq!(st.summary(local_month(used, 0)).unwrap().keys_used, 1);
         // So it still answers by itself past the 90 days from its first remembering.
         assert!(crate::prune::answer_live(&a, t0 + 100 * 24 * H));
-        assert!(!st.prune(t0 + 100 * 24 * H).unwrap().answers[0].deleted);
+        assert!(!st.prune(t0 + 100 * 24 * H, 0).unwrap().answers[0].deleted);
         // An answer time after the phone's clock counts as now.
         let r = request_at(&m, "open", merged + H, Vec::new());
         st.answered_at(r, "automatic".into(), true, None, 0, merged + H)
@@ -1857,7 +2033,7 @@ mod tests {
         st.answered(r, "once".into(), true, false, None, 0).unwrap();
         let a = st.snapshot().unwrap().answers[0].clone();
         assert_eq!(a.last_used, t0);
-        assert!(st.prune(later).unwrap().answers[0].deleted);
+        assert!(st.prune(later, 0).unwrap().answers[0].deleted);
         // Allowed and remembered: the answer is kept again from now.
         let r = request_at(&m, "agent", later, uses());
         st.answered(r, "one_tap".into(), true, true, None, 0)
@@ -2471,6 +2647,250 @@ mod tests {
         assert_eq!(total(&st), 4);
     }
 
+    /// The daily counts of `day` as (used, declined).
+    fn counted(st: &Store, day: &str, offset: i32) -> (u64, u64) {
+        st.daily_counts(day.into(), day.into(), offset)
+            .unwrap()
+            .first()
+            .map_or((0, 0), |d| (d.used, d.declined))
+    }
+
+    const DAY: u64 = 24 * H;
+
+    #[test]
+    fn a_resent_log_is_counted_once_a_day() {
+        use sealctl_core::wire::{LogEntry, MachineStatus};
+        let st = store();
+        let m = paired(&st);
+        let t = MIDNIGHT + 10 * H;
+        st.set_now(t);
+        let entry = |n: u64, names: &[&str]| LogEntry {
+            time: t - 30 * MIN + n,
+            command: "env".into(),
+            names: names.iter().map(|n| (*n).to_owned()).collect(),
+            ..LogEntry::default()
+        };
+        let status = |seq, log| MachineStatus {
+            seq,
+            log,
+            ..MachineStatus::default()
+        };
+        let first = vec![entry(1, &["A", "B"]), entry(2, &["C"])];
+        st.apply_status(m.id(), status(1, first.clone()), 0)
+            .unwrap();
+        assert_eq!(counted(&st, "2026-11-21", 0), (3, 0));
+        // resent, unacknowledged, with one new use
+        let mut second = first;
+        second.push(entry(3, &["D"]));
+        st.apply_status(m.id(), status(2, second), 0).unwrap();
+        assert_eq!(counted(&st, "2026-11-21", 0), (4, 0));
+        // a deny counts as declined, an expired answer as nothing
+        let r = request_at(&m, "open", t, Vec::new());
+        st.answered(r, "denied".into(), false, false, None, 0)
+            .unwrap();
+        let r = request_at(&m, "open", t, Vec::new());
+        st.answered(r, "expired".into(), false, false, None, 0)
+            .unwrap();
+        assert_eq!(counted(&st, "2026-11-21", 0), (4, 1));
+        // the same figures as the month
+        let month = st.summary("2026-11".into()).unwrap();
+        assert_eq!((month.keys_used, month.requests_declined), (4, 1));
+    }
+
+    #[test]
+    fn an_entry_older_than_the_kept_rows_is_neither_logged_nor_counted() {
+        use sealctl_core::wire::{LogEntry, MachineStatus};
+        let st = store();
+        let m = paired(&st);
+        let t = MIDNIGHT + 10 * H;
+        st.set_now(t);
+        let used = LogEntry {
+            time: t,
+            command: "env".into(),
+            names: vec!["A".into()],
+            ..LogEntry::default()
+        };
+        let status = |seq, log| MachineStatus {
+            seq,
+            log,
+            ..MachineStatus::default()
+        };
+        st.apply_status(m.id(), status(1, vec![used.clone()]), 0)
+            .unwrap();
+        assert_eq!(counted(&st, "2026-11-21", 0), (1, 0));
+        // 91 days on the row is pruned; the machine (back from a long trip, its log never
+        // acknowledged) resends the entry and one from 89 days ago.
+        let later = t + 91 * DAY;
+        st.set_now(later);
+        st.prune(later, 0).unwrap();
+        assert!(st.usage(None, None, 10).unwrap().is_empty());
+        let recent = LogEntry {
+            time: later - 89 * DAY,
+            ..used.clone()
+        };
+        st.apply_status(m.id(), status(2, vec![used, recent]), 0)
+            .unwrap();
+        // the old one is skipped, so it is not counted a second time; the recent one counts
+        let today = local_date(later, 0);
+        assert_eq!(counted(&st, "2026-11-21", 0), (1, 0));
+        assert_eq!(counted(&st, &today, 0), (1, 0));
+        let log = st.usage(None, None, 10).unwrap();
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].time, later - 89 * DAY);
+        assert_eq!(st.summary(local_month(later, 0)).unwrap().keys_used, 1);
+    }
+
+    #[test]
+    fn rows_are_kept_90_days_and_counts_400() {
+        let st = store();
+        let m = paired(&st);
+        let now = MIDNIGHT + 12 * H;
+        let at = |days_ago: u64| now - days_ago * DAY;
+        for days_ago in [402, 398, 91, 89, 0] {
+            st.set_now(at(days_ago));
+            let r = request_at(&m, "open", at(days_ago), Vec::new());
+            st.answered(r, "one_tap".into(), true, false, None, 0)
+                .unwrap();
+        }
+        st.prune(now, 0).unwrap();
+        let log: Vec<u64> = st
+            .usage(None, None, 10)
+            .unwrap()
+            .iter()
+            .map(|u| u.time)
+            .collect();
+        assert_eq!(log, [at(0), at(89)]);
+        let days: Vec<String> = st
+            .daily_counts("2000-01-01".into(), "2100-01-01".into(), 0)
+            .unwrap()
+            .into_iter()
+            .map(|d| d.day)
+            .collect();
+        let want: Vec<String> = [398, 91, 89, 0]
+            .iter()
+            .map(|d| local_date(at(*d), 0))
+            .collect();
+        assert_eq!(days, want);
+    }
+
+    #[test]
+    fn a_use_near_midnight_counts_on_the_phone_s_local_day() {
+        use sealctl_core::wire::{LogEntry, MachineStatus};
+        let st = store();
+        let m = paired(&st);
+        let utc2 = 2 * 3600;
+        // 23:59 on 2026-11-21 at UTC+2 is 21:59 UTC
+        let before = MIDNIGHT + 22 * H - MIN;
+        st.set_now(before);
+        let r = request_at(&m, "open", before, Vec::new());
+        st.answered(r, "one_tap".into(), true, false, None, utc2)
+            .unwrap();
+        assert_eq!(counted(&st, "2026-11-21", utc2), (1, 0));
+        // two minutes later it is the 22nd there
+        let after = before + 2 * MIN;
+        st.set_now(after);
+        let r = request_at(&m, "open", after, Vec::new());
+        st.answered(r, "denied".into(), false, false, None, utc2)
+            .unwrap();
+        assert_eq!(counted(&st, "2026-11-22", utc2), (0, 1));
+        // a use made at 23:59 and reported at 00:01 counts when it reached the phone, as the
+        // month does
+        st.apply_status(
+            m.id(),
+            MachineStatus {
+                seq: 1,
+                log: vec![LogEntry {
+                    time: before,
+                    command: "env".into(),
+                    names: vec!["A".into()],
+                    ..LogEntry::default()
+                }],
+                ..MachineStatus::default()
+            },
+            utc2,
+        )
+        .unwrap();
+        assert_eq!(counted(&st, "2026-11-21", utc2), (1, 0));
+        assert_eq!(counted(&st, "2026-11-22", utc2), (1, 1));
+    }
+
+    #[test]
+    fn the_counts_are_backfilled_once_from_an_older_database() {
+        let dir = std::env::temp_dir().join(format!(
+            "sealctl-backfill-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("old.db");
+        let _ = std::fs::remove_file(&path);
+        // A database as the version before the daily counts left it.
+        let now = MIDNIGHT + 12 * H;
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(
+                "CREATE TABLE doc (key TEXT PRIMARY KEY, json TEXT NOT NULL);
+                 CREATE TABLE usage (
+                   id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   time INTEGER NOT NULL, machine TEXT NOT NULL, key TEXT NOT NULL,
+                   json TEXT NOT NULL);",
+            )
+            .unwrap();
+            let row = |time: u64, outcome: &str| UsageEntry {
+                time,
+                machine: "m".into(),
+                key: "K".into(),
+                outcome: outcome.into(),
+                ..UsageEntry::default()
+            };
+            for e in [
+                row(now - 200 * DAY, "one_tap"),
+                row(now - 200 * DAY, "denied"),
+                row(now - 2 * DAY, "in_session"),
+                row(now - 2 * DAY, "expired"),
+                // 23:30 UTC: the next day at UTC+1
+                row(MIDNIGHT - 30 * MIN, "automatic"),
+            ] {
+                insert_usage(&c, &e).unwrap();
+            }
+        }
+        let st = Store::open(path.to_string_lossy().into_owned()).unwrap();
+        st.set_now(now);
+        let m = paired(&st);
+        // A use recorded before the first prune counts once, live.
+        let r = request_at(&m, "open", now, Vec::new());
+        st.answered(r, "one_tap".into(), true, false, None, 3600)
+            .unwrap();
+        // The first prune removes the rows older than 90 days, after counting them.
+        st.prune(now, 3600).unwrap();
+        st.prune(now, 3600).unwrap();
+        assert_eq!(st.usage(None, None, 10).unwrap().len(), 4);
+        assert_eq!(
+            counted(&st, &local_date(now - 200 * DAY, 3600), 3600),
+            (1, 1)
+        );
+        assert_eq!(counted(&st, &local_date(now - 2 * DAY, 3600), 3600), (1, 0));
+        assert_eq!(counted(&st, "2026-11-21", 3600), (2, 0));
+        // Opened again, nothing is counted twice.
+        drop(st);
+        let st = Store::open(path.to_string_lossy().into_owned()).unwrap();
+        st.set_now(now);
+        assert_eq!(counted(&st, "2026-11-21", 3600), (2, 0));
+        assert_eq!(
+            counted(&st, &local_date(now - 200 * DAY, 3600), 3600),
+            (1, 1)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_new_database_has_nothing_to_backfill() {
+        let st = store();
+        let c = lock(&st.conn).unwrap();
+        let mark: DailyBackfill = read_doc(&c, DAILY_BACKFILL).unwrap();
+        assert_eq!(mark.upto, 0);
+    }
+
     #[test]
     fn the_usage_log_records_what_its_key_names() {
         use sealctl_core::wire::{AgentUse, RequestContext, RequestItem, Subject};
@@ -2626,7 +3046,7 @@ mod tests {
         assert_eq!(all.len(), 5);
         assert_eq!(all[0].time, 1004);
         assert_eq!(st.usage(Some("a".into()), None, 10).unwrap().len(), 3);
-        st.prune(TEST_EPOCH_MS).unwrap();
+        st.prune(TEST_EPOCH_MS, 0).unwrap();
         assert!(st.usage(None, None, 10).unwrap().is_empty());
         assert_eq!(st.summary("2026-11".into()).unwrap().keys_used, 0);
     }

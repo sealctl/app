@@ -706,7 +706,11 @@ internal object IntegrityCheckingUniffiLib {
     internal fun ensureInitialized() = Unit
     external fun uniffi_sealctl_app_checksum_func_app_rules_version(
     ): Int
+    external fun uniffi_sealctl_app_checksum_func_activity_counts(
+    ): Int
     external fun uniffi_sealctl_app_checksum_func_activity_row(
+    ): Int
+    external fun uniffi_sealctl_app_checksum_func_heat_levels(
     ): Int
     external fun uniffi_sealctl_app_checksum_func_machine_short_name(
     ): Int
@@ -776,6 +780,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_sealctl_app_checksum_method_store_close_request(
     ): Int
+    external fun uniffi_sealctl_app_checksum_method_store_daily_counts(
+    ): Int
     external fun uniffi_sealctl_app_checksum_method_store_erase(
     ): Int
     external fun uniffi_sealctl_app_checksum_method_store_local(
@@ -803,6 +809,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_sealctl_app_checksum_method_store_summary(
     ): Int
     external fun uniffi_sealctl_app_checksum_method_store_usage(
+    ): Int
+    external fun uniffi_sealctl_app_checksum_method_store_usage_since(
     ): Int
     external fun uniffi_sealctl_app_checksum_constructor_store_open(
     ): Int
@@ -851,6 +859,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_method_store_close_request(`ptr`: Long,`id`: RustBuffer.ByValue,`outcome`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_sealctl_app_fn_method_store_daily_counts(`ptr`: Long,`fromDay`: RustBuffer.ByValue,`toDay`: RustBuffer.ByValue,`utcOffsetSecs`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_method_store_erase(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_sealctl_app_fn_method_store_local(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -861,7 +871,7 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_method_store_place_settled_now(`ptr`: Long,`place`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    external fun uniffi_sealctl_app_fn_method_store_prune(`ptr`: Long,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_sealctl_app_fn_method_store_prune(`ptr`: Long,`now`: Long,`utcOffsetSecs`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_method_store_relay_accepted(`ptr`: Long,`signedMs`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -879,9 +889,15 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_method_store_usage(`ptr`: Long,`machine`: RustBuffer.ByValue,`key`: RustBuffer.ByValue,`limit`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_sealctl_app_fn_method_store_usage_since(`ptr`: Long,`machine`: RustBuffer.ByValue,`since`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_app_rules_version(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_sealctl_app_fn_func_activity_counts(`entries`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_activity_row(`entry`: RustBuffer.ByValue,`machine`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_sealctl_app_fn_func_heat_levels(`counts`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_machine_short_name(`machine`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1055,7 +1071,13 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_sealctl_app_checksum_func_app_rules_version() and 0xFFFF) != 4703) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_sealctl_app_checksum_func_activity_counts() and 0xFFFF) != 37081) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_sealctl_app_checksum_func_activity_row() and 0xFFFF) != 46249) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_sealctl_app_checksum_func_heat_levels() and 0xFFFF) != 5124) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_func_machine_short_name() and 0xFFFF) != 57194) {
@@ -1160,6 +1182,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_sealctl_app_checksum_method_store_close_request() and 0xFFFF) != 56401) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_sealctl_app_checksum_method_store_daily_counts() and 0xFFFF) != 41562) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_sealctl_app_checksum_method_store_erase() and 0xFFFF) != 22683) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1175,7 +1200,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_sealctl_app_checksum_method_store_place_settled_now() and 0xFFFF) != 56412) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_sealctl_app_checksum_method_store_prune() and 0xFFFF) != 25831) {
+    if ((lib.uniffi_sealctl_app_checksum_method_store_prune() and 0xFFFF) != 13406) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_method_store_relay_accepted() and 0xFFFF) != 22391) {
@@ -1200,6 +1225,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_method_store_usage() and 0xFFFF) != 17434) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_sealctl_app_checksum_method_store_usage_since() and 0xFFFF) != 8701) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_constructor_store_open() and 0xFFFF) != 12761) {
@@ -1764,6 +1792,14 @@ public interface StoreInterface {
     fun `closeRequest`(`id`: kotlin.String, `outcome`: kotlin.String)
     
     /**
+     * The daily counts from `from_day` to `to_day` (`YYYY-MM-DD`, both included), oldest
+     * first; days with nothing counted are left out (SPEC.md 11.12, the heatmap).
+     * `utc_offset_secs` is the phone's UTC offset now: it dates the one backfill from the
+     * usage rows of an older version, when that has not run yet.
+     */
+    fun `dailyCounts`(`fromDay`: kotlin.String, `toDay`: kotlin.String, `utcOffsetSecs`: kotlin.Int): List<DailyCount>
+    
+    /**
      * Erases everything (Erase sealctl from this phone).
      */
     fun `erase`()
@@ -1792,9 +1828,12 @@ public interface StoreInterface {
     fun `placeSettledNow`(`place`: TrustedPlace): kotlin.Boolean
     
     /**
-     * Applies the lifetimes (SPEC.md 5.4 `prune`) and trims the usage log.
+     * Applies the lifetimes (SPEC.md 5.4 `prune`), trims the usage log to 90 days and the
+     * daily counts to [`DAILY_KEEP_DAYS`]. `utc_offset_secs` is the phone's UTC offset now:
+     * the day the counts are kept from, and the date of the usage rows an older version
+     * stored, counted once before the first trim removes them.
      */
-    fun `prune`(`now`: kotlin.ULong): State
+    fun `prune`(`now`: kotlin.ULong, `utcOffsetSecs`: kotlin.Int): State
     
     /**
      * The relay accepted a call signed with `signed_ms` (the `Sealctl-Time` sent, in ms):
@@ -1840,6 +1879,12 @@ public interface StoreInterface {
      * The usage log, newest first, optionally for one machine or key.
      */
     fun `usage`(`machine`: kotlin.String?, `key`: kotlin.String?, `limit`: kotlin.UInt): List<UsageEntry>
+    
+    /**
+     * The usage log from `since` (Unix ms) on, newest first, optionally for one machine: the
+     * days the Activity screen lists (SPEC.md 11.12).
+     */
+    fun `usageSince`(`machine`: kotlin.String?, `since`: kotlin.ULong): List<UsageEntry>
     
     companion object
 }
@@ -2140,6 +2185,29 @@ open class Store: Disposable, AutoCloseable, StoreInterface
 
     
     /**
+     * The daily counts from `from_day` to `to_day` (`YYYY-MM-DD`, both included), oldest
+     * first; days with nothing counted are left out (SPEC.md 11.12, the heatmap).
+     * `utc_offset_secs` is the phone's UTC offset now: it dates the one backfill from the
+     * usage rows of an older version, when that has not run yet.
+     */
+    @Throws(AppException::class)override fun `dailyCounts`(`fromDay`: kotlin.String, `toDay`: kotlin.String, `utcOffsetSecs`: kotlin.Int): List<DailyCount> {
+            return FfiConverterSequenceTypeDailyCount.lift(
+    callWithHandle {
+    uniffiRustCallWithError(AppException) { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_method_store_daily_counts(
+        it,
+        
+        FfiConverterString.lower(`fromDay`),
+        FfiConverterString.lower(`toDay`),
+        FfiConverterInt.lower(`utcOffsetSecs`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Erases everything (Erase sealctl from this phone).
      */
     @Throws(AppException::class)override fun `erase`()
@@ -2231,16 +2299,20 @@ open class Store: Disposable, AutoCloseable, StoreInterface
 
     
     /**
-     * Applies the lifetimes (SPEC.md 5.4 `prune`) and trims the usage log.
+     * Applies the lifetimes (SPEC.md 5.4 `prune`), trims the usage log to 90 days and the
+     * daily counts to [`DAILY_KEEP_DAYS`]. `utc_offset_secs` is the phone's UTC offset now:
+     * the day the counts are kept from, and the date of the usage rows an older version
+     * stored, counted once before the first trim removes them.
      */
-    @Throws(AppException::class)override fun `prune`(`now`: kotlin.ULong): State {
+    @Throws(AppException::class)override fun `prune`(`now`: kotlin.ULong, `utcOffsetSecs`: kotlin.Int): State {
             return FfiConverterTypeState.lift(
     callWithHandle {
     uniffiRustCallWithError(AppException) { _status ->
     UniffiLib.uniffi_sealctl_app_fn_method_store_prune(
         it,
         
-        FfiConverterULong.lower(`now`),_status)
+        FfiConverterULong.lower(`now`),
+        FfiConverterInt.lower(`utcOffsetSecs`),_status)
 }
     }
     )
@@ -2397,6 +2469,26 @@ open class Store: Disposable, AutoCloseable, StoreInterface
     
 
     
+    /**
+     * The usage log from `since` (Unix ms) on, newest first, optionally for one machine: the
+     * days the Activity screen lists (SPEC.md 11.12).
+     */
+    @Throws(AppException::class)override fun `usageSince`(`machine`: kotlin.String?, `since`: kotlin.ULong): List<UsageEntry> {
+            return FfiConverterSequenceTypeUsageEntry.lift(
+    callWithHandle {
+    uniffiRustCallWithError(AppException) { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_method_store_usage_since(
+        it,
+        
+        FfiConverterOptionalString.lower(`machine`),
+        FfiConverterULong.lower(`since`),_status)
+}
+    }
+    )
+    }
+    
+
+    
 
     
 
@@ -2445,6 +2537,53 @@ public object FfiConverterTypeStore: FfiConverter<Store, Long> {
 
     override fun write(value: Store, buf: ByteBuffer) {
         buf.putLong(lower(value))
+    }
+}
+
+
+
+/**
+ * The figures of a day's header in the Activity log.
+ */
+data class ActivityCounts (
+    /**
+     * Entries that handed out keys or were used in a session ("37 uses").
+     */
+    var `uses`: kotlin.UInt
+    , 
+    /**
+     * Entries denied ("2 declined").
+     */
+    var `declined`: kotlin.UInt
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeActivityCounts: FfiConverterRustBuffer<ActivityCounts> {
+    override fun read(buf: ByteBuffer): ActivityCounts {
+        return ActivityCounts(
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ActivityCounts) = (
+            FfiConverterUInt.allocationSize(value.`uses`) +
+            FfiConverterUInt.allocationSize(value.`declined`)
+    )
+
+    override fun write(value: ActivityCounts, buf: ByteBuffer) {
+            FfiConverterUInt.write(value.`uses`, buf)
+            FfiConverterUInt.write(value.`declined`, buf)
     }
 }
 
@@ -2598,6 +2737,62 @@ public object FfiConverterTypeClockNow: FfiConverterRustBuffer<ClockNow> {
     override fun write(value: ClockNow, buf: ByteBuffer) {
             FfiConverterULong.write(value.`now`, buf)
             FfiConverterBoolean.write(value.`fresh`, buf)
+    }
+}
+
+
+
+/**
+ * Uses and declines counted on one local day (SPEC.md 6.4, 11.12): what the Activity heatmap
+ * shows for the last year, after the usage rows behind it are gone.
+ */
+data class DailyCount (
+    /**
+     * `YYYY-MM-DD` by the phone's UTC offset when the use counted.
+     */
+    var `day`: kotlin.String
+    , 
+    /**
+     * Keys used, counted as the month's "keys used".
+     */
+    var `used`: kotlin.ULong
+    , 
+    /**
+     * Deny answers, counted as the month's "requests declined".
+     */
+    var `declined`: kotlin.ULong
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDailyCount: FfiConverterRustBuffer<DailyCount> {
+    override fun read(buf: ByteBuffer): DailyCount {
+        return DailyCount(
+            FfiConverterString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: DailyCount) = (
+            FfiConverterString.allocationSize(value.`day`) +
+            FfiConverterULong.allocationSize(value.`used`) +
+            FfiConverterULong.allocationSize(value.`declined`)
+    )
+
+    override fun write(value: DailyCount, buf: ByteBuffer) {
+            FfiConverterString.write(value.`day`, buf)
+            FfiConverterULong.write(value.`used`, buf)
+            FfiConverterULong.write(value.`declined`, buf)
     }
 }
 
@@ -6929,6 +7124,34 @@ public object FfiConverterSequenceUInt: FfiConverterRustBuffer<List<kotlin.UInt>
 /**
  * @suppress
  */
+public object FfiConverterSequenceULong: FfiConverterRustBuffer<List<kotlin.ULong>> {
+    override fun read(buf: ByteBuffer): List<kotlin.ULong> {
+        val len = buf.getInt()
+        return List<kotlin.ULong>(len) {
+            FfiConverterULong.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.ULong>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterULong.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.ULong>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterULong.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
     override fun read(buf: ByteBuffer): List<kotlin.String> {
         val len = buf.getInt()
@@ -6947,6 +7170,34 @@ public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.Str
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterString.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeDailyCount: FfiConverterRustBuffer<List<DailyCount>> {
+    override fun read(buf: ByteBuffer): List<DailyCount> {
+        val len = buf.getInt()
+        return List<DailyCount>(len) {
+            FfiConverterTypeDailyCount.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<DailyCount>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeDailyCount.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<DailyCount>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeDailyCount.write(it, buf)
         }
     }
 }
@@ -7581,6 +7832,21 @@ object CoreExceptionExternalErrorHandler : UniffiRustCallStatusErrorHandler<Core
     
 
         /**
+         * The counts a day's header shows for its entries: every entry that was allowed is a use,
+         * `denied` is a decline, `expired` is neither (SPEC.md 11.12).
+         */ fun `activityCounts`(`entries`: List<UsageEntry>): ActivityCounts {
+            return FfiConverterTypeActivityCounts.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_func_activity_counts(
+    
+        
+        FfiConverterSequenceTypeUsageEntry.lower(`entries`),_status)
+}
+    )
+    }
+    
+
+        /**
          * The Activity row of `entry`; `machine` is the paired machine it came from, `None` when it
          * is not (or no longer) paired.
          */ fun `activityRow`(`entry`: UsageEntry, `machine`: Machine?): ActivityRow {
@@ -7591,6 +7857,24 @@ object CoreExceptionExternalErrorHandler : UniffiRustCallStatusErrorHandler<Core
         
         FfiConverterTypeUsageEntry.lower(`entry`),
         FfiConverterOptionalTypeMachine.lower(`machine`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The heatmap's level of each day's count (SPEC.md 11.12): 0 for nothing, else 1 to 4 by the
+         * quartiles of the days that have a count, as GitHub's contribution graph does: a count up to
+         * the first quartile is 1, up to the median 2, up to the third quartile 3, above it 4. The
+         * quartiles are interpolated between the sorted counts, so the busiest day stands out even
+         * when only a few days have uses.
+         */ fun `heatLevels`(`counts`: List<kotlin.ULong>): List<kotlin.UInt> {
+            return FfiConverterSequenceUInt.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_func_heat_levels(
+    
+        
+        FfiConverterSequenceULong.lower(`counts`),_status)
 }
     )
     }

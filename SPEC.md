@@ -397,7 +397,7 @@ The app never calls `licence`, `checkout` or `claim`.
 - The app sends the text `ping` every 30 seconds; the relay answers `pong`. No `pong` within 10 seconds means the socket is dead: close and reconnect.
 - The relay also pushes while the socket is open. The app ignores a push for a request it already handled through the socket and shows no notification for it in the foreground.
 - Reconnect after a drop: 1, 2, 4, 8, 16, then every 30 seconds, each with ±20% jitter. At most 60 upgrades an hour, since upgrades count towards the abuse limit.
-- When the app leaves the foreground the socket closes. iOS would suspend it anyway; Android closes it so it does not hold a connection in the background. A foreground that ends before its work starts opens no socket and does not count as foreground, so requests then still show notifications.
+- When the app leaves the foreground the socket closes, however long it was open: a call's time limits (8.1) cover only the socket's upgrade, and the foreground and the ping bound the open socket. A message that still arrives on a closed socket is not acted on; the request waits for its push and the next catch-up. iOS would suspend it anyway; Android closes it so it does not hold a connection in the background. A foreground that ends before its work starts opens no socket and does not count as foreground, so requests then still show notifications.
 
 ### 8.4 Background: push
 

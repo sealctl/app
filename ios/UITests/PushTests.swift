@@ -25,7 +25,11 @@ final class PushTests: SealctlTestCase {
         restoreVectorWords()
         pairFakeMachine()
         XCUIDevice.shared.press(.home)
-        Thread.sleep(forTimeInterval: 2)
+        // The app closes its relay socket when it leaves the foreground (8.3), so the request
+        // reaches it only as the push below. A socket open longer than 30 s used to outlive the
+        // foreground and take the request into the background app (the relay logged "sent to 1
+        // phone socket(s)"), which then opened it there and posted its own notification too.
+        XCTAssertTrue(FakeRelay.untilPhoneSockets(0, timeout: 15), "the app's relay socket outlived its foreground")
         let job = Harness.machine("m1", ["request", "--kind", "open", "--subject", "secret:OPENAI_API_KEY", "--new-key",
                                          "secrets:store-1", "--cmd", "npm test", "--cwd", "~/dev/shop"])
         let id = job.find("sent \\S+ request (\\S+)", timeout: 20)!
@@ -42,26 +46,27 @@ final class PushTests: SealctlTestCase {
         }
         // The extension opens the request with the phone keys and rewrites the text (10.1);
         // without the app group and keychain sharing (an unsigned build) it can't, and the
-        // relay's own text stays. The request's own text also shows when the app, not yet
-        // suspended, got the request over its socket and posted the notification itself.
+        // relay's own text stays.
         let wasRewritten = rewritten.exists
-        XCTContext.runActivity(named: wasRewritten ? "the request's own text (extension or app)" : "notification left as the relay sent it") { _ in }
+        XCTContext.runActivity(named: wasRewritten ? "the request's own text (extension)" : "notification left as the relay sent it") { _ in }
         // Either notification opens this request: both carry its id.
         guard openFromNotification(springboard, titles: ["Allow OPENAI_API_KEY?", "Waiting for your phone"]) else { return }
         card("Allow OPENAI_API_KEY?", 30)
         tap("Allow once")
-        XCTAssertEqual(job.wait(30).0, 0)
+        // A failure carries the app's UI tree, so the run keeps its screenshot.
+        XCTAssertEqual(job.wait(30).0, 0, uiTree(3000))
     }
 
     /// Opens the request from its notification: a tap on its banner when one stands still on
     /// screen, else a tap on its row in Notification Center, where it stays until it is handled.
     /// `titles` are the texts the request's notifications can have.
     ///
-    /// A request can show two banners in a row. When the app's relay socket is still open a moment
-    /// after it went to the background, the request reaches it there and the app posts its own
-    /// notification ("Allow OPENAI_API_KEY?"); the pushed one follows a few seconds later
-    /// (unsigned, the extension leaves the relay's "Waiting for your phone"). Each failed run
-    /// (45281524313, 45276400487, 45315290307) logged the request "sent to 1 phone socket(s)".
+    /// A request could show two banners in a row. When the app's relay socket outlived its
+    /// foreground, the request reached the background app and it posted its own notification
+    /// ("Allow OPENAI_API_KEY?"); the pushed one followed a few seconds later (unsigned, the
+    /// extension leaves the relay's "Waiting for your phone"). Each failed run (45281524313,
+    /// 45276400487, 45315290307) logged the request "sent to 1 phone socket(s)". The socket now
+    /// closes and the test checks it does; the banner handling below stays for any banner.
     ///
     /// - A banner is tapped by coordinate, and only when its frame is whole on screen and the
     ///   same in two reads: a banner sliding away can still report itself hittable, and an

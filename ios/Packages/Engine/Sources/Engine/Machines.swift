@@ -82,6 +82,21 @@ extension AppEngine {
         (try? await db.run { try $0.usage(machine: machine, key: key, limit: limit) }) ?? []
     }
 
+    /// The days of the Activity log (SPEC.md 11.12), all machines' or one machine's.
+    public func activityDays(machine: String?, today: Date = Date(), calendar: Calendar = .current) async -> [ActivityDays.Day] {
+        let newest = await usage(machine: machine, limit: 1).first
+        let since = ActivityDays.since(newest: newest, today: today, calendar: calendar)
+        let entries = (try? await db.run { try $0.usageSince(machine: machine, since: UInt64(since)) }) ?? []
+        return ActivityDays.group(entries, today: today, calendar: calendar)
+    }
+
+    /// The heatmap's cells: the phone's daily counts over the grid (SPEC.md 11.12).
+    public func heatCells(_ grid: HeatGrid) async -> [HeatGrid.Cell] {
+        let from = HeatGrid.iso(grid.start, grid.calendar), to = HeatGrid.iso(grid.today, grid.calendar)
+        let counts = (try? await db.run { try $0.dailyCounts(fromDay: from, toDay: to, utcOffsetSecs: utcOffset()) }) ?? []
+        return grid.cells(counts)
+    }
+
     // MARK: pairing (11.5)
 
     /// Parses a scanned or typed code; the offer or the error text of 11.20.

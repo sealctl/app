@@ -29,6 +29,8 @@ public final class AppEngine {
     public internal(set) var banners = Banners()
     public var toast: Toast?
     public internal(set) var foreground = false
+    /// When the lifetimes were last applied (Unix ms, the corrected clock).
+    var lastPrune: Int64 = 0
     /// The trusted place the phone is inside, from region monitoring.
     public var currentPlace: String?
     /// A place candidate to offer ("Trust this place?").
@@ -228,6 +230,7 @@ public final class AppEngine {
         foreground = true
         notificationsAllowed = await notifier.allowed()
         biometryName = await vault.biometryName()
+        await pruneIfDue()
         guard phase == .ready, !relayDataDeleted, let _ = await phoneKeys() else { return }
         // The relay's time, for every security window (8.1); the snapshot carries it.
         if await relay.relayTime() != nil { writeSnapshot() }
@@ -248,6 +251,15 @@ public final class AppEngine {
         if local.dirty { scheduleUpload(after: 0) }
         await notifier.removeStale(now: nowMs(), answered: answeredIds)
         await registerPush()
+    }
+
+    /// The lifetimes and the usage log's 90 days (SPEC.md 6.4), applied at most once a day
+    /// when the app comes to the foreground; iOS has no daily job for it (10.3).
+    func pruneIfDue() async {
+        let now = clockNow()
+        guard now - lastPrune >= 86_400_000 || now < lastPrune else { return }
+        lastPrune = now
+        if let s = try? await db.run({ try $0.prune(now: UInt64(now), utcOffsetSecs: utcOffset()) }) { state = s }
     }
 
     /// Leave sealctl from step 5 on: the relay data is being deleted or is gone, so foreground

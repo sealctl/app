@@ -197,7 +197,9 @@ Secrets cross the boundary as UniFFI objects that zero their memory when release
 | `merge_state(local, remote) -> State` | Merge when the relay answers `409 conflict` |
 | `encode_state(state) -> bytes` / `decode_state(bytes)` | The plaintext inside the relay state blob, versioned |
 | `place_sample(lat, lon, accuracy, time) -> Option<PlaceCandidate>` | Clustering; returns a candidate when it reaches 3 days |
-| `prune(now)` | Drops answers unused for 90 days; flags machines unseen for 90 days; marks inventory unseen for a year as stale |
+| `prune(now, utc_offset_secs)` | Drops answers unused for 90 days; flags machines unseen for 90 days; marks inventory unseen for a year as stale; trims the usage log to 90 days and the daily counts to 400 days |
+| `usage_since(machine, since)`, `daily_counts(from_day, to_day, utc_offset_secs)` | The Activity log's days and the heatmap's counts (11.12) |
+| `activity_row(entry, machine)`, `activity_counts(entries)`, `heat_levels(counts)` | An Activity row's text, a day's figures, the heatmap's levels (11.12) |
 | `summary(month) -> Summary` | Keys used, requests declined |
 | `nse_snapshot()` | The small read-only file the iOS extension reads (6.4) |
 
@@ -239,7 +241,8 @@ Defined once in `sealctl-app`. "Relay" means the record is part of the encrypted
 | Place candidate | samples (centre, accuracy, day), suppressed flag | Local; samples older than 30 days dropped |
 | Day | machine, first approval time, place id or none | Local; ends at the next 02:00 local time or 14 h after the first approval, whichever is first |
 | Inventory item | purpose, id, words fingerprint, key check, machine, path or URL, size, first use, last use, stale | Relay; kept; stale after a year unseen |
-| Usage entry | time, machine, key or object, agent or "you", repository, command, outcome | Local; 13 months, at most 50,000 entries |
+| Usage entry | time, machine, key or object, agent or "you", repository, command, outcome | Local; 90 days, at most 50,000 entries. "This machine was lost or stolen" (11.17) reads these 90 days |
+| Daily count | local day (`YYYY-MM-DD`), keys used, requests declined | Local; 400 days (the Activity heatmap's 53 weeks and a margin) |
 | Summary | month, keys used, requests declined | Relay; 12 months by the calendar (this month and the 11 before it), however many months had no use; a month after this one (counted by an install whose clock ran ahead) is dropped |
 | Words | fingerprint, written on, last check, retired cards (fingerprint, retired on) | Relay |
 | Change | old and new fingerprint, reason, started, per-machine progress, not-seen list | Relay; until finished |
@@ -250,6 +253,8 @@ Defined once in `sealctl-app`. "Relay" means the record is part of the encrypted
 | Hold | machine, until (one hour after a wrong number) | Local |
 | Delayed action | relay delayed id, what (`unseal_all`, `leave`, `words`, `delete`, or `unknown` for a phone-only action another install started, 11.23), machine, release time, state | Local; until finished, cancelled or expired; the relay holds its own record (19.2) |
 | Hand-back report | machine, plan hash, items with where each went and state, run folder, time | Relay; kept |
+
+**Daily counts.** The Activity heatmap (11.12) shows a year, longer than usage entries are kept, so the phone keeps one row of figures per local day. A day is counted the way the month summary is: "keys used" and "requests declined", on the phone's local day (by the UTC offset the app passes) when the answer was given or the report reached the phone. The count grows in the same database transaction as the usage entry, and only when an entry is stored, so the check that skips a log a machine sends again (it resends until acknowledged) keeps the figures from counting twice. That check needs the stored entry, which goes after 90 days; so an entry a machine reports that is already older than 90 days is neither stored nor counted, in the log, the day or the month: it can no longer be told apart from one counted before. The first time a database from before the daily counts is opened, the usage entries it holds are marked, and the first call that carries the UTC offset (any answer or report, `daily_counts` or `prune`) counts them once, before a prune can remove them: one use per entry (one decline for `denied`, nothing for `expired`), on the entry's own local day. Entries stored after the mark were counted when they were stored.
 
 The local database is one SQLite file:
 
@@ -682,7 +687,7 @@ Actions are the same as on iOS, with the same titles. On Android 12 and later ea
 | WebSocket | Foreground only | Foreground only |
 | Places | `CLMonitor` circular conditions (system region monitoring) | Geofences with `setNotificationResponsiveness(120000)` |
 | Location samples | One fix at the first approval of the day, at most 10 seconds | Same, `getCurrentLocation` with balanced power first, high accuracy if accuracy is above 100 m |
-| Periodic work | None; reminders are scheduled local notifications | One daily `WorkManager` job: prune, sync if due, refresh the FCM token |
+| Periodic work | None; reminders are scheduled local notifications. `prune` runs when the app comes to the foreground, at most once a day | One daily `WorkManager` job: prune, sync if due, refresh the FCM token |
 
 ### 10.4 Notification check
 
@@ -1070,38 +1075,58 @@ When the first `agent` card ever appears, the card shows one extra line under th
 
 ### 11.12 Activity and monthly summary
 
-**Summary** at the top of Activity, for the current month, with the previous months behind a chevron:
+**Summary** at the top of Activity, for the current month, with the previous months behind a chevron. A month's name stands alone, so it takes the language's standalone form with its first letter capitalised ("Listopad" in Polish, not "listopada", the form inside a date), here and behind the chevron:
 
 > **November**
 > 312 keys used on 3 machines
 > 4 requests declined
 > No key was written to disk.
 
-"Keys used" counts uses from replies and from machine reports. "Requests declined" counts Deny answers. Both count in the month by the phone's local time when the answer was given or the report reached the phone (the app passes its UTC offset to `answered`, `apply_status` and `apply_report`; an answer the iOS extension gave counts in the month it was given, 6.4), so a use near midnight on the last day of a month counts in the same month whichever way it arrived. The third line is a fixed statement of how sealctl works. No other figures, no price, no comparison.
+Each figure takes the singular for one: "1 key used on 1 machine", "1 request declined". "Keys used" counts uses from replies and from machine reports. "Requests declined" counts Deny answers. Both count in the month by the phone's local time when the answer was given or the report reached the phone (the app passes its UTC offset to `answered`, `apply_status` and `apply_report`; an answer the iOS extension gave counts in the month it was given, 6.4), so a use near midnight on the last day of a month counts in the same month whichever way it arrived. The third line is a fixed statement of how sealctl works. No other figures, no price, no comparison.
 
-**Log** grouped by day, newest first, two lines per use:
+Hand-back reports follow the summary as cards.
+
+**Log** grouped by day, newest first. The newest day with entries (normally today) is open, two lines per use. Each of the ten calendar days before today that has entries is one closed row: the date (the locale's medium style), its figures and a chevron. A tap opens or closes a day; which days are open is kept in memory only, and the newest day starts open each time the screen is built. Days with no entries are not listed, nor days before those ten (the newest day with entries is listed even when it is older). A day's figures count its entries: "37 uses" for every entry that was allowed, and "2 declined" for Deny answers when there are any; "Expired" counts as neither (`activity_counts`). Activity for one machine (from its detail screen) lists that machine's days the same way.
 
 ```
-24 Nov 2026
+24 Nov 2026                       37 uses · 2 declined  ˄
 09:18  STRIPE_KEY                     In session
        shop · claude · webapp · sealctl run -- npm test · mbp.example.com
 08:54  Volume safe                  Allowed once
        Work laptop
 08:26  Seal volume safe                Confirmed
        mbp.example.com
-22 Nov 2026
-08:35  Secret store a7c3…42            Confirmed
-       sealctl unseal · unpaired (Zq7Lr2Xa)
+23 Nov 2026                                  12 uses  ˅
+22 Nov 2026                        8 uses · 1 declined  ˅
 ```
+
+Each day header is one accessibility element: a button whose label reads the date and the figures and whose value says "Expanded" or "Collapsed".
 
 The time sits in a narrow column with tabular figures. The rows use the text font throughout, not the monospace of 11.1. The top line, in ink, says what was used; the outcome is on its right ("Denied" in the accent colour, "Expired" muted, the others in the secondary ink). The second line is muted and smaller. One accessibility label reads the row in order: time, what, outcome, details. The rows come from `activity_row` in the shared crate (`shared/src/activity.rs`), so both apps show the same text:
 
-- **What was used.** A secret `project/name` shows its name, and the project leads the second line. A volume reads "Volume safe", a backup "Backup r2:acme-backups", an SSH key "SSH key github"; an object asked for by id (an unseal plan, the store key) reads like Inventory, "Secret store a7c3…42". `sealctl seal` reads as the action, "Seal volume safe" (its command is not repeated). The usage entry records the request's subject kind (`kind`) for this; entries from before it, and uses a machine reports from its session (always secret names), are read from the key and the command.
+- **What was used.** A secret `project/name` shows its name, and the project leads the second line. A volume reads "Volume safe", a backup "Backup r2:acme-backups", an SSH key "SSH key github"; an object asked for by id (an unseal plan, the store key) reads like Inventory, "Secret store a7c3…42". `sealctl seal` reads as the action, "Seal volume safe" (its command is not repeated). The usage entry records the request's subject kind (`kind`) for this; entries from before it, and uses a machine reports from its session (always secret names), are read from the key and the command. An SSH signature a machine reports from its session names the stored key `ssh/<name>` (the prefix sealctl keeps SSH keys under, `docs/protocol.md`) with the command "ssh signature with <name>": it reads "SSH key ed25519", as when the card asked, not as a secret `ed25519` in a project `ssh`. A key under `ssh/` used by any other command stays a secret.
 - **The second line,** without empty parts: project · agent · repository · command · machine. The command reads as typed: the CLI sends its arguments without the program name, so "scan" shows as "sealctl scan". A repository equal to the machine's user name is left out: outside a git repository the CLI sends the folder, and the home folder says nothing.
 - **The machine** is its nickname, else its host without `user@` and `.local` (and the tag when two machines share a name); a machine that is not paired shows "unpaired (Zq7Lr2Xa)", the first 8 characters of its key.
 - Every value passes `display_text` (11.7), and UUIDs anywhere in the row are shortened to their first four and last two characters ("5D1E…71").
 
 Outcomes: "One tap", "Answered by itself", "In session" (reported by the machine), "Allowed once", "Denied", "Expired", "Confirmed". Filters: machine, key. Empty: "Nothing yet. Every use of your keys shows here."
+
+**Heatmap** at the bottom of the Activity tab, as GitHub's contribution graph: 53 weeks by 7 days ending today, one column a week starting on the locale's first day of the week, from the daily counts (6.4):
+
+```
+1,204 key uses in the last year
+     Dec      Jan      Feb   …   Oct      Nov
+Mon  ░ ░ ▒ ░ ░ ▓ ░ ░ █ ▒ …
+Wed  ░ ▒ ░ ░ ▓ ░ ░ ▒ ░ ░ …
+Fri  ░ ░ ░ ▒ ░ ░ █ ░ ░ ▒ …
+24 Nov 2026: 37 key uses, 2 declined     Less ░ ▒ ▓ █ More
+```
+
+- The title counts the keys used in the 53 weeks shown ("1 key use", "1,204 key uses", in the locale's digits). Month labels (standalone, short) sit above the week where a month begins; Mon, Wed and Fri label their rows.
+- Each cell is coloured by its keys used: empty for none, then four steps from the soft accent to the accent (`heat` in the design tokens: light `#DD969B`, `#CF7076`, `#C24951`, `#B4232C` on the border grey `#E3E6EC`; dark `#893A3F`, `#B1454B`, `#D85157`, `#FF5C63` on `#242B3A`). The steps are the quartiles of the days that have uses, interpolated, as GitHub does (`heat_levels`): up to the first quartile is the lightest, above the third the darkest. The legend "Less … More" shows the five.
+- The grid scrolls sideways and opens scrolled to today at the right edge. A tap on a day shows its date and figures under the grid ("24 Nov 2026: 37 key uses, 2 declined"); a second tap clears it.
+- Accessibility: the grid is one element. Its label is the title and the busiest day; its value is the chosen day. VoiceOver swipes up and down (adjustable) and TalkBack's actions move a day, and "Previous week" and "Next week" move a week, so every day is reachable without 371 stops. Labels and the legend are hidden from the screen reader.
+- The counts are the phone's, not a machine's, so Activity for one machine has no heatmap.
 
 ### 11.13 Inventory
 
@@ -1728,7 +1753,7 @@ New personal developer accounts must run a closed test with at least 12 testers 
 
 ### 16.1 Rust
 
-- `sealctl-app`: unit tests for `decide` covering every row of 9.3 and 9.6 (a machine's `lvl` raises and never lowers; unknown kinds are level 3; proximity by `near` on Wi-Fi only, by number, by camera; holds; delay by place kind), day boundaries (02:00 local, 14 h, time zones, daylight saving), place clustering, pruning, merge with tombstones, summaries.
+- `sealctl-app`: unit tests for `decide` covering every row of 9.3 and 9.6 (a machine's `lvl` raises and never lowers; unknown kinds are level 3; proximity by `near` on Wi-Fi only, by number, by camera; holds; delay by place kind), day boundaries (02:00 local, 14 h, time zones, daylight saving), place clustering, pruning, merge with tombstones, summaries; the daily counts (a resent log counted once, an entry reported after 90 days counted nowhere, the one backfill, usage entries kept 90 days and counts 400, a use near local midnight on the right day).
 - The corrected clock (8.1), with a fake system clock and since-boot clock: a clock set forward ends no hold, no hand-added place's 24 hours and no level 3 wait early; a clock set back shortens none of them; after a reboot, after 24 hours, or after a signed call that disagrees, the clock is stale and a hand-added place does not lift the delay; a place added by hand on a stale clock set back starts its 24 hours only once the relay's time is learned.
 - Property tests for `merge_state`: the result does not depend on the merge order; deleted records stay deleted.
 - The protocol's test vectors, run through the generated Swift and Kotlin bindings on simulator and emulator, so the bindings and both platforms give the same bytes.
@@ -1762,6 +1787,7 @@ XCUITest and Compose UI tests, each against a fresh fake relay:
 9. Delete relay data; erase this phone; Leave sealctl with two fake machines, one handed back by unpairing itself and one skipped, resumed after the app is killed at each step.
 10. Offline, clock skew, rate limit banners.
 11. Levels 2 and 3 against the fake machine and fake relay: `unseal` of one object near and not near (number asked, right and wrong, hold and release); `unseal --all` at a trusted place and away (delay, countdown, cancel here, cancel from a second fake machine, release fetched by the machine); a plan in parts; keys outside the plan refused; Show words and Delete my relay data with the delay and `finish`; the card check right and wrong; the report screen. Biometrics simulated: matched, failed, not enrolled (level 2 asks the card, level 3 refuses), locked out, enrolment changed (card first, then a new gate), and the first gate (the first pairing and the first Show words ask the card, then Face ID).
+12. Activity: today open, an earlier day closed until tapped and closed again, days before the ten not listed; the heatmap's title and a tapped day's figures.
 
 ### 16.5 Real-device matrix
 

@@ -20,6 +20,15 @@ public enum Palette {
     /// Status colours are separate from the accent; every status also has its word.
     public static let open = Color(light: 0x157F3C, dark: 0x4CC47C)
     public static let waiting = Color(light: 0xB45309, dark: 0xF0A54A)
+    /// The Activity heatmap (SPEC.md 11.12): no use, then four steps from the soft accent to the
+    /// accent, each step clear of the last and the first clear of the card.
+    public static let heat = [
+        Color(light: 0xE3E6EC, dark: 0x242B3A),
+        Color(light: 0xDD969B, dark: 0x893A3F),
+        Color(light: 0xCF7076, dark: 0xB1454B),
+        Color(light: 0xC24951, dark: 0xD85157),
+        Color(light: 0xB4232C, dark: 0xFF5C63),
+    ]
 }
 
 extension Color {

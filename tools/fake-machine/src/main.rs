@@ -163,6 +163,9 @@ struct StatusArgs {
     /// Log entry `command:NAME1+NAME2[:agent[:repo]]`.
     #[arg(long = "log")]
     log: Vec<String>,
+    /// The log entries were made this many seconds ago (a use on an earlier day).
+    #[arg(long = "log-ago", default_value_t = 0)]
+    log_ago: u64,
     /// Include the stored objects as inventory.
     #[arg(long)]
     inventory: bool,
@@ -256,7 +259,7 @@ async fn run(cli: Cli) -> Result<u8> {
                 time: now_ms(),
                 seq: st.status_seq,
                 state: session_state(&args),
-                log: log_entries(&args.log),
+                log: log_entries(&args.log, args.log_ago),
                 inventory: if args.inventory {
                     inventory(&st)
                 } else {
@@ -473,7 +476,7 @@ fn session_state(args: &StatusArgs) -> Option<SessionState> {
     })
 }
 
-fn log_entries(specs: &[String]) -> Vec<LogEntry> {
+fn log_entries(specs: &[String], ago_secs: u64) -> Vec<LogEntry> {
     specs
         .iter()
         .map(|s| {
@@ -487,7 +490,7 @@ fn log_entries(specs: &[String]) -> Vec<LogEntry> {
                 .map(str::to_owned)
                 .collect();
             LogEntry {
-                time: now_ms(),
+                time: now_ms().saturating_sub(ago_secs.saturating_mul(1000)),
                 agent: parts.next().map(str::to_owned),
                 repository: parts.next().map(str::to_owned),
                 command,
@@ -571,7 +574,7 @@ fn build_body(st: &MachineState, a: &RequestArgs) -> Result<RequestBody> {
         body.ctx = None;
         body.seq = Some(st.status_seq + 1);
         body.state = session_state(&a.status);
-        body.log = log_entries(&a.status.log);
+        body.log = log_entries(&a.status.log, a.status.log_ago);
         if a.status.inventory {
             body.inv = inventory(st);
         }

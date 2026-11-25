@@ -367,6 +367,63 @@ public enum Texts {
         ([time, row.subject, row.outcome] + row.details).joined(separator: ", ")
     }
 
+    /// A month on its own, as a title ("November", "Listopad"): the standalone form (`LLLL`),
+    /// which differs from the form inside a date in Polish, Ukrainian, Russian and others
+    /// ("listopada"), with its first letter capitalised for the locale.
+    public static func monthName(_ month: Int, locale: Locale = .current, short: Bool = false) -> String {
+        let f = DateFormatter()
+        f.locale = locale
+        let names = (short ? f.shortStandaloneMonthSymbols : f.standaloneMonthSymbols) ?? []
+        guard (1...names.count).contains(month) else { return "\(month)" }
+        let name = names[month - 1]
+        return name.prefix(1).uppercased(with: locale) + name.dropFirst()
+    }
+
+    /// The summary title of a month `YYYY-MM`.
+    public static func monthTitle(_ ym: String, locale: Locale = .current) -> String {
+        guard let m = Int(ym.split(separator: "-").last ?? "") else { return ym }
+        return monthName(m, locale: locale)
+    }
+
+    /// The month summary's first figure: "312 keys used on 3 machines", "1 key used on 1 machine".
+    public static func keysUsed(_ keys: UInt64, machines: Int) -> String {
+        "\(count(keys, "key", "keys")) used on \(count(UInt64(machines), "machine", "machines"))"
+    }
+
+    /// The month summary's declines: "4 requests declined", "1 request declined".
+    public static func requestsDeclined(_ n: UInt64) -> String { "\(count(n, "request", "requests")) declined" }
+
+    /// `n` and the noun in the English singular for one, else the plural.
+    static func count(_ n: UInt64, _ one: String, _ other: String) -> String { "\(n) \(n == 1 ? one : other)" }
+
+    /// A day's header figures: "37 uses", "1 use · 2 declined".
+    public static func dayCounts(_ c: ActivityCounts) -> String {
+        [c.uses == 1 ? "1 use" : "\(c.uses) uses", c.declined > 0 ? "\(c.declined) declined" : nil]
+            .compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// The heatmap's title: "1,204 key uses in the last year".
+    public static func heatTitle(_ total: UInt64, locale: Locale = .current) -> String {
+        let f = NumberFormatter()
+        f.locale = locale
+        f.numberStyle = .decimal
+        let n = f.string(from: NSNumber(value: total)) ?? "\(total)"
+        return "\(n) key \(total == 1 ? "use" : "uses") in the last year"
+    }
+
+    /// A heatmap day: "Nov 24, 2026: 37 key uses, 2 declined".
+    public static func heatDay(_ date: Date, used: UInt64, declined: UInt64, locale: Locale = .current) -> String {
+        "\(mediumDate(date, locale: locale)): \(used) key \(used == 1 ? "use" : "uses")" + (declined > 0 ? ", \(declined) declined" : "")
+    }
+
+    public static func mediumDate(_ date: Date, locale: Locale) -> String {
+        let f = DateFormatter()
+        f.locale = locale
+        f.dateStyle = .medium
+        f.timeStyle = .none
+        return f.string(from: date)
+    }
+
     // MARK: formatting
 
     public static func time(_ ms: Int64) -> String {

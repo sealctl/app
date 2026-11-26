@@ -460,12 +460,21 @@ public enum Texts {
         return "\(max(m, 1)) min"
     }
 
-    /// "Open, 2 hours 10 minutes left" for VoiceOver.
-    public static func spokenDuration(_ seconds: Int64) -> String {
-        let f = DateComponentsFormatter()
-        f.allowedUnits = seconds >= 3600 ? [.hour, .minute] : [.minute]
-        f.unitsStyle = .full
-        return f.string(from: TimeInterval(max(seconds, 60))) ?? duration(seconds)
+    /// The time to a lock in whole minutes, rounded down (SPEC.md 11.8): "3 h 47 min", "47 min",
+    /// "under a minute".
+    public static func countdown(_ ms: Int64) -> String {
+        ms < 60_000 ? "under a minute" : duration(ms / 1000)
+    }
+
+    /// `countdown` in words for VoiceOver: "3 hours 47 minutes", "47 minutes", "under a minute".
+    public static func spokenCountdown(_ ms: Int64) -> String {
+        if ms < 60_000 { return "under a minute" }
+        let s = ms / 1000
+        func words(_ n: Int64, _ unit: String) -> String { n == 1 ? "1 \(unit)" : "\(n) \(unit)s" }
+        var parts: [String] = []
+        if s >= 3600 { parts.append(words(s / 3600, "hour")) }
+        if s % 3600 >= 60 { parts.append(words((s % 3600) / 60, "minute")) }
+        return parts.joined(separator: " ")
     }
 
     /// "just now", "2 min ago", "yesterday".

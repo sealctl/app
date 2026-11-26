@@ -373,6 +373,18 @@ object Texts {
         }
     }
 
+    /** The time to a lock in whole minutes, rounded down (SPEC.md 11.8): "3 h 47 min", "47 min", "under a minute". */
+    fun countdown(ms: Long): String = if (ms < 60_000) "under a minute" else duration(ms / 1000)
+
+    /** [countdown] in words for TalkBack: "3 hours 47 minutes", "47 minutes", "under a minute". */
+    fun spokenCountdown(ms: Long): String {
+        if (ms < 60_000) return "under a minute"
+        val s = ms / 1000
+        fun words(n: Long, unit: String) = if (n == 1L) "1 $unit" else "$n ${unit}s"
+        return listOfNotNull(words(s / 3600, "hour").takeIf { s >= 3600 }, words((s % 3600) / 60, "minute").takeIf { s % 3600 >= 60 })
+            .joinToString(" ")
+    }
+
     /** "seen 2 min ago", "seen yesterday". */
     fun ago(ms: Long?, now: Long = System.currentTimeMillis()): String {
         if (ms == null || ms == 0L) return "never seen"

@@ -1,6 +1,6 @@
 //! How the phone shows an Open machine's session (SPEC.md 11.8), from its last status: "active"
-//! while the machine works, else how long it has been idle and when it locks. A machine whose
-//! CLI sends no idle time is counted down as before.
+//! while the machine works, else a countdown to when it locks. A machine whose CLI sends no idle
+//! time is counted down the same way.
 //!
 //! [`machine_session`] depends on the status only, so the apps read it once per status and
 //! compare the times it gives with their clock each second ([`MachineSession`]).
@@ -22,9 +22,8 @@ pub const ACTIVE_GRACE_SECS: u64 = 60;
 ///
 /// - not Open any more when `now >= locks_at` ("Locked · last report 3 h ago");
 /// - active while `now < active_until` ("Open · active");
-/// - else idle for `now - last_work` ("Open · idle 12 min · locks at 15:42");
-/// - and, without `last_work` (a CLI that sends no idle time), Open with `locks_at - now` left
-///   ("Open · 2 h 10 min left").
+/// - else Open with `locks_at - now` left, counted down in whole minutes ("Open · locks in 3 h
+///   47 min"), also without `last_work` (a CLI that sends no idle time).
 #[derive(uniffi::Record, Debug, Clone, Default, PartialEq, Eq)]
 pub struct MachineSession {
     /// The last status said Open.

@@ -68,30 +68,56 @@ class MachineCardTest {
         val s = open(14_390, 10, 14_400)
         // no countdown: the same row a second, a minute and two minutes later
         for (later in listOf(0L, 1_000L, min, 2 * min)) assertEquals("Open · active", MachineView.openRow(s, now + later))
+        assertEquals("Open, active", MachineView.spokenOpenRow(s, now))
         assertTrue(MachineView.isActive(s, now + 2 * min))
-        // no status 3 minutes after its last work: idle, counted from that work
+        // no status 3 minutes after its last work: idle, counting down to the time it locks
         assertFalse(MachineView.isActive(s, now + 170_000))
-        assertEquals("Open · idle 3 min · locks at ${Texts.time(now + 14_390_000)}", MachineView.openRow(s, now + 170_000))
+        assertEquals("Open · locks in 3 h 57 min", MachineView.openRow(s, now + 170_000))
     }
 
     @Test
-    fun idleWithTheTimeItLocks() {
+    fun idleCountsDownToTheTimeItLocks() {
+        // locks 3 h 48 min after the report
         val s = open(13_680, 720, 14_400, stop = now + 10 * 60 * min)
-        val at = Texts.time(now + 13_680_000)
-        assertEquals("Open · idle 12 min · locks at $at", MachineView.openRow(s, now))
-        assertEquals("Open · idle 17 min · locks at $at", MachineView.openRow(s, now + 5 * min))
+        assertEquals("Open · locks in 3 h 48 min", MachineView.openRow(s, now))
+        // whole minutes, rounded down, so it changes once a minute
+        assertEquals("Open · locks in 3 h 47 min", MachineView.openRow(s, now + 1))
+        assertEquals("Open · locks in 3 h 47 min", MachineView.openRow(s, now + 59_999))
+        assertEquals("Open · locks in 3 h 47 min", MachineView.openRow(s, now + min))
+        assertEquals("Open · locks in 3 h 46 min", MachineView.openRow(s, now + min + 1))
+        assertEquals("Open · locks in 3 h", MachineView.openRow(s, now + 48 * min))
+        assertEquals("Open · locks in 47 min", MachineView.openRow(s, now + 180 * min + 1))
+        assertEquals("Open · locks in 1 min", MachineView.openRow(s, now + 227 * min))
+        assertEquals("Open · locks in under a minute", MachineView.openRow(s, now + 227 * min + 1))
+        assertEquals("Open · locks in under a minute", MachineView.openRow(s, now + 228 * min - 1))
+        // in words
+        assertEquals("Open, locks in 3 hours 47 minutes", MachineView.spokenOpenRow(s, now + min))
+        assertEquals("Open, locks in 1 hour 1 minute", MachineView.spokenOpenRow(s, now + 167 * min))
+        assertEquals("Open, locks in 2 hours", MachineView.spokenOpenRow(s, now + 108 * min))
+        assertEquals("Open, locks in 47 minutes", MachineView.spokenOpenRow(s, now + 181 * min))
+        assertEquals("Open, locks in under a minute", MachineView.spokenOpenRow(s, now + 228 * min - 1))
         // the hard stop first when it is sooner
         val stop = now + 30 * min
-        assertEquals("Open · idle 12 min · locks at ${Texts.time(stop)}", MachineView.openRow(open(13_680, 720, 14_400, stop), now))
+        assertEquals("Open · locks in 30 min", MachineView.openRow(open(13_680, 720, 14_400, stop), now))
         // past the time it locks: not Open
+        assertNull(MachineView.openRow(s, now + 228 * min))
+        assertNull(MachineView.spokenOpenRow(s, now + 228 * min))
         assertNull(MachineView.openRow(open(600, 3_000, 3_600), now + 10 * min))
     }
 
     @Test
-    fun aCliWithoutIdleTimeCountsDown() {
-        val s = open(600, null, null)
-        assertEquals("Open · 10 min left", MachineView.openRow(s, now))
-        assertEquals("Open · 9 min left", MachineView.openRow(s, now + min))
-        assertNull(MachineView.openRow(s, now + 10 * min))
+    fun aCliWithoutIdleTimeCountsDownTheSameWay() {
+        val s = open(7_800, null, null)
+        assertEquals("Open · locks in 2 h 10 min", MachineView.openRow(s, now))
+        assertEquals("Open · locks in 2 h 9 min", MachineView.openRow(s, now + min))
+        assertEquals("Open, locks in 2 hours 10 minutes", MachineView.spokenOpenRow(s, now))
+        assertNull(MachineView.openRow(s, now + 130 * min))
+    }
+
+    @Test
+    fun anOpenCardIsReadInWords() {
+        val s = open(13_680, 720, 14_400)
+        val v = MachineView(macMini, "Work laptop", MachineState.Open, MachineView.openRow(s, now + min)!!, "", 13_620, spoken = MachineView.spokenOpenRow(s, now + min))
+        assertEquals("Work laptop, Open, locks in 3 hours 47 minutes, Mac mini, seen 1 h ago", v.label(now + min))
     }
 }

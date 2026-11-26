@@ -67,29 +67,52 @@ struct MachineCardTests {
             #expect(MachineView.openRow(s, now: now + later) == "Open · active")
         }
         #expect(MachineView.spokenOpenRow(s, now: now) == "Open, active")
-        // no status 3 minutes after its last work: idle, counted from that work
+        // no status 3 minutes after its last work: idle, counting down to the time it locks
         #expect(!MachineView.isActive(s, now: now + 170_000))
-        #expect(MachineView.openRow(s, now: now + 170_000) == "Open · idle 3 min · locks at \(Texts.time(now + 14_390_000))")
+        #expect(MachineView.openRow(s, now: now + 170_000) == "Open · locks in 3 h 57 min")
     }
 
-    @Test func idleWithTheTimeItLocks() {
+    @Test func idleCountsDownToTheTimeItLocks() {
+        // locks 3 h 48 min after the report
         let s = open(13_680, idle: 720, allow: 14_400, stop: now + 10 * 60 * min)
-        let at = Texts.time(now + 13_680_000)
-        #expect(MachineView.openRow(s, now: now) == "Open · idle 12 min · locks at \(at)")
-        #expect(MachineView.openRow(s, now: now + 5 * min) == "Open · idle 17 min · locks at \(at)")
-        #expect(MachineView.spokenOpenRow(s, now: now) == "Open, idle \(Texts.spokenDuration(720)), locks at \(at)")
+        #expect(MachineView.openRow(s, now: now) == "Open · locks in 3 h 48 min")
+        // whole minutes, rounded down, so it changes once a minute
+        #expect(MachineView.openRow(s, now: now + 1) == "Open · locks in 3 h 47 min")
+        #expect(MachineView.openRow(s, now: now + 59_999) == "Open · locks in 3 h 47 min")
+        #expect(MachineView.openRow(s, now: now + min) == "Open · locks in 3 h 47 min")
+        #expect(MachineView.openRow(s, now: now + min + 1) == "Open · locks in 3 h 46 min")
+        #expect(MachineView.openRow(s, now: now + 48 * min) == "Open · locks in 3 h")
+        #expect(MachineView.openRow(s, now: now + 180 * min + 1) == "Open · locks in 47 min")
+        #expect(MachineView.openRow(s, now: now + 227 * min) == "Open · locks in 1 min")
+        #expect(MachineView.openRow(s, now: now + 227 * min + 1) == "Open · locks in under a minute")
+        #expect(MachineView.openRow(s, now: now + 228 * min - 1) == "Open · locks in under a minute")
+        // in words
+        #expect(MachineView.spokenOpenRow(s, now: now + min) == "Open, locks in 3 hours 47 minutes")
+        #expect(MachineView.spokenOpenRow(s, now: now + 167 * min) == "Open, locks in 1 hour 1 minute")
+        #expect(MachineView.spokenOpenRow(s, now: now + 108 * min) == "Open, locks in 2 hours")
+        #expect(MachineView.spokenOpenRow(s, now: now + 181 * min) == "Open, locks in 47 minutes")
+        #expect(MachineView.spokenOpenRow(s, now: now + 228 * min - 1) == "Open, locks in under a minute")
         // the hard stop first when it is sooner
         let stop = now + 30 * min
-        #expect(MachineView.openRow(open(13_680, idle: 720, allow: 14_400, stop: stop), now: now)
-            == "Open · idle 12 min · locks at \(Texts.time(stop))")
+        #expect(MachineView.openRow(open(13_680, idle: 720, allow: 14_400, stop: stop), now: now) == "Open · locks in 30 min")
         // past the time it locks: not Open
+        #expect(MachineView.openRow(s, now: now + 228 * min) == nil)
+        #expect(MachineView.spokenOpenRow(s, now: now + 228 * min) == nil)
         #expect(MachineView.openRow(open(600, idle: 3_000, allow: 3_600), now: now + 10 * min) == nil)
     }
 
-    @Test func aCliWithoutIdleTimeCountsDown() {
-        let s = open(600, idle: nil, allow: nil)
-        #expect(MachineView.openRow(s, now: now) == "Open · 10 min left")
-        #expect(MachineView.openRow(s, now: now + min) == "Open · 9 min left")
-        #expect(MachineView.openRow(s, now: now + 10 * min) == nil)
+    @Test func aCliWithoutIdleTimeCountsDownTheSameWay() {
+        let s = open(7_800, idle: nil, allow: nil)
+        #expect(MachineView.openRow(s, now: now) == "Open · locks in 2 h 10 min")
+        #expect(MachineView.openRow(s, now: now + min) == "Open · locks in 2 h 9 min")
+        #expect(MachineView.spokenOpenRow(s, now: now) == "Open, locks in 2 hours 10 minutes")
+        #expect(MachineView.openRow(s, now: now + 130 * min) == nil)
+    }
+
+    @Test func anOpenCardIsReadInWords() {
+        let s = open(13_680, idle: 720, allow: 14_400)
+        let v = MachineView(machine: macMini, name: "Work laptop", state: .open, row: MachineView.openRow(s, now: now + min)!,
+                            detail: "", leftSecs: 13_620, spokenOpen: MachineView.spokenOpenRow(s, now: now + min))
+        #expect(v.label(now: now + min) == "Work laptop, Open, locks in 3 hours 47 minutes, Mac mini, seen 1 h ago")
     }
 }

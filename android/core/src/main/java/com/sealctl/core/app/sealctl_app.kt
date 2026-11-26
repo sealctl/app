@@ -4117,9 +4117,8 @@ public object FfiConverterTypeMachineSeen: FfiConverterRustBuffer<MachineSeen> {
  *
  * - not Open any more when `now >= locks_at` ("Locked · last report 3 h ago");
  * - active while `now < active_until` ("Open · active");
- * - else idle for `now - last_work` ("Open · idle 12 min · locks at 15:42");
- * - and, without `last_work` (a CLI that sends no idle time), Open with `locks_at - now` left
- * ("Open · 2 h 10 min left").
+ * - else Open with `locks_at - now` left, counted down in whole minutes ("Open · locks in 3 h
+ * 47 min"), also without `last_work` (a CLI that sends no idle time).
  */
 data class MachineSession (
     /**

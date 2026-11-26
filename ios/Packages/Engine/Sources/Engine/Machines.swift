@@ -258,7 +258,9 @@ extension AppEngine {
                     await applyLocal(.putDelayed(action: d))
                 }
                 await untrustCancelled(id)
-            } else if e.code == "gone", var d = local.delayed.first(where: { $0.id == id }) {
+            } else if e.code == "gone" || ((400..<500).contains(e.status) && ![401, 408, 429].contains(e.status)),
+                      var d = local.delayed.first(where: { $0.id == id }) {
+                // Gone, or another answer that will not change: not asked again; the row offers Confirm again.
                 d.state = "gone"
                 await applyLocal(.putDelayed(action: d))
             }

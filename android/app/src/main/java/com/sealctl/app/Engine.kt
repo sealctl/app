@@ -1093,9 +1093,13 @@ class Engine(
         try {
             relay.finishDelayed(id)
         } catch (e: RelayException) {
-            when (e.code) {
-                "cancelled" -> delayedCancelled(id, e.body.strOrNull("by"))
-                "gone" -> local.value.delayed.firstOrNull { it.id == id }?.let { applyLocal(LocalEvent.PutDelayed(it.copy(state = "gone"))) }
+            when {
+                e.code == "cancelled" -> delayedCancelled(id, e.body.strOrNull("by"))
+                // Gone, or another answer that will not change: not asked again; the row offers Confirm again.
+                e.code == "gone" || CancelResends.isFinal(e) -> {
+                    local.value.delayed.firstOrNull { it.id == id }?.let { applyLocal(LocalEvent.PutDelayed(it.copy(state = "gone"))) }
+                    takeBackReady(id)
+                }
             }
             return
         } catch (e: IOException) {
@@ -1180,7 +1184,7 @@ class Engine(
         val d = local.value.delayed.firstOrNull { it.id == id } ?: return
         val now = System.currentTimeMillis()
         val phase = delayPhase(d, now.toULong())
-        // An alarm never fires early; a phone clock ahead of the relay's may make it look so.
+        // An alarm never fires early; the phone's clock set back since it was set may make it look so.
         if (!Ready.isOwn(d) || (phase != DelayPhase.READY && phase != DelayPhase.WAITING)) return
         Notify.show(context, Notify.SENSITIVE, Ready.tag(id), Texts.ready(d.what), Texts.readyNote(d.expires.toLong()),
             timeoutMs = d.expires.toLong() - now, screen = "delayed:$id")

@@ -946,8 +946,10 @@ class Engine(
 
     // ---------- delayed approvals (SPEC.md 11.23) ----------
 
-    /** Returns whether the relay's list was fetched. */
-    suspend fun refreshDelayed(): Boolean {
+    /** Returns whether the relay's list was fetched. Main-safe: the store is read off the main thread. */
+    suspend fun refreshDelayed(): Boolean = withContext(Dispatchers.Default) { refreshDelayedHere() }
+
+    private suspend fun refreshDelayedHere(): Boolean {
         if (phoneKeys() == null) return false
         val list = runCatching { relay.listDelayed() }.getOrNull() ?: return false
         for (d in list) {
@@ -1002,7 +1004,7 @@ class Engine(
      * whatever the relay answers; one the relay did not get is sent again from its list
      * ([refreshDelayed]). Returns whether the relay took it.
      */
-    suspend fun cancelDelayed(id: String): Boolean {
+    suspend fun cancelDelayed(id: String): Boolean = withContext(Dispatchers.Default) {
         val d = local.value.delayed.firstOrNull { it.id == id }
         val failed = Plans.cancelFromPhone(relayCancel = { relay.cancelDelayed(id) }) {
             val (mine, plans) = Plans.cancelledHere(local.value.delayed, local.value.plans, id)
@@ -1013,7 +1015,7 @@ class Engine(
         }
         failed?.let { relayFailed(it) }
         scope.launch { sendNotice(d?.what ?: "unseal_all", "cancelled", d?.machine, id, d?.releaseAt?.toLong()) }
-        return failed == null
+        failed == null
     }
 
     /** A cancelled action on the phone: no "Ready" note at its end (SPEC.md 11.23). */
@@ -1092,10 +1094,10 @@ class Engine(
         }.getOrElse { relayFailed(it as? Exception ?: Exception()); false }
     }
 
-    suspend fun lockAll(): Int {
+    suspend fun lockAll(): Int = withContext(Dispatchers.Default) {
         var n = 0
-        for (m in liveMachines()) if (MachineView.of(m, this).state == com.sealctl.designsystem.MachineState.Open && lock(m)) n++
-        return n
+        for (m in liveMachines()) if (MachineView.of(m, this@Engine).state == com.sealctl.designsystem.MachineState.Open && lock(m)) n++
+        n
     }
 
     suspend fun unpair(machine: Machine): Boolean {
@@ -1109,8 +1111,9 @@ class Engine(
         }
     }
 
-    suspend fun refreshMachines() {
-        val list = runCatching { relay.machines() }.getOrNull() ?: return
+    /** Main-safe, like [refreshStatus] and [refreshDelayed]: screens call them while on show. */
+    suspend fun refreshMachines(): Unit = withContext(Dispatchers.Default) {
+        val list = runCatching { relay.machines() }.getOrNull() ?: return@withContext
         apply(Event.MachinesListed(list.map { MachineSeen(it.machine, it.lastSeen?.toULong()) }))
         val keys = list.map { it.machine }.toSet()
         relayMachines.value = keys
@@ -1124,9 +1127,9 @@ class Engine(
     /** Machines the relay lists as paired, for Leave sealctl (SPEC.md 11.22 step 2). */
     val relayMachines = MutableStateFlow<Set<String>?>(null)
 
-    suspend fun refreshStatus() {
-        val keys = phoneKeys() ?: return
-        val list = runCatching { relay.status() }.getOrNull() ?: return
+    suspend fun refreshStatus(): Unit = withContext(Dispatchers.Default) {
+        val keys = phoneKeys() ?: return@withContext
+        val list = runCatching { relay.status() }.getOrNull() ?: return@withContext
         for (s in list) {
             if (machine(s.machine) == null) continue
             val st = runCatching { openMachineStatus(keys, s.machine, s.sealed) }.getOrNull() ?: continue
@@ -1376,7 +1379,13 @@ class Engine(
     }
 }
 
+/**
+ * A store call: its errors are logged (debug builds) and become null. In debug builds a call on
+ * the main thread also shows in logcat as a StrictMode slow call: the store is one connection
+ * behind a lock that a sync, prune or report may hold, so the screens read it off the main thread.
+ */
 inline fun <T> safe(block: () -> T): T? = try {
+    if (BuildConfig.DEBUG) android.os.StrictMode.noteSlowCall("sealctl store")
     block()
 } catch (e: Exception) {
     dlog("store: ${e.javaClass.simpleName}")

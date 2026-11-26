@@ -53,6 +53,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
   phone asked, instead of "ed25519" with "ssh" repeated in its details.
 - The month summary says "1 key used on 1 machine" and "1 request declined" for one, instead of
   "1 keys", "1 machines" and "1 requests".
+- Android: the app no longer stops taking taps after the approval card was swiped down, tapped
+  outside or closed with back. The card stays until it is answered or closed, as on iPhone; back
+  leaves the app with the card still waiting, and closes a card whose request stopped waiting.
+- Android: no more pauses when the app comes back or Activity opens. The Activity days, the
+  heatmap and "This machine was lost or stolen" read the phone's store off the main thread;
+  Activity draws only the uses on screen and redraws only what changed; the Machines tab
+  redraws only the parts that count the seconds.
+- Android: a screen left open in the background no longer keeps working there. Its countdowns
+  and its relay checks (every 5 s while leaving sealctl, every 15 s on a delay) stop when the app
+  leaves the screen and run again at once when it comes back.
 
 ## 0.1.0
 

@@ -16,8 +16,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -64,8 +64,10 @@ import com.sealctl.vault.AuthResult
 import com.sealctl.relay.ConflictException
 import com.sealctl.relay.RelayException
 import com.sealctl.relay.contentOrNull
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -390,8 +392,7 @@ fun MachineDetailScreen(activity: MainActivity, key: String) {
     val local by engine.local.collectAsState()
     val m = state.machines.firstOrNull { it.key == key && !it.deleted }
     val scope = rememberCoroutineScope()
-    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(Unit) { while (true) { delay(1000); now = System.currentTimeMillis() } }
+    val now by rememberNow()
     var confirmUnpair by remember { mutableStateOf(false) }
     var releaseError by remember { mutableStateOf<String?>(null) }
     var gateCard by remember { mutableStateOf<GateResult?>(null) }
@@ -412,7 +413,9 @@ fun MachineDetailScreen(activity: MainActivity, key: String) {
         GateCardWords(activity, why, onPassed = { gateCard = null; scope.launch { release() } }, onCancel = { gateCard = null })
         return
     }
-    val v = MachineView.of(m, engine, now)
+    val name = remember(m) { com.sealctl.core.app.machineShortName(m) }
+    val model = remember(m) { MachineView.modelOf(m) }
+    val v = MachineView.of(m, engine, now, name, model)
     val tag = remember(key) { runCatching { com.sealctl.core.machineTag(key) }.getOrDefault("") }
     Page(null) {
         Row(verticalAlignment = Alignment.CenterVertically) { Mono(Texts.shown(m.name, 0), size = 18, weight = FontWeight.SemiBold); Text("  "); Mono("#$tag", color = Sealctl.colors.muted) }
@@ -448,9 +451,14 @@ fun LostMachineScreen(key: String) {
     val state by engine.state.collectAsState()
     val m = state.machines.firstOrNull { it.key == key }
     val scope = rememberCoroutineScope()
-    val since = System.currentTimeMillis() - 90L * 86_400_000
-    val used = remember(key) { com.sealctl.app.safe { engine.store.usage(key, null, 1000u) } ?: emptyList() }
-        .filter { it.time.toLong() > since && it.key.isNotEmpty() }.groupBy { it.key }.map { (k, l) -> k to l.maxOf { it.time.toLong() } }
+    // The machine's keys of the last 90 days, read from the store off the main thread.
+    val used by produceState(emptyList<Pair<String, Long>>(), key) {
+        value = withContext(Dispatchers.IO) {
+            val since = System.currentTimeMillis() - 90L * 86_400_000
+            (com.sealctl.app.safe { engine.store.usage(key, null, 1000u) } ?: emptyList())
+                .filter { it.time.toLong() > since && it.key.isNotEmpty() }.groupBy { it.key }.map { (k, l) -> k to l.maxOf { it.time.toLong() } }
+        }
+    }
     val held = state.inventory.filter { it.machine == key && !it.deleted && it.purpose in setOf("volume", "backup") }
     Page(null, bottom = { PrimaryButton("Done", { Ui.pop() }) }) {
         Title("${m?.name?.let { Texts.shown(it, Texts.MAX_NAME) } ?: "This machine"} was lost or stolen")
@@ -492,8 +500,7 @@ private fun PhoneAction(
     var done by remember { mutableStateOf<String?>(null) }
     var cardCheck by remember { mutableStateOf<GateResult?>(null) }
     val pending = local.delayed.lastOrNull { it.what == what && it.state in setOf("waiting", "released") }
-    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(Unit) { while (true) { delay(1000); now = System.currentTimeMillis() } }
+    val now by rememberNow()
     suspend fun run() {
         error = null
         done = onRun()

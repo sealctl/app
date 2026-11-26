@@ -3,6 +3,7 @@ package com.sealctl.app
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import android.os.StrictMode
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -14,6 +15,7 @@ import kotlinx.coroutines.launch
 class SealctlApp : Application(), NotifyHost, PlacesHost {
     override fun onCreate() {
         super.onCreate()
+        if (BuildConfig.DEBUG) strictMode()
         Graph.init(this)
         Notify.createChannels(this)
         DailyWorker.schedule(this)
@@ -36,6 +38,18 @@ class SealctlApp : Application(), NotifyHost, PlacesHost {
 
             override fun onStop(owner: LifecycleOwner) = engine.onBackground()
         })
+    }
+
+    /**
+     * Debug builds only: disk and network use on the main thread are logged ("StrictMode" in
+     * logcat), with the store's calls among them. The store is Rust (SQLite behind one lock),
+     * which StrictMode cannot see by itself, so [safe] reports each call as a slow call.
+     */
+    private fun strictMode() {
+        StrictMode.setThreadPolicy(
+            StrictMode.ThreadPolicy.Builder().detectDiskReads().detectDiskWrites().detectNetwork().detectCustomSlowCalls()
+                .penaltyLog().build(),
+        )
     }
 
     override fun onPush(type: String, id: String?, expires: Long) = Graph.engine.onPush(type, id, expires)

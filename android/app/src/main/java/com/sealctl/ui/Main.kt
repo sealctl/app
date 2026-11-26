@@ -27,10 +27,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -44,13 +44,19 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.sealctl.app.Graph
 import com.sealctl.app.MachineView
 import com.sealctl.app.MainActivity
 import com.sealctl.app.Route
 import com.sealctl.app.Texts
 import com.sealctl.app.Ui
+import com.sealctl.app.Waiting
 import com.sealctl.core.app.Asking
+import com.sealctl.core.app.DelayedAction
+import com.sealctl.core.app.LocalState
+import com.sealctl.core.app.Machine
+import com.sealctl.core.app.machineShortName
 import com.sealctl.designsystem.Banner
 import com.sealctl.designsystem.MachineState
 import com.sealctl.designsystem.Mono
@@ -60,7 +66,6 @@ import com.sealctl.designsystem.Sealctl
 import com.sealctl.designsystem.StateLabel
 import com.sealctl.designsystem.SurfaceCard
 import com.sealctl.notify.Notify
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -97,7 +102,7 @@ fun MainScreen(activity: MainActivity) {
             is Route.Report -> ReportScreen(top.id)
             is Route.Delayed -> DelayedScreen(top.id)
             is Route.Sensitive -> SensitiveScreen(activity, top.requestId)
-            is Route.Activity -> Page("Activity") { ActivityList(top.machine) }
+            is Route.Activity -> ActivityScreen("Activity", onBack = { Ui.pop() }, top.machine)
             is Route.Inventory -> Page("Inventory") { InventoryList(top.machine) }
         }
         // The approval card: a sheet over any screen (SPEC.md 11.7).
@@ -115,7 +120,7 @@ private fun Tabs() {
         Box(Modifier.weight(1f)) {
             when (tab) {
                 0 -> MachinesTab()
-                1 -> Page("Activity", onBack = null) { ActivityList(null) }
+                1 -> ActivityScreen("Activity", onBack = null, machine = null)
                 2 -> Page("Inventory", onBack = null) { InventoryList(null) }
                 else -> SettingsTab()
             }
@@ -142,28 +147,32 @@ private fun MachinesTab() {
     val local by engine.local.collectAsState()
     val context = ctx()
     val scope = rememberCoroutineScope()
-    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(Unit) { while (true) { delay(1000); now = System.currentTimeMillis() } }
-    val views = remember(state, waiting, now, local) { MachineView.sorted(state.machines.filter { !it.deleted }.map { MachineView.of(it, engine, now) }) }
+    // Read by the parts that count time, not here: the tab itself recomposes only on a change.
+    val clock = rememberNow()
+    // System settings the person may change and come back from: read on each return, not on
+    // every recomposition (each is a call into the system).
+    fun restricted() = context.getSystemService(android.app.ActivityManager::class.java)?.isBackgroundRestricted == true
+    var notificationsOff by remember { mutableStateOf(!Notify.allowed(context)) }
+    var backgroundRestricted by remember { mutableStateOf(restricted()) }
+    LifecycleResumeEffect(Unit) {
+        notificationsOff = !Notify.allowed(context)
+        backgroundRestricted = restricted()
+        onPauseOrDispose {}
+    }
+    // The short names and models come from the shared core: once per change of the machines, not every second.
+    val machines = remember(state.machines) {
+        state.machines.filter { !it.deleted }.map { Named(it, machineShortName(it), MachineView.modelOf(it)) }
+    }
     Page("Machines", onBack = null) {
         if (banners.offline) Banner(Texts.OFFLINE)
         else if (banners.relayDown) Banner(Texts.RELAY_DOWN)
-        if (banners.rateLimitedUntil > now) Banner(Texts.rateLimited(banners.rateLimitedUntil))
+        RateLimitedBanner(banners.rateLimitedUntil, clock)
         if (banners.clockSkew) Banner(Texts.CLOCK) { TextButton({ context.startActivity(android.content.Intent(android.provider.Settings.ACTION_DATE_SETTINGS).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }) { Text("Open settings") } }
         if (banners.signatureRefused) Banner(Texts.SIGNATURE)
-        if (!Notify.allowed(context)) Banner(Texts.NOTIFICATIONS_OFF) { TextButton({ openAppSettings(context) }) { Text("Open settings") } }
-        val am = context.getSystemService(android.app.ActivityManager::class.java)
-        if (am?.isBackgroundRestricted == true) Banner(Texts.BACKGROUND_RESTRICTED) { TextButton({ openAppSettings(context) }) { Text("Open settings") } }
+        if (notificationsOff) Banner(Texts.NOTIFICATIONS_OFF) { TextButton({ openAppSettings(context) }) { Text("Open settings") } }
+        if (backgroundRestricted) Banner(Texts.BACKGROUND_RESTRICTED) { TextButton({ openAppSettings(context) }) { Text("Open settings") } }
         PlacesAlwaysBanner()
-        for (d in local.delayed.filter { it.state == "waiting" && it.releaseAt.toLong() > now }) {
-            val name = d.machine?.let { k -> engine.machine(k)?.let { engine.displayName(it) } } ?: "This phone"
-            Banner(Texts.delayedAt(d.what, name, d.releaseAt.toLong()), tone = Sealctl.colors.accentSoft) {
-                Row {
-                    TextButton({ Ui.push(Route.Delayed(d.id)) }) { Text("Show") }
-                    TextButton({ scope.launch { engine.cancelDelayed(d.id) } }) { Text("Cancel") }
-                }
-            }
-        }
+        DelayedBanners(local.delayed, clock) { id -> scope.launch { engine.cancelDelayed(id) } }
         val waitingCount = waiting.count { !it.expired }
         if (waitingCount > 0) Banner("$waitingCount waiting on this phone", tone = Sealctl.colors.accentSoft) {
             TextButton({
@@ -171,12 +180,12 @@ private fun MachinesTab() {
                 if (w.verdict.asking == Asking.IN_APP) Ui.push(Route.Sensitive(w.relay.id)) else Ui.focusRequest.value = w.relay.id
             }) { Text("Show") }
         }
-        if (views.isEmpty()) {
+        if (machines.isEmpty()) {
             Gap(24)
             Muted("No machines yet. On your computer, run `sealctl pair` and scan the code.")
             PrimaryButton("Scan code", { Ui.push(Route.Pair()) })
         } else {
-            for (v in views) MachineRow(v)
+            MachineList(machines, waiting, local, clock)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 com.sealctl.designsystem.SecondaryButton("Pair a machine", { Ui.push(Route.Pair()) }, Modifier.weight(1f))
                 com.sealctl.designsystem.SecondaryButton("Lock all", {
@@ -187,15 +196,52 @@ private fun MachinesTab() {
     }
 }
 
+/** A machine with its short name and model, as the shared core gives them. */
+private data class Named(val machine: Machine, val name: String, val model: String?)
+
+@Composable
+private fun RateLimitedBanner(until: Long, clock: State<Long>) {
+    if (until > clock.value) Banner(Texts.rateLimited(until))
+}
+
+/** "Unseal all starts at 14:05 on …" for each delayed approval still counting down (11.23). */
+@Composable
+private fun DelayedBanners(delayed: List<DelayedAction>, clock: State<Long>, onCancel: (String) -> Unit) {
+    val engine = Graph.engine
+    val now = clock.value
+    for (d in delayed.filter { it.state == "waiting" && it.releaseAt.toLong() > now }) {
+        val name = d.machine?.let { k -> engine.machine(k)?.let { engine.displayName(it) } } ?: "This phone"
+        Banner(Texts.delayedAt(d.what, name, d.releaseAt.toLong()), tone = Sealctl.colors.accentSoft) {
+            Row {
+                TextButton({ Ui.push(Route.Delayed(d.id)) }) { Text("Show") }
+                TextButton({ onCancel(d.id) }) { Text("Cancel") }
+            }
+        }
+    }
+}
+
+/**
+ * The machines in their order (11.17), from the machines and names read once per change. Only
+ * this part follows the clock: the waiting time, the time left and "seen … ago" each second.
+ * [waiting] and [local] are what [MachineView.of] reads besides: a change to them redraws it.
+ */
+@Composable
+private fun MachineList(machines: List<Named>, @Suppress("UNUSED_PARAMETER") waiting: List<Waiting>, @Suppress("UNUSED_PARAMETER") local: LocalState, clock: State<Long>) {
+    val engine = Graph.engine
+    val now = clock.value
+    val views = MachineView.sorted(machines.map { MachineView.of(it.machine, engine, now, it.name, it.model) })
+    for (v in views) MachineRow(v, now)
+}
+
 /** A machine on the list (11.17): its short name, its state, then the model and when it was seen. */
 @Composable
-private fun MachineRow(v: MachineView) {
-    SurfaceCard(Modifier.clickable { Ui.push(Route.MachineDetail(v.machine.key)) }.clearAndSetSemantics { contentDescription = v.label() }) {
+private fun MachineRow(v: MachineView, now: Long) {
+    SurfaceCard(Modifier.clickable { Ui.push(Route.MachineDetail(v.machine.key)) }.clearAndSetSemantics { contentDescription = v.label(now) }) {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(v.name, fontWeight = FontWeight.SemiBold, color = Sealctl.colors.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
             StateLabel(v.state, v.row)
-            Muted(v.sub())
-            v.unseen()?.let { Text(it, color = Sealctl.colors.waiting, fontSize = 14.sp) }
+            Muted(v.sub(now))
+            v.unseen(now)?.let { Text(it, color = Sealctl.colors.waiting, fontSize = 14.sp) }
         }
     }
 }

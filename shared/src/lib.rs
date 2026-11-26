@@ -18,6 +18,7 @@ pub mod merge;
 pub mod model;
 pub mod places;
 pub mod prune;
+pub mod session;
 pub mod store;
 
 pub use sealctl_core;

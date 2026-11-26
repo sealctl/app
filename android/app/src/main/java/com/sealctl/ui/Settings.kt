@@ -415,7 +415,8 @@ fun MachineDetailScreen(activity: MainActivity, key: String) {
     }
     val name = remember(m) { com.sealctl.core.app.machineShortName(m) }
     val model = remember(m) { MachineView.modelOf(m) }
-    val v = MachineView.of(m, engine, now, name, model)
+    val session = remember(m) { MachineView.sessionOf(m) }
+    val v = MachineView.of(m, engine, now, name, model, session)
     val tag = remember(key) { runCatching { com.sealctl.core.machineTag(key) }.getOrDefault("") }
     Page(null) {
         Row(verticalAlignment = Alignment.CenterVertically) { Mono(Texts.shown(m.name, 0), size = 18, weight = FontWeight.SemiBold); Text("  "); Mono("#$tag", color = Sealctl.colors.muted) }

@@ -14,6 +14,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Changed
 
+- Machines: an Open machine that is being worked on shows "Open · active" instead of a time
+  left that read about the full idle allowance while you typed. Once it is idle it shows
+  "Open · idle 12 min · locks at 15:42" (the hard stop when that comes first), and "active"
+  again when work resumes. The detail of an active machine adds "Locks after 4 h idle."; on
+  iPhone VoiceOver reads "Open, active". A machine whose CLI does not send its idle time yet
+  counts down as before. The machine's time left now stops at its hard stop.
 - Activity: the newest day is open and each of the ten days before today with uses is one row
   with its figures ("37 uses · 2 declined"); a tap opens or closes it. Older days are no longer
   listed. The same for one machine's Activity.

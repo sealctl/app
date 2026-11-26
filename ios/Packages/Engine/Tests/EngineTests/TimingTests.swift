@@ -831,6 +831,26 @@ extension TimingTests {
         #expect(delete.id != a.id)
     }
 
+    /// Each kind has its own turn (11.23): while a Show words start waits for the relay's answer
+    /// (a slow or hanging call), a Delete starts and gets its own record.
+    @Test func aSlowStartOfOneKindDoesNotHoldBackAnother() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, _, _) = try await paired(relay)
+        try await relay.control("/test/hold", #"{"method": "POST", "path": "/delayed"}"#)
+        let words = Task { try await engine.startPhoneAction("words") }
+        #expect(try await relay.untilHeld("/delayed"))
+        // Show words' answer is still held: Delete's call reaches the relay all the same.
+        let delete = Task { try await engine.startPhoneAction("delete") }
+        #expect(try await relay.untilHeld("/delayed", count: 2))
+        try await relay.control("/test/release", #"{"path": "/delayed"}"#)
+        let w = try #require(try await words.value)
+        let d = try #require(try await delete.value)
+        #expect((w.what, d.what) == ("words", "delete"))
+        #expect(w.id != d.id)
+        #expect(try await engine.relay.listDelayed().count == 2)
+    }
+
     /// At a trusted place there is no delay: the start goes ahead at once (nil), the relay keeps
     /// no record and no "Ready" note is scheduled. One started away and still waiting is shown
     /// instead, also at the desk; once cancelled, the desk start goes ahead (11.23).
@@ -962,6 +982,50 @@ extension TimingTests {
         let id3 = try #require(engine.state.places.first { $0.id == "p3" }?.trustId)
         await engine.removePlace("p3")
         #expect(try await engine.relay.listDelayed().first { $0.id == id3 }?.state == "cancelled")
+    }
+
+    /// A refresh whose list was read before the place was confirmed still says `released`: the
+    /// place is not finished again (no second `finish` reaches the relay), and its record keeps
+    /// "finished", also when a later answer says `404 gone` (11.9, 11.23).
+    @Test func aConfirmedPlaceIsNotFinishedAgainAndStaysFinished() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, _, _) = try await paired(relay, places: StubPlaces())
+        #expect(await engine.trustPlace(TrustedPlace(id: "p1", name: "Home", lat: 0, lon: 0, radius: 150, created: 0,
+                                                     updated: 0, deleted: false, manual: true)))
+        let p = try #require(engine.state.places.first { $0.id == "p1" })
+        let id = try #require(p.trustId)
+        try await Task.sleep(for: .milliseconds(Int(Int64(p.trustFrom) - nowMs()) + 300))
+        // The relay's list is read (released), its answer held; meanwhile the place is confirmed.
+        try await relay.control("/test/hold", #"{"method": "GET", "path": "/delayed"}"#)
+        let stale = Task { await engine.refreshDelayed() }
+        #expect(try await relay.untilHeld("/delayed"))
+        await engine.confirmPlace(id)
+        #expect(engine.local.delayed.first { $0.id == id }?.state == "finished")
+        let trustedAt = try #require(engine.state.places.first { $0.id == "p1" }?.trustedAt)
+        #expect(trustedAt > 0)
+        // A finish sent from here on gets this 503 first; still there at the end, none went out.
+        try await relay.control("/test/fail", #"{"path": "/finish", "status": 503, "error": "internal"}"#)
+        try await relay.control("/test/release", #"{"path": "/delayed"}"#)
+        #expect(await stale.value)
+        #expect(await engine.refreshDelayed())
+        await engine.confirmPlace(id)
+        #expect(engine.local.delayed.first { $0.id == id }?.state == "finished")
+        #expect(engine.state.places.first { $0.id == "p1" }?.trustedAt == trustedAt)
+        for want in ["internal", "gone"] {
+            // The 503 left over, then the relay's own answer: 404 gone.
+            do {
+                _ = try await engine.relay.finishDelayed(id)
+                Issue.record("the relay finished it twice")
+            } catch let e as RelayError {
+                #expect(e.code == want)
+            }
+        }
+        // That 404 written as the engine writes it does not replace "finished".
+        var gone = try #require(engine.local.delayed.first { $0.id == id })
+        gone.state = "gone"
+        await engine.applyLocal(.putDelayed(action: gone))
+        #expect(engine.local.delayed.first { $0.id == id }?.state == "finished")
     }
 }
 #endif

@@ -200,8 +200,10 @@ class Engine(
     private val cancelResends = CancelResends()
     /** Delayed ids this install is registering with the relay (SPEC.md 11.23). */
     private val startingDelayed = StartingDelayed()
-    /** One start of an action on the phone at a time: a second tap finds the first's record. */
+    /** One start of each kind of action on the phone at a time: a second tap finds the first's record. */
     private val phoneStarts = PhoneActionStarts()
+    /** Places this install announced whose `finish` is on its way: each is confirmed once. */
+    private val placeConfirms = PlaceConfirms()
     /** Exits from trusted places so far, to tell whether one came while an answer was on its way. */
     private val placeExits = AtomicInteger(0)
     private var uploadJob: Job? = null
@@ -978,7 +980,8 @@ class Engine(
                 startingDelayed.fromRelay(d, stored = { id -> local.value.delayed.any { it.id == id } }) {
                     applyLocal(LocalEvent.PutDelayed(it))
                 }
-            } else if (mine.state != d.state && mine.state != "cancelled") {
+            } else if (Plans.takesRelayState(mine, d.state)) {
+                // An end stays (SPEC.md 11.23): this list may have been read before it.
                 if (d.state == "cancelled") delayedCancelled(d.id, d.by)
                 else applyLocal(LocalEvent.PutDelayed(mine.copy(state = d.state)))
             } else if (Plans.cancelAgain(mine, d.state)) {
@@ -989,10 +992,9 @@ class Engine(
         }
         // However the cancel arrived (socket, push, this list), its plan hands out no keys.
         for (p in Plans.toCancel(local.value.plans, local.value.delayed)) applyLocal(LocalEvent.PutPlan(p.copy(state = "cancelled")))
-        // A place this install announced, whose two hours are over with no cancel: confirm it.
-        for (d in list.filter { it.state == "released" }) {
-            if (local.value.delayed.any { it.id == d.id && it.what == Texts.PLACE && it.state != "cancelled" }) confirmPlace(d.id)
-        }
+        // A place this install announced, whose two hours are over with no cancel: confirm it,
+        // once ([confirmPlace]).
+        for (d in list.filter { it.state == "released" }) confirmPlace(d.id)
         // Records the relay no longer has: fetched by the machine, finished or expired.
         val ids = list.map { it.id }.toSet()
         for (d in local.value.delayed) {
@@ -1090,6 +1092,14 @@ class Engine(
 
     /** The relay says nobody cancelled trusting the place in two hours: it now lifts the delay. */
     private suspend fun confirmPlace(id: String) {
+        // Only while its record is waiting or released here and the place is not confirmed yet,
+        // one at a time: a confirmed one is never asked about again, so a later `404 gone` never
+        // replaces "finished" (SPEC.md 11.9, 11.23).
+        if (state.value.places.any { it.trustId == id && !it.deleted && it.trustedAt != 0uL }) return
+        placeConfirms.confirm(id, stored = { local.value.delayed.firstOrNull { it.id == id } }) { confirmPlaceNow(id) }
+    }
+
+    private suspend fun confirmPlaceNow(id: String) {
         try {
             relay.finishDelayed(id)
         } catch (e: RelayException) {
@@ -1149,10 +1159,10 @@ class Engine(
     /**
      * Starts a level 3 action on the phone: null (go ahead now) at a trusted place, else the
      * delayed record the relay keeps. One of the same kind still waiting or ready is returned
-     * instead of starting another, and starts are taken one at a time, so a second tap, or a
+     * instead of starting another, and starts of one kind are taken one at a time, so a second tap, or a
      * second screen, never registers a second delay (SPEC.md 11.23).
      */
-    suspend fun startPhoneAction(what: String): DelayedAction? = phoneStarts.start(running = { runningAction(what) }) begin@{
+    suspend fun startPhoneAction(what: String): DelayedAction? = phoneStarts.start(what, running = { runningAction(what) }) begin@{
         freshClockAtHandAddedPlace()
         if (delayLifted()) return@begin null
         val delay = delaySecs(Delays.LEVEL3_SECS)

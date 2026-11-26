@@ -247,7 +247,17 @@ extension AppEngine {
     }
 
     /// The relay says nobody cancelled trusting the place in two hours: it now lifts the delay.
+    /// Only while its record is waiting or released here and the place is not confirmed yet, one
+    /// at a time: a confirmed one is never asked about again, so a later `404 gone` never
+    /// replaces "finished" (11.9, 11.23).
     func confirmPlace(_ id: String) async {
+        func due() -> Bool {
+            local.delayed.contains { $0.id == id && $0.what == Texts.place && ($0.state == "waiting" || $0.state == "released") }
+                && !state.places.contains { $0.trustId == id && !$0.deleted && $0.trustedAt != 0 }
+        }
+        guard due(), !confirmingPlaces.contains(id) else { return }
+        confirmingPlaces.insert(id)
+        defer { confirmingPlaces.remove(id) }
         do {
             try await relay.finishDelayed(id)
         } catch let e as RelayError {

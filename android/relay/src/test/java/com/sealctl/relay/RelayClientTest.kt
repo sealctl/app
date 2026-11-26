@@ -7,7 +7,11 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.io.IOException
+import java.util.concurrent.TimeUnit
+import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.SocketPolicy
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -198,5 +202,21 @@ class RelayClientTest {
         assertNull(list[1].by)
         server.enqueue(json(200, """{"id":"d1","machine":"m","created":1,"releaseAt":2,"expires":3,"state":"cancelled","by":"phone"}"""))
         assertEquals("phone", client.cancelledBy("d1"))
+    }
+
+    /**
+     * A relay that takes a call and never answers holds no start of an action on the phone
+     * forever (SPEC.md 11.23): every call ends at the client's timeout, 10 s by default.
+     */
+    @Test
+    fun aCallTheRelayNeverAnswersEndsAtTheTimeout() = runTest {
+        assertEquals(10_000, RelayClient.defaultClient().callTimeoutMillis)
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        val c = RelayClient(server.url("/").toString().trimEnd('/'), { keys },
+            http = OkHttpClient.Builder().callTimeout(300, TimeUnit.MILLISECONDS).build(), now = { clock })
+        try {
+            c.addDelayed("d1", 7200); fail()
+        } catch (e: IOException) {
+        }
     }
 }

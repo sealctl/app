@@ -10,7 +10,9 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
@@ -114,7 +116,7 @@ class ReadyTest {
         val stored = mutableListOf<DelayedAction>()
         val relayCalls = AtomicInteger()
         val relayAnswer = CompletableDeferred<Unit>()
-        suspend fun start() = starts.start(running = { runningPhoneAction(stored, "words", (release - 10).toULong()) }) {
+        suspend fun start() = starts.start("words", running = { runningPhoneAction(stored, "words", (release - 10).toULong()) }) {
             relayCalls.incrementAndGet()
             relayAnswer.await()
             action("first").also { stored += it }
@@ -132,12 +134,31 @@ class ReadyTest {
         assertEquals(1, stored.size)
     }
 
+    /**
+     * Each kind has its own turn: while a Show words start waits for the relay (a slow or
+     * hanging call), a Delete starts and gets its own record.
+     */
+    @Test
+    fun aSlowStartOfOneKindDoesNotHoldBackAnother() = runTest {
+        val starts = PhoneActionStarts()
+        val wordsAnswer = CompletableDeferred<Unit>()
+        val words = async { starts.start("words", running = { null }) { wordsAnswer.await(); action("w") } }
+        testScheduler.runCurrent()
+        val delete = async { starts.start("delete", running = { null }) { action("d", what = "delete") } }
+        testScheduler.runCurrent()
+        assertTrue(delete.isCompleted)
+        assertEquals("d", delete.await()?.id)
+        assertFalse(words.isCompleted)
+        wordsAnswer.complete(Unit)
+        assertEquals("w", words.await()?.id)
+    }
+
     /** At a trusted place nothing is stored: each start goes ahead at once (null). */
     @Test
     fun startsAtATrustedPlaceGoAheadEachTime() = runTest {
         val starts = PhoneActionStarts()
         var begun = 0
-        repeat(2) { assertNull(starts.start(running = { null }) { begun++; null as DelayedAction? }) }
+        repeat(2) { assertNull(starts.start("words", running = { null }) { begun++; null as DelayedAction? }) }
         assertEquals(2, begun)
     }
 }

@@ -637,7 +637,8 @@ extension AppEngine {
         guard await phoneKeys() != nil, let list = try? await relay.listDelayed() else { return false }
         for d in list {
             if let mine = local.delayed.first(where: { $0.id == d.id }) {
-                if mine.state != d.state && mine.state != "cancelled" {
+                // An end stays (11.23): this list may have been read before it.
+                if Self.takesRelayState(mine, d.state) {
                     var m = mine
                     m.state = d.state
                     if d.state == "cancelled" { m.cancelledBy = d.by }
@@ -659,11 +660,10 @@ extension AppEngine {
             }
         }
         await cancelPlansOfCancelledDelays()
-        // A place this install announced, whose two hours are over with no cancel: confirm it.
+        // A place this install announced, whose two hours are over with no cancel: confirm it,
+        // once (`confirmPlace`).
         for d in list where d.state == "released" {
-            if local.delayed.contains(where: { $0.id == d.id && $0.what == Texts.place && $0.state != "cancelled" }) {
-                await confirmPlace(d.id)
-            }
+            await confirmPlace(d.id)
         }
         // Records the relay no longer has: fetched by the machine, finished or expired.
         let ids = Set(list.map(\.id))
@@ -683,6 +683,20 @@ extension AppEngine {
         }
         delayedTick = nowMs()
         return true
+    }
+
+    /// A delayed record's state from which it never waits again (11.23).
+    nonisolated static func delayedEnded(_ state: String) -> Bool {
+        ["cancelled", "finished", "gone", "expired"].contains(state)
+    }
+
+    /// Whether the relay's list (`relayState`) is written over the stored record `mine` (11.23):
+    /// a record that ended stays ended, since the list may have been read before that end; only
+    /// a cancel, which says who cancelled, replaces "gone" or "expired".
+    nonisolated static func takesRelayState(_ mine: DelayedAction, _ relayState: String) -> Bool {
+        if mine.state == relayState { return false }
+        if !delayedEnded(mine.state) { return true }
+        return relayState == "cancelled" && (mine.state == "gone" || mine.state == "expired")
     }
 
     /// A plan waiting on a delayed record that was cancelled is cancelled too, however the
@@ -742,17 +756,18 @@ extension AppEngine {
 
     /// Starts a level 3 action on the phone: nil (go ahead now) at a trusted place, else the
     /// delayed record the relay keeps. One of the same kind still waiting or ready is returned
-    /// instead of starting another, and starts run one after another, so a second tap, or a
-    /// second screen, never registers a second delay (11.23).
+    /// instead of starting another, and starts of one kind run one after another, so a second
+    /// tap, or a second screen, never registers a second delay (11.23). Another kind does not
+    /// wait for them; a start waits at most as long as its relay call (10 s a try, 30 s in all).
     public func startPhoneAction(_ what: String) async throws -> DelayedAction? {
-        let previous = phoneStart
+        let previous = phoneStarts[what]
         let start = Task { @MainActor [weak self] () throws -> DelayedAction? in
             _ = try? await previous?.value
             guard let self else { return nil }
             if let running = self.runningAction(what) { return running }
             return try await self.beginPhoneAction(what)
         }
-        phoneStart = start
+        phoneStarts[what] = start
         return try await start.value
     }
 

@@ -51,8 +51,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
   opened a screen that only said "The hour is over." with no way to finish. Once the hour to
   finish has passed: "This waited too long. Start again." with [Start again].
 - A second tap on Show words (or Delete, or Leave) while the first start was still on its way to
-  the relay no longer starts a second two-hour wait: starts run one at a time, and while one of a
-  kind waits or is ready, its start opens that one. The waiting screen shows when it was started
+  the relay no longer starts a second two-hour wait: starts of one kind run one at a time (a slow
+  start of Show words does not hold back Delete), and while one of a kind waits or is ready, its
+  start opens that one. The waiting screen shows when it was started
   and when it goes ahead. An action another of your devices started is named on the start screen
   before anything starts.
 - Android: the "Ready" notification comes from an alarm at the end of the wait instead of a

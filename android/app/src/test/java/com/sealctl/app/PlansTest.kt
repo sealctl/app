@@ -1,6 +1,9 @@
 package com.sealctl.app
 
 import com.sealctl.core.app.DelayedAction
+import com.sealctl.core.app.LocalEvent
+import com.sealctl.core.app.Store
+import java.nio.file.Files
 import com.sealctl.core.app.PlanApprovalRecord
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -227,5 +230,73 @@ class PlansTest {
         runCatching { starting.start("d1", add = { throw IOException("offline") }) { d: RelayDelayed -> words(d) } }
         starting.fromRelay(onRelay, records::stored, records::put)
         assertEquals(listOf(Texts.OTHER_DEVICE), records.list.map { it.what })
+    }
+
+    private fun place(state: String) = DelayedAction("p1", Texts.PLACE, null, 1000u, 2000u, state, null)
+
+    /**
+     * An end stays (SPEC.md 11.23): the relay's list never writes over a record that ended,
+     * since it may have been read before that end; only a cancel replaces gone or expired.
+     */
+    @Test
+    fun theRelaysListNeverWritesOverAnEnd() {
+        assertTrue(Plans.takesRelayState(place("waiting"), "released"))
+        assertTrue(Plans.takesRelayState(place("released"), "cancelled"))
+        assertFalse(Plans.takesRelayState(place("released"), "released"))
+        for (end in listOf("cancelled", "finished", "gone", "expired")) {
+            for (relay in listOf("waiting", "released")) assertFalse("$end <- $relay", Plans.takesRelayState(place(end), relay))
+        }
+        assertFalse(Plans.takesRelayState(place("finished"), "cancelled"))
+        assertFalse(Plans.takesRelayState(place("cancelled"), "cancelled"))
+        assertTrue(Plans.takesRelayState(place("gone"), "cancelled"))
+        assertTrue(Plans.takesRelayState(place("expired"), "cancelled"))
+    }
+
+    /**
+     * A place confirmed with `finish` (SPEC.md 11.9): a later refresh, whose list was read before
+     * that finish and still says `released`, does not finish it again, and a late `404 gone`
+     * does not replace "finished" in the store.
+     */
+    @Test
+    fun aFinishedPlaceIsNotFinishedAgainAndStaysFinishedAfterA404() = runTest {
+        val dir = Files.createTempDirectory("plans-test")
+        Store.open(dir.resolve("store.db").toString()).use { store ->
+            fun stored() = store.local().delayed.firstOrNull { it.id == "p1" }
+            store.applyLocal(LocalEvent.PutDelayed(place("released")))
+            val confirms = PlaceConfirms()
+            var finishes = 0
+            assertTrue(confirms.confirm("p1", ::stored) {
+                finishes++
+                store.applyLocal(LocalEvent.PutDelayed(stored()!!.copy(state = "finished")))
+            })
+            // The stale list: neither written over the record nor confirmed again.
+            assertFalse(Plans.takesRelayState(stored()!!, "released"))
+            assertFalse(confirms.confirm("p1", ::stored) { finishes++ })
+            assertEquals(1, finishes)
+            // A 404 gone that arrives after it was confirmed.
+            store.applyLocal(LocalEvent.PutDelayed(stored()!!.copy(state = "gone")))
+            assertEquals("finished", stored()?.state)
+        }
+        dir.toFile().deleteRecursively()
+    }
+
+    /** Two refreshes at once (the alarm and the app): the place is finished once. */
+    @Test
+    fun overlappingRefreshesFinishAPlaceOnce() = runTest {
+        val confirms = PlaceConfirms()
+        var record = place("released")
+        val answer = CompletableDeferred<Unit>()
+        var finishes = 0
+        val first = async {
+            confirms.confirm("p1", { record }) { finishes++; answer.await(); record = record.copy(state = "finished") }
+        }
+        testScheduler.runCurrent()
+        assertFalse(confirms.confirm("p1", { record }) { finishes++ })
+        answer.complete(Unit)
+        assertTrue(first.await())
+        assertEquals(1, finishes)
+        for (end in listOf("cancelled", "finished", "gone", "expired")) assertFalse(confirms.due(place(end)))
+        assertFalse(confirms.due(place("released").copy(what = "words")))
+        assertFalse(confirms.due(null))
     }
 }

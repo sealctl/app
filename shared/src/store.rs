@@ -2269,6 +2269,31 @@ mod tests {
     }
 
     #[test]
+    fn a_finished_action_stays_finished() {
+        // A place confirmed with `finish`, then a list read before it (released) and a late
+        // `404 gone`, in either order (SPEC.md 11.9, 11.23).
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        st.set_now(t0);
+        let action = |state: &str| LocalEvent::PutDelayed {
+            action: DelayedAction {
+                id: "p1".into(),
+                what: "place".into(),
+                release_at: t0 + 2 * H,
+                expires: t0 + 3 * H,
+                state: state.into(),
+                ..Default::default()
+            },
+        };
+        st.apply_local(action("released")).unwrap();
+        st.apply_local(action("finished")).unwrap();
+        for state in ["released", "gone", "waiting", "expired", "cancelled"] {
+            let l = st.apply_local(action(state)).unwrap();
+            assert_eq!(l.delayed[0].state, "finished", "after {state}");
+        }
+    }
+
+    #[test]
     fn a_write_without_a_start_time_keeps_the_stored_one() {
         let st = store();
         let t0 = MIDNIGHT + 9 * H;

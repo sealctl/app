@@ -59,6 +59,7 @@ import com.sealctl.core.app.DelayedAction
 import com.sealctl.core.app.delayPhase
 import com.sealctl.core.app.LocalState
 import com.sealctl.core.app.Machine
+import com.sealctl.core.app.MachineSession
 import com.sealctl.core.app.machineShortName
 import com.sealctl.designsystem.Banner
 import com.sealctl.designsystem.MachineState
@@ -162,9 +163,9 @@ private fun MachinesTab() {
         backgroundRestricted = restricted()
         onPauseOrDispose {}
     }
-    // The short names and models come from the shared core: once per change of the machines, not every second.
+    // The short names, models and sessions come from the shared core: once per change of the machines, not every second.
     val machines = remember(state.machines) {
-        state.machines.filter { !it.deleted }.map { Named(it, machineShortName(it), MachineView.modelOf(it)) }
+        state.machines.filter { !it.deleted }.map { Named(it, machineShortName(it), MachineView.modelOf(it), MachineView.sessionOf(it)) }
     }
     Page("Machines", onBack = null) {
         if (banners.offline) Banner(Texts.OFFLINE)
@@ -199,8 +200,8 @@ private fun MachinesTab() {
     }
 }
 
-/** A machine with its short name and model, as the shared core gives them. */
-private data class Named(val machine: Machine, val name: String, val model: String?)
+/** A machine with its short name, model and session, as the shared core gives them. */
+private data class Named(val machine: Machine, val name: String, val model: String?, val session: MachineSession?)
 
 @Composable
 private fun RateLimitedBanner(until: Long, clock: State<Long>) {
@@ -237,14 +238,15 @@ private fun DelayedBanners(delayed: List<DelayedAction>, clock: State<Long>, onC
 
 /**
  * The machines in their order (11.17), from the machines and names read once per change. Only
- * this part follows the clock: the waiting time, the time left and "seen … ago" each second.
+ * this part follows the clock: the waiting time, the idle time or time left and "seen … ago" each second
+ * (an active machine's row stays the same).
  * [waiting] and [local] are what [MachineView.of] reads besides: a change to them redraws it.
  */
 @Composable
 private fun MachineList(machines: List<Named>, @Suppress("UNUSED_PARAMETER") waiting: List<Waiting>, @Suppress("UNUSED_PARAMETER") local: LocalState, clock: State<Long>) {
     val engine = Graph.engine
     val now = clock.value
-    val views = MachineView.sorted(machines.map { MachineView.of(it.machine, engine, now, it.name, it.model) })
+    val views = MachineView.sorted(machines.map { MachineView.of(it.machine, engine, now, it.name, it.model, it.session) })
     for (v in views) MachineRow(v, now)
 }
 

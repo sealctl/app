@@ -17,6 +17,12 @@ pub struct SessionStatus {
     pub session: String,
     /// Idle seconds left when reported.
     pub left: Option<u64>,
+    /// Seconds since the machine's last work moment when reported; `None` from a CLI that does
+    /// not send it.
+    pub idle: Option<u64>,
+    /// The machine's idle allowance when reported, seconds; `None` from a CLI that does not
+    /// send it.
+    pub allow: Option<u64>,
     /// Hard stop, Unix ms.
     pub stop: Option<u64>,
     /// TrustedPlace kind from the last open.

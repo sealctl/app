@@ -5582,6 +5582,16 @@ data class SessionState (
     var `left`: kotlin.ULong?
     , 
     /**
+     * Seconds since the last work moment, at the status's time. Absent from older machines.
+     */
+    var `idle`: kotlin.ULong?
+    , 
+    /**
+     * The idle allowance now, seconds. Absent from older machines.
+     */
+    var `allow`: kotlin.ULong?
+    , 
+    /**
      * Hard stop time, Unix ms.
      */
     var `stop`: kotlin.ULong?
@@ -5614,6 +5624,8 @@ public object FfiConverterTypeSessionState: FfiConverterRustBuffer<SessionState>
             FfiConverterString.read(buf),
             FfiConverterOptionalULong.read(buf),
             FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalULong.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterSequenceTypeBusyVolume.read(buf),
         )
@@ -5622,6 +5634,8 @@ public object FfiConverterTypeSessionState: FfiConverterRustBuffer<SessionState>
     override fun allocationSize(value: SessionState) = (
             FfiConverterString.allocationSize(value.`session`) +
             FfiConverterOptionalULong.allocationSize(value.`left`) +
+            FfiConverterOptionalULong.allocationSize(value.`idle`) +
+            FfiConverterOptionalULong.allocationSize(value.`allow`) +
             FfiConverterOptionalULong.allocationSize(value.`stop`) +
             FfiConverterOptionalString.allocationSize(value.`place`) +
             FfiConverterSequenceTypeBusyVolume.allocationSize(value.`busy`)
@@ -5630,6 +5644,8 @@ public object FfiConverterTypeSessionState: FfiConverterRustBuffer<SessionState>
     override fun write(value: SessionState, buf: ByteBuffer) {
             FfiConverterString.write(value.`session`, buf)
             FfiConverterOptionalULong.write(value.`left`, buf)
+            FfiConverterOptionalULong.write(value.`idle`, buf)
+            FfiConverterOptionalULong.write(value.`allow`, buf)
             FfiConverterOptionalULong.write(value.`stop`, buf)
             FfiConverterOptionalString.write(value.`place`, buf)
             FfiConverterSequenceTypeBusyVolume.write(value.`busy`, buf)

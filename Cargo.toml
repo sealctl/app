@@ -10,7 +10,7 @@ license = "AGPL-3.0-only"
 repository = "https://github.com/sealctl/app"
 
 [workspace.dependencies]
-sealctl-core = { git = "https://github.com/sealctl/sealctl", rev = "a5ed460b3934311826014727777a40b72617529c" }
+sealctl-core = { git = "https://github.com/sealctl/sealctl", rev = "7fa05a7bc294f378611d0df545afa93b780367c6" }
 uniffi = { version = "=0.32.2", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -1963,7 +1963,7 @@ dependencies = [
 [[package]]
 name = "sealctl-core"
 version = "0.7.1"
-source = "git+https://github.com/sealctl/sealctl?rev=a5ed460b3934311826014727777a40b72617529c#a5ed460b3934311826014727777a40b72617529c"
+source = "git+https://github.com/sealctl/sealctl?rev=7fa05a7bc294f378611d0df545afa93b780367c6#7fa05a7bc294f378611d0df545afa93b780367c6"
 dependencies = [
  "base64 0.23.1",
  "bip39",

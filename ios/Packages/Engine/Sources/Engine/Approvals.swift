@@ -104,7 +104,7 @@ extension AppEngine {
         } ?? false
         return DecideContext(
             now: UInt64(now), utcOffsetSecs: utcOffset(), phoneUnlocked: await vault.canReadRoot(),
-            near: r.near, onWifi: onWifi, placesOn: places?.hasForeground ?? false, currentPlace: currentPlace,
+            near: r.near, onWifi: onWifi, location: locationAccess(), currentPlace: here,
             currentPlaceSettled: placeSettledNow(),
             day: local.days.first { $0.machine == r.machine },
             answers: state.answers.filter { !$0.deleted }, sessionOpen: open,
@@ -129,7 +129,7 @@ extension AppEngine {
     /// The place the phone is inside also lifts the level 3 delay: a place added by hand after
     /// 24 hours on the corrected clock, and never while that clock is stale (8.1, 9.6).
     public func placeSettledNow() -> Bool {
-        guard let id = currentPlace, let p = state.places.first(where: { $0.id == id && !$0.deleted }) else { return false }
+        guard let id = here, let p = state.places.first(where: { $0.id == id && !$0.deleted }) else { return false }
         return placeSettledAt(place: p, now: db.clockNow())
     }
 
@@ -145,7 +145,33 @@ extension AppEngine {
     public func delayLifted() -> Bool { placeKind() == .trusted && placeSettledNow() }
 
     public func placeKind() -> SealCore.Place {
-        SealCore.placeKind(placesOn: places?.hasForeground ?? false, currentPlace: currentPlace)
+        SealCore.placeKind(location: locationAccess(), currentPlace: here)
+    }
+
+    /// The location access the shared core decides with (9.4): region monitoring wakes the app
+    /// to notice leaving a place only with Always.
+    public func locationAccess() -> LocationAccess {
+        guard let places, places.hasForeground else { return .off }
+        return places.hasAlways ? .always : .whileInUse
+    }
+
+    /// The trusted place that counts now: the one the phone is inside, only with location access
+    /// Always and while it is still trusted. Without Always, leaving would go unnoticed.
+    public var here: String? {
+        guard locationAccess() == .always, let id = currentPlace,
+              state.places.contains(where: { $0.id == id && !$0.deleted }) else { return nil }
+        return id
+    }
+
+    /// Places exist, but without location access Always they count for nothing: the banner (11.9).
+    public var placesNeedAlways: Bool {
+        location != .always && state.places.contains { !$0.deleted }
+    }
+
+    /// Reads the location permission again for the screens (after the system's settings).
+    public func refreshLocation() {
+        let now = locationAccess()
+        if location != now { location = now }
     }
 
     public var currentPlaceName: String? {
@@ -342,7 +368,7 @@ extension AppEngine {
         let exits: Int
     }
 
-    func placeMark() -> PlaceMark { PlaceMark(place: currentPlace, exits: placeExits) }
+    func placeMark() -> PlaceMark { PlaceMark(place: here, exits: placeExits) }
 
     /// What became of one reply.
     enum Sent: Equatable {
@@ -417,7 +443,7 @@ extension AppEngine {
         answeredIds.insert(r.id)
         // A place left while this was on its way: the day did not begin there after all.
         let leftBefore = mark.place != nil && placeExits != mark.exits
-        let place = leftBefore ? currentPlace : mark.place
+        let place = leftBefore ? here : mark.place
         if let h = hooks.beforeRecord { await h(r.id) }
         let result = try? await db.run {
             try $0.answered(request: req, outcome: outcome, allowed: allowed, remember: remember, placeId: place,

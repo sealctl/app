@@ -19,6 +19,9 @@ struct SettingsTab: View {
         let e = model.engine!
         let s = e.state
         Page("Settings", onBack: nil) {
+            if e.placesNeedAlways {
+                Banner(Texts.placesAlways) { TextButton("Open settings") { Links.settings() } }
+            }
             SectionLabel("Words")
             if let w = s.words {
                 HStack(spacing: 0) {
@@ -183,6 +186,9 @@ struct PlacesView: View {
             GateCardWordsView(why: g.why, onPassed: { gateCard = nil; g.then() }, onCancel: { gateCard = nil })
         } else {
             Page("Places", onBack: { router.pop() }) {
+                if model.places.hasForeground && e.placesNeedAlways {
+                    Banner(Texts.placesAlways) { TextButton("Open settings") { Links.settings() } }
+                }
                 if let o = e.placeOffer {
                     SurfaceCard {
                         TitleText("Trust this place?")
@@ -308,6 +314,7 @@ struct TrustHereView: View {
             await e.monitorPlaces()
             fix = nil
             e.show("Trusted \(n.isEmpty ? "Place" : n).")
+            await e.askAlways()
         }
     }
 }

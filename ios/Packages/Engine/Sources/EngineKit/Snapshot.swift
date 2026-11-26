@@ -34,6 +34,9 @@ public struct ExtensionSnapshot: Codable, Sendable {
     public var plans: [Plan]
     public var currentPlace: String?
     public var placesOn: Bool
+    /// Location access Always: leaving a place is noticed, so the place counts (9.4). Nil in a
+    /// snapshot written before it, read as not given.
+    public var placesAlways: Bool?
     public var relay: String
     public var written: Int64
     /// The relay's time the app last learned (SPEC.md 8.1); nil in a snapshot written before it.
@@ -51,7 +54,7 @@ public struct ExtensionSnapshot: Codable, Sendable {
         public var distrusted: Bool
     }
 
-    public init(state: State, local: LocalState, currentPlace: String?, placesOn: Bool, relay: String,
+    public init(state: State, local: LocalState, currentPlace: String?, placesOn: Bool, placesAlways: Bool = false, relay: String,
                 clock: RelayClock? = nil, starting: Set<String> = []) {
         self.state = encodeState(state: state)
         days = local.days.map { Day(machine: $0.machine, firstApproval: $0.firstApproval, placeId: $0.placeId, ends: $0.ends) }
@@ -64,6 +67,7 @@ public struct ExtensionSnapshot: Codable, Sendable {
         knownDelayed = known + starting.subtracting(known).sorted()
         self.currentPlace = currentPlace
         self.placesOn = placesOn
+        self.placesAlways = placesAlways
         self.relay = relay
         written = nowMs()
         self.clock = clock.map { Clock(relay: $0.relay, boot: $0.boot, bootId: $0.bootId, distrusted: $0.distrusted) }
@@ -74,6 +78,12 @@ public struct ExtensionSnapshot: Codable, Sendable {
         guard let c = clock else { return RelayClock(relay: 0, boot: 0, bootId: "", distrusted: false) }
         return RelayClock(relay: c.relay, boot: c.boot, bootId: c.bootId, distrusted: c.distrusted)
     }
+
+    /// The location access the shared core decides with.
+    public var location: LocationAccess { !placesOn ? .off : (placesAlways == true ? .always : .whileInUse) }
+
+    /// The trusted place that counts: only with location access Always.
+    public var here: String? { location == .always ? currentPlace : nil }
 
     public func decodedState() -> State? { try? decodeState(bytes: state) }
 

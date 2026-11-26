@@ -143,6 +143,9 @@ struct MachinesTab: View {
         if !e.notificationsAllowed {
             Banner(Texts.notificationsOff) { TextButton("Open settings") { Links.notificationSettings() } }
         }
+        if e.placesNeedAlways {
+            Banner(Texts.placesAlways) { TextButton("Open settings") { Links.settings() } }
+        }
         let change = e.local.delayed.filter { $0.state == "waiting" && Int64($0.releaseAt) > now }
         ForEach(change, id: \.id) { d in
             let name = d.machine.flatMap { e.machine($0) }.map(e.displayName) ?? "This phone"

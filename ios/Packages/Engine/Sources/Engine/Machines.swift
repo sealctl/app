@@ -165,6 +165,15 @@ extension AppEngine {
         }
     }
 
+    /// After a trusted place: location access Always, which region monitoring needs to notice
+    /// leaving it (11.9). The system asks once; after that the banner sends the person to the
+    /// settings.
+    public func askAlways() async {
+        if let places, places.hasForeground, !places.hasAlways { await places.requestAlways() }
+        refreshLocation()
+        await monitorPlaces()
+    }
+
     public func monitorPlaces() async {
         let fences = state.places.filter { !$0.deleted }.map { Fence(id: $0.id, lat: $0.lat, lon: $0.lon, radius: $0.radius) }
         await places?.monitor(fences) { [weak self] ids, entered in
@@ -179,7 +188,7 @@ extension AppEngine {
                     upload: true)
         placeOffer = nil
         await monitorPlaces()
-        if let places, !places.hasAlways { await places.requestAlways() }
+        await askAlways()
     }
 
     public func suppressPlace(_ c: PlaceCandidate) async {

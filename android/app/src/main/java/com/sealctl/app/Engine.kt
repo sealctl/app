@@ -29,6 +29,7 @@ import com.sealctl.core.app.HandbackReport
 import com.sealctl.core.app.KeyRefRecord
 import com.sealctl.core.app.LocalEvent
 import com.sealctl.core.app.LocalState
+import com.sealctl.core.app.LocationAccess
 import com.sealctl.core.app.LocationSample
 import com.sealctl.core.app.Machine
 import com.sealctl.core.app.MachineSeen
@@ -57,6 +58,8 @@ import com.sealctl.notify.NoteAction
 import com.sealctl.notify.Notify
 import com.sealctl.notify.RequestNote
 import com.sealctl.places.Fence
+import com.sealctl.places.LocationPermissions
+import com.sealctl.places.PlaceMemory
 import com.sealctl.places.Places
 import com.sealctl.relay.ClockSkewException
 import com.sealctl.relay.ConflictException
@@ -160,7 +163,10 @@ class Engine(
 
     fun toast(text: String) { _toasts.tryEmit(Toast(text)) }
     val foreground = MutableStateFlow(false)
-    /** The trusted place the phone is inside, from geofence transitions. */
+    /**
+     * The trusted place the phone is inside, from geofence transitions, kept across a restart
+     * of the process ([PlaceMemory]). It counts for decisions only through [here].
+     */
     val currentPlace = MutableStateFlow<String?>(null)
     /** A place candidate to offer ("Trust this place?"). */
     val placeOffer = MutableStateFlow<PlaceCandidate?>(null)
@@ -188,9 +194,16 @@ class Engine(
     private val placeExits = AtomicInteger(0)
     private var uploadJob: Job? = null
     private var onWifi = false
+    /** Location permission, read at every decision; instrumented tests give their own. */
+    @androidx.annotation.VisibleForTesting
+    var permissions: LocationPermissions = places
+    private val placeMemory = PlaceMemory(context)
+    /** The geofences are registered (SPEC.md 11.9); false sends the next foreground to register them. */
+    @Volatile private var fencesOn = false
 
     init {
         watchNetwork()
+        restorePlace()
     }
 
     // ---------- keys ----------
@@ -324,6 +337,8 @@ class Engine(
             if (System.currentTimeMillis() - local.value.lastDownload.toLong() > 3_600_000) download()
             if (local.value.dirty) scheduleUpload(0)
             registerPush()
+            // Location "Allow all the time" given in the system settings: places count from now.
+            if (!fencesOn && location() == LocationAccess.ALWAYS && state.value.places.any { !it.deleted }) monitorPlaces()
         }
     }
 
@@ -495,8 +510,8 @@ class Engine(
             phoneUnlocked = unlocked,
             near = r.near,
             onWifi = onWifi,
-            placesOn = places.hasForeground(),
-            currentPlace = currentPlace.value,
+            location = location(),
+            currentPlace = here(),
             currentPlaceSettled = placeSettled(),
             day = l.days.firstOrNull { it.machine == r.machine },
             answers = s.answers.filter { !it.deleted },
@@ -510,13 +525,22 @@ class Engine(
     private fun placeName(): String? =
         currentPlace.value?.let { id -> state.value.places.firstOrNull { it.id == id && !it.deleted }?.name }
 
-    fun placeKind(): PlaceKind = com.sealctl.core.app.placeKind(places.hasForeground(), currentPlace.value)
+    /** The location access the shared core decides with (SPEC.md 9.4). */
+    fun location(): LocationAccess = PlaceRules.access(permissions.hasForeground(), permissions.hasBackground())
+
+    /**
+     * The trusted place that counts now: the one the phone is inside, only while location is
+     * allowed all the time. Without it, leaving would go unnoticed and nothing would lock.
+     */
+    fun here(): String? = PlaceRules.here(currentPlace.value, location(), state.value.places)
+
+    fun placeKind(): PlaceKind = com.sealctl.core.app.placeKind(location(), here())
 
     /**
      * The place the phone is inside also lifts the level 3 delay: a place added by hand after
      * 24 hours on the corrected clock, and never while that clock is stale (SPEC.md 8.1, 9.6).
      */
-    fun placeSettled(): Boolean = currentPlace.value
+    fun placeSettled(): Boolean = here()
         ?.let { id -> state.value.places.firstOrNull { it.id == id && !it.deleted } }
         ?.let { safe { store.placeSettledNow(it) } } ?: false
 
@@ -560,7 +584,7 @@ class Engine(
         val approval = PlanApproval(plan.machine, plan.planHash, plan.notBefore, plan.keys.map { com.sealctl.core.KeyRef(it.purpose, it.id) })
         val sealed = withRoot { root -> runCatching { sealPlanKeysReply(root, keys, req, approval) }.getOrNull() } ?: return
         if (post(r, sealed, null, userTapped = false).first == Sent.POSTED) {
-            safe { store.answered(req, "in_session", true, false, currentPlace.value, offset()) }
+            safe { store.answered(req, "in_session", true, false, here(), offset()) }
             refreshState()
         }
     }
@@ -717,7 +741,7 @@ class Engine(
     /** Where the phone was when a decision was made, and how many place exits it had seen. */
     data class PlaceMark(val place: String?, val exits: Int)
 
-    private fun placeMark() = PlaceMark(currentPlace.value, placeExits.get())
+    private fun placeMark() = PlaceMark(here(), placeExits.get())
 
     /** Opens a request on the card again from the relay's text: the core seals a request once. */
     private fun reopen(r: RelayRequest, keys: PhoneKeys) {
@@ -788,7 +812,7 @@ class Engine(
     private suspend fun record(req: Request, r: RelayRequest, outcome: String, allowed: Boolean, remember: Boolean, mark: PlaceMark) {
         // A place left while this was on its way: the day did not begin there after all.
         val leftBefore = mark.place != null && placeExits.get() != mark.exits
-        val place = if (leftBefore) currentPlace.value else mark.place
+        val place = if (leftBefore) here() else mark.place
         safe { store.answered(req, outcome, allowed, remember, place, offset()) }?.let { result ->
             if (result.firstOfDay) scope.launch { firstApprovalOfDay() }
         }
@@ -1262,8 +1286,40 @@ class Engine(
         }
     }
 
+    /**
+     * Registers the geofences again: at app start, boot and update, after a change of places,
+     * and at the first foreground after location "Allow all the time" was given. Without them
+     * no place counts, so none is kept.
+     */
     suspend fun monitorPlaces() {
-        places.monitor(state.value.places.filter { !it.deleted }.map { Fence(it.id, it.lat, it.lon, it.radius.toFloat()) })
+        fencesOn = places.monitor(state.value.places.filter { !it.deleted }.map { Fence(it.id, it.lat, it.lon, it.radius.toFloat()) })
+        if (!fencesOn) forgetPlace()
+    }
+
+    /**
+     * After a restart of the process: the place the phone was inside, while the geofences that
+     * would have reported leaving it are still registered (SPEC.md 11.9). Before [monitorPlaces]
+     * registers them again, which sends an enter anyway when the phone is inside.
+     */
+    private fun restorePlace() {
+        currentPlace.value = PlaceMemory.restore(
+            placeMemory.saved(), PlaceMemory.bootCount(context), places.registrationAlive(),
+            location() == LocationAccess.ALWAYS, state.value.places.filter { !it.deleted }.map { it.id },
+        )
+        if (currentPlace.value == null) placeMemory.clear()
+    }
+
+    private fun forgetPlace() {
+        currentPlace.value = null
+        placeMemory.clear()
+    }
+
+    /** Location was turned off: the geofences are gone, so no place counts until they are back. */
+    fun onPlacesUnavailable() {
+        scope.launch {
+            fencesOn = false
+            forgetPlace()
+        }
     }
 
     /** The phone left a place: lock every machine whose day began there. */
@@ -1271,9 +1327,10 @@ class Engine(
         scope.launch {
             if (entered) {
                 currentPlace.value = ids.firstOrNull()
+                ids.firstOrNull()?.let(placeMemory::save)
                 return@launch
             }
-            if (currentPlace.value in ids) currentPlace.value = null
+            if (currentPlace.value in ids) forgetPlace()
             // An answer made at the place and still on its way locks its machine once posted.
             placeExits.incrementAndGet()
             for (id in ids) {

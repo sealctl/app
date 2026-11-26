@@ -1670,7 +1670,7 @@ public func FfiConverterTypeDailyCount_lower(_ value: DailyCount) -> RustBuffer 
 
 
 /**
- * A machine's day (SPEC.md 9.3): ends at the next 02:00 local or 14 h after the first
+ * A machine's day (SPEC.md 9.3): ends at the next 02:00 local or 24 h after the first
  * approval, whichever is first.
  */
 public struct DayRecord: Equatable, Hashable {
@@ -1784,11 +1784,11 @@ public struct DecideContext: Equatable, Hashable {
      */
     public var onWifi: Bool
     /**
-     * Location permission given (places on).
+     * The location access the phone has ([`place_kind`]).
      */
-    public var placesOn: Bool
+    public var location: LocationAccess
     /**
-     * The trusted place the phone is inside.
+     * The trusted place the phone is inside; it counts only with [`LocationAccess::Always`].
      */
     public var currentPlace: String?
     /**
@@ -1839,10 +1839,10 @@ public struct DecideContext: Equatable, Hashable {
          * The phone is on Wi-Fi or Ethernet.
          */onWifi: Bool, 
         /**
-         * Location permission given (places on).
-         */placesOn: Bool, 
+         * The location access the phone has ([`place_kind`]).
+         */location: LocationAccess, 
         /**
-         * The trusted place the phone is inside.
+         * The trusted place the phone is inside; it counts only with [`LocationAccess::Always`].
          */currentPlace: String?, 
         /**
          * That place also lifts the level 3 delay ([`place_settled`]).
@@ -1870,7 +1870,7 @@ public struct DecideContext: Equatable, Hashable {
         self.phoneUnlocked = phoneUnlocked
         self.near = near
         self.onWifi = onWifi
-        self.placesOn = placesOn
+        self.location = location
         self.currentPlace = currentPlace
         self.currentPlaceSettled = currentPlaceSettled
         self.day = day
@@ -1902,7 +1902,7 @@ public struct FfiConverterTypeDecideContext: FfiConverterRustBuffer {
                 phoneUnlocked: FfiConverterBool.read(from: &buf), 
                 near: FfiConverterBool.read(from: &buf), 
                 onWifi: FfiConverterBool.read(from: &buf), 
-                placesOn: FfiConverterBool.read(from: &buf), 
+                location: FfiConverterTypeLocationAccess.read(from: &buf), 
                 currentPlace: FfiConverterOptionString.read(from: &buf), 
                 currentPlaceSettled: FfiConverterBool.read(from: &buf), 
                 day: FfiConverterOptionTypeDayRecord.read(from: &buf), 
@@ -1920,7 +1920,7 @@ public struct FfiConverterTypeDecideContext: FfiConverterRustBuffer {
         FfiConverterBool.write(value.phoneUnlocked, into: &buf)
         FfiConverterBool.write(value.near, into: &buf)
         FfiConverterBool.write(value.onWifi, into: &buf)
-        FfiConverterBool.write(value.placesOn, into: &buf)
+        FfiConverterTypeLocationAccess.write(value.location, into: &buf)
         FfiConverterOptionString.write(value.currentPlace, into: &buf)
         FfiConverterBool.write(value.currentPlaceSettled, into: &buf)
         FfiConverterOptionTypeDayRecord.write(value.day, into: &buf)
@@ -6259,6 +6259,92 @@ public func FfiConverterTypeLocalEvent_lower(_ value: LocalEvent) -> RustBuffer 
 
 
 /**
+ * The location access the phone has (SPEC.md 9.4, 11.9).
+ */
+
+public enum LocationAccess: Equatable, Hashable {
+    
+    /**
+     * Not given, or not asked yet.
+     */
+    case off
+    /**
+     * Only while the app is in use (iPhone "While Using the App"; Android without "Allow all
+     * the time"). The phone cannot notice leaving a place, so places do not count.
+     */
+    case whileInUse
+    /**
+     * Always: places are monitored in the background and leaving one is noticed.
+     */
+    case always
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension LocationAccess: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeLocationAccess: FfiConverterRustBuffer {
+    typealias SwiftType = LocationAccess
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> LocationAccess {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .off
+        
+        case 2: return .whileInUse
+        
+        case 3: return .always
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: LocationAccess, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .off:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .whileInUse:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .always:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeLocationAccess_lift(_ buf: RustBuffer) throws -> LocationAccess {
+    return try FfiConverterTypeLocationAccess.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeLocationAccess_lower(_ value: LocationAccess) -> RustBuffer {
+    return FfiConverterTypeLocationAccess.lower(value)
+}
+
+
+
+/**
  * The buttons the card and the notification offer, in order.
  */
 
@@ -7513,7 +7599,9 @@ public func addDays(date: String, days: Int64) -> String  {
 }
 /**
  * The end of a machine's day that began at `first_approval`: the next 02:00 local time or
- * 14 hours later, whichever is first.
+ * 24 hours later, whichever is first. The next 02:00 is never more than 24 hours away, so the
+ * 24 hours decide only when the clock's 02:00 does not come (a day begun at exactly 02:00 ends
+ * at the next one, 24 hours later).
  */
 public func dayEnd(firstApproval: UInt64, utcOffsetSecs: Int32) -> UInt64  {
     return try!  FfiConverterUInt64.lift(try! rustCall() {
@@ -7549,13 +7637,16 @@ public func decide(request: Request, ctx: DecideContext) -> Verdict  {
 })
 }
 /**
- * The place kind for a reply (SPEC.md 9.4).
+ * The place kind for a reply (SPEC.md 9.4). A phone that cannot notice leaving a place does not
+ * know where it is: without location access Always the kind is `none`, as without location at
+ * all, never `other` (a 10-minute allowance for being somewhere unknown) and never `trusted`
+ * from a place it may have left unseen.
  */
-public func placeKind(placesOn: Bool, currentPlace: String?) -> Place  {
+public func placeKind(location: LocationAccess, currentPlace: String?) -> Place  {
     return try!  FfiConverterTypePlace_lift(try! rustCall() {
         uniffiCallStatus in
     uniffi_sealctl_app_fn_func_place_kind(
-        FfiConverterBool.lower(placesOn),
+        FfiConverterTypeLocationAccess_lower(location),
         FfiConverterOptionString.lower(currentPlace),uniffiCallStatus
     )
 })
@@ -7737,7 +7828,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sealctl_app_checksum_func_add_days() != 23047) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_sealctl_app_checksum_func_day_end() != 7975) {
+    if (uniffi_sealctl_app_checksum_func_day_end() != 55379) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_func_local_date() != 35650) {
@@ -7746,7 +7837,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sealctl_app_checksum_func_decide() != 1771) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_sealctl_app_checksum_func_place_kind() != 46517) {
+    if (uniffi_sealctl_app_checksum_func_place_kind() != 5228) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_func_place_settled() != 45654) {

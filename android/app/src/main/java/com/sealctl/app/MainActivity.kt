@@ -35,6 +35,8 @@ sealed class Route {
     data class Pair(val code: String? = null, val fromLink: Boolean = false) : Route()
     data object Answers : Route()
     data object Places : Route()
+    /** "Allow location all the time", after the first trusted place (SPEC.md 11.9). */
+    data object PlacesAlways : Route()
     data object Devices : Route()
     data object About : Route()
     data object Licences : Route()

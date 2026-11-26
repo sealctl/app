@@ -86,6 +86,7 @@ fun MainScreen(activity: MainActivity) {
             is Route.Pair -> PairingScreen(activity, top)
             Route.Answers -> AnswersScreen()
             Route.Places -> PlacesScreen(activity)
+            Route.PlacesAlways -> PlacesAlwaysScreen(onDone = { Ui.pop() })
             Route.Devices -> DevicesScreen()
             Route.About -> AboutScreen()
             Route.Licences -> LicencesScreen()
@@ -153,6 +154,7 @@ private fun MachinesTab() {
         if (!Notify.allowed(context)) Banner(Texts.NOTIFICATIONS_OFF) { TextButton({ openAppSettings(context) }) { Text("Open settings") } }
         val am = context.getSystemService(android.app.ActivityManager::class.java)
         if (am?.isBackgroundRestricted == true) Banner(Texts.BACKGROUND_RESTRICTED) { TextButton({ openAppSettings(context) }) { Text("Open settings") } }
+        PlacesAlwaysBanner()
         for (d in local.delayed.filter { it.state == "waiting" && it.releaseAt.toLong() > now }) {
             val name = d.machine?.let { k -> engine.machine(k)?.let { engine.displayName(it) } } ?: "This phone"
             Banner(Texts.delayedAt(d.what, name, d.releaseAt.toLong()), tone = Sealctl.colors.accentSoft) {

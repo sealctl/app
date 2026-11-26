@@ -426,6 +426,101 @@ struct TimingTests {
         #expect(heard.contains("lock"), "\(heard)")
     }
 
+    /// Answers the machine's next `open` with "Allow for this session" and waits for its reply.
+    func allowOpen(_ engine: AppEngine, _ m: FakeMachine) async throws {
+        let r = try openRequest(m)
+        let w = try await firstRequest(engine, r)
+        #expect(await engine.answer(w.id, .allowSession))
+        let (code, out) = await m.waitAsync(r)
+        #expect(code == 0, "\(out)")
+    }
+
+    /// The owner's morning: the day began with no place, the machine was allowed again at the
+    /// trusted place (its reply carried `trusted`, 4 h), and leaving the place must lock it,
+    /// though its day did not begin there (SPEC.md 11.9).
+    @Test func leavingAPlaceLocksAMachineAllowedThereWhoseDayBeganElsewhere() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, _, m) = try await paired(relay, places: StubPlaces())
+        try await allowOpen(engine, m)
+        #expect(engine.local.days.first?.placeId == nil)
+        try await atDesk(engine)
+        try await allowOpen(engine, m)
+        #expect(engine.local.days.first?.placeId == nil)
+        #expect(engine.local.grants.first?.placeId == "p1")
+        let listen = try m.start(["listen", "--secs", "8", "--count", "1"])
+        _ = try await listen.find("(LISTENING)")
+        await engine.onPlaceTransition(["p1"], entered: false)
+        let (_, heard) = await m.waitAsync(listen)
+        #expect(heard.contains("lock"), "\(heard)")
+        #expect(engine.local.grants.first?.locked == true)
+    }
+
+    /// The exit never came (the system was late, or the app was not running): a fresh fix
+    /// outside the place, as at the next foreground, counts as leaving it (SPEC.md 11.9).
+    @Test func aFreshFixOutsideThePlaceLocksTheMachineAllowedThere() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let places = StubPlaces()
+        let (engine, _, m) = try await paired(relay, places: places)
+        try await atDesk(engine)
+        try await allowOpen(engine, m)
+        // About 2 km from the desk, 10 m accuracy, taken now.
+        places.fix = Fix(lat: 0.02, lon: 0, accuracy: 10, time: nowMs())
+        let listen = try m.start(["listen", "--secs", "8", "--count", "1"])
+        _ = try await listen.find("(LISTENING)")
+        await engine.checkPlaceByFix(minGap: 0)
+        let (_, heard) = await m.waitAsync(listen)
+        #expect(heard.contains("lock"), "\(heard)")
+        // The desk no longer counts: the next reply carries `other`, not `trusted`.
+        #expect(engine.currentPlace == nil)
+        #expect(engine.placeKind() == .other)
+    }
+
+    /// A fix inside the place changes nothing: no lock, the place still counts.
+    @Test func aFixInsideThePlaceKeepsIt() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let places = StubPlaces()
+        let (engine, _, m) = try await paired(relay, places: places)
+        try await atDesk(engine)
+        try await allowOpen(engine, m)
+        places.fix = Fix(lat: 0.0001, lon: 0, accuracy: 10, time: nowMs())
+        await engine.checkPlaceByFix(minGap: 0)
+        #expect(engine.currentPlace == "p1")
+        #expect(engine.local.grants.first?.locked == false)
+    }
+
+    /// Location access Always taken away: leaving the place would go unnoticed, so the machine
+    /// allowed there is locked (SPEC.md 11.9).
+    @Test func losingLocationAlwaysLocksTheMachineAllowedAtAPlace() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let places = StubPlaces()
+        let (engine, notifier, m) = try await paired(relay, places: places)
+        try await atDesk(engine)
+        try await allowOpen(engine, m)
+        places.hasAlways = false
+        let listen = try m.start(["listen", "--secs", "8", "--count", "1"])
+        _ = try await listen.find("(LISTENING)")
+        await engine.lockUnwatched()
+        let (_, heard) = await m.waitAsync(listen)
+        #expect(heard.contains("lock"), "\(heard)")
+        #expect(notifier.titles().contains { $0.hasPrefix("sealctl can no longer notice you leaving a place") })
+    }
+
+    /// A machine allowed with no place is not locked when the phone leaves one.
+    @Test func leavingAPlaceLeavesAMachineAllowedElsewhereOpen() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, _, m) = try await paired(relay, places: StubPlaces())
+        try await atDesk(engine)
+        await engine.onPlaceTransition(["p1"], entered: nil)
+        try await allowOpen(engine, m)
+        #expect(engine.local.grants.first?.placeId == nil)
+        #expect(await engine.grantsLeft(["p1"]).isEmpty)
+    }
+
     /// The expiry timer fires while a level 2 confirm is on its way and the relay takes it: one
     /// answer is recorded, not also an expiry (SPEC.md 8.5, 9.6).
     @Test func expiryDuringASensitiveConfirmKeepsTheAnswer() async throws {

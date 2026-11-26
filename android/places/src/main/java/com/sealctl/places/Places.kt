@@ -48,7 +48,8 @@ data class Fix(val lat: Double, val lon: Double, val accuracy: Double, val time:
 
 /**
  * Places on Android (SPEC.md 10.3, 11.9): one geofence per place with enter and exit, never
- * expiring, 2-minute responsiveness; one location fix at the first approval of the day.
+ * expiring, 2-minute responsiveness; one location fix at the first approval of the day, and fixes
+ * that check for an exit the geofences missed.
  * Locations never leave the phone.
  */
 class Places(private val context: Context) : LocationPermissions {
@@ -82,14 +83,16 @@ class Places(private val context: Context) : LocationPermissions {
      * exist and location is allowed all the time (geofences need it from Android 10).
      * [GeofencingRequest.INITIAL_TRIGGER_ENTER]: a phone already inside a place gets its enter
      * at once, so the current place comes back after every registration (app start, boot,
-     * update, a change of places or of the permission).
+     * update, a change of places or of the permission). [GeofencingRequest.INITIAL_TRIGGER_EXIT]:
+     * a phone outside a place gets its exit, so an exit missed while the app was not running
+     * (Doze, battery limits, a restart) is noticed at the next registration.
      */
     @SuppressLint("MissingPermission")
     suspend fun monitor(fences: List<Fence>): Boolean {
         runCatching { geofencing.removeGeofences(pendingIntent()).await() }
         if (fences.isEmpty() || !hasForeground() || !hasBackground()) return false
         val request = GeofencingRequest.Builder()
-            .setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_ENTER)
+            .setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_ENTER or GeofencingRequest.INITIAL_TRIGGER_EXIT)
             .addGeofences(
                 fences.map {
                     Geofence.Builder()

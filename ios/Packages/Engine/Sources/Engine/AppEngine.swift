@@ -73,8 +73,11 @@ public final class AppEngine {
     /// Requests whose answer is on its way: a second tap waits for nothing, and the expiry
     /// timer leaves the card to the answer (SPEC.md 8.5).
     @ObservationIgnored var answering: Set<String> = []
-    /// Exits from trusted places so far, to tell whether one came while an answer was on its way.
-    @ObservationIgnored var placeExits = 0
+    /// Exits from each trusted place so far, to tell whether the phone left the place an answer
+    /// was decided at while that answer was on its way (11.9).
+    @ObservationIgnored var placeExits: [String: Int] = [:]
+    /// When a fix was last taken to check for an exit the monitor missed, Unix ms.
+    @ObservationIgnored var lastFixCheck: Int64 = 0
     /// Test seams; always empty in the app.
     @ObservationIgnored var hooks = EngineHooks()
     /// The phone's clock for a request's time (deadlines, the card's timer, catch-up). A test
@@ -261,6 +264,10 @@ public final class AppEngine {
         if local.dirty { scheduleUpload(after: 0) }
         await notifier.removeStale(now: nowMs(), answered: answeredIds)
         await registerPush()
+        // Location access Always taken away: leaving a place would go unnoticed (11.9).
+        if locationAccess() != .always { await lockUnwatched() }
+        // An exit the monitor missed while the app was away.
+        await checkPlaceByFix(minGap: Self.foregroundFixGapMs)
     }
 
     /// The lifetimes and the usage log's 90 days (SPEC.md 6.4), applied at most once a day
@@ -375,7 +382,10 @@ public final class AppEngine {
     /// is opened and recorded at the time the extension answered it.
     func takeInbox() async {
         guard let keys = await phoneKeys() else { return }
+        // Places the extension answered at; one the phone has left since locks its machines.
+        var answeredAt: Set<String> = []
         for item in files.takeInbox() {
+            if item.allowed, let p = item.placeId { answeredAt.insert(p) }
             answeredIds.insert(item.id)
             _ = try? await db.run { try $0.seeRequest(id: item.id, machine: item.machine, expires: UInt64(item.time + 600_000)) }
             let at = UInt64(max(item.time, 0))
@@ -395,6 +405,8 @@ public final class AppEngine {
             _ = try? await db.run { try $0.closeRequest(id: item.id, outcome: "answered") }
         }
         await refreshState()
+        let gone = answeredAt.filter { $0 != here }
+        if !gone.isEmpty { await lockLeft(Array(gone)) }
     }
 
     // MARK: network (8.6)
@@ -425,7 +437,11 @@ public final class AppEngine {
         days: [], pending: [], holds: [], plans: [], delayed: [], candidates: [],
         device: DeviceInfo(deviceId: "", token: nil, platform: "apns", sandbox: true, registered: 0),
         onboardingStep: 0, stateRev: 0, lastDownload: 0, lastUpload: 0, dirty: false, agentNoteShown: false,
-        messageSeq: [], backupShortened: false, leaveStep: 0, leaveSkipped: [])
+        messageSeq: [], backupShortened: false, leaveStep: 0, leaveSkipped: [], grants: [])
+
+    /// The least time between two fixes for a missed exit: at foreground, and in the background.
+    static let foregroundFixGapMs: Int64 = 60_000
+    static let backgroundFixGapMs: Int64 = 10 * 60_000
 }
 
 /// Points where a test holds the engine to put events in a set order (never set in the app).

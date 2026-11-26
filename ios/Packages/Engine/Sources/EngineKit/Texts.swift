@@ -439,6 +439,7 @@ public enum Texts {
     public static let cancelledBody = "A pending sensitive action was cancelled."
     public static let placeLearned = "Trust this place? You opened your machines here on 3 mornings."
     public static func leftPlace(_ place: String, names: String) -> String { "You left \(place). Locked \(names)." }
+    public static func placesUnwatched(names: String) -> String { "sealctl can no longer notice you leaving a place. Locked \(names)." }
     public static func ready(_ what: String) -> String {
         switch what {
         case "words": return "Ready: open sealctl to finish showing your words."

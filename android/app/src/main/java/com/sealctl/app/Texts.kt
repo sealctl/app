@@ -375,6 +375,7 @@ object Texts {
     fun leftPlace(place: String, names: String) = "You left $place. Locked $names."
     /** The "Ready" notification's body: the window to finish. */
     fun readyNote(expires: Long) = "Open it by ${time(expires)}, or it has to start again."
+    fun placesUnwatched(names: String) = "sealctl can no longer notice you leaving a place. Locked $names."
     fun ready(what: String) = "Ready: open sealctl to finish " + when (what) {
         "words" -> "showing your words."
         "delete" -> "deleting your relay data."

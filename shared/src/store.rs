@@ -193,6 +193,11 @@ pub enum LocalEvent {
         /// Machines skipped.
         skipped: Vec<String>,
     },
+    /// A lock was sent for this allowance because the phone left its place (SPEC.md 11.9).
+    GrantLocked {
+        /// The allowance, as [`Store::grants_left`] gave it.
+        grant: GrantRecord,
+    },
     /// Sync bookkeeping.
     Synced {
         /// Relay revision.
@@ -316,6 +321,7 @@ impl Store {
         allowed: bool,
         remember: bool,
         place_id: Option<String>,
+        left_place: bool,
         utc_offset_secs: i32,
         at: u64,
         now: u64,
@@ -438,10 +444,22 @@ impl Store {
                 l.days.push(DayRecord {
                     machine: machine.clone(),
                     first_approval: at,
-                    place_id,
+                    place_id: place_id.clone().filter(|_| !left_place),
                     ends: day_end(at, utc_offset_secs),
                 });
             }
+        }
+        // The machine takes its allowance from this reply's place, wherever its day began: an
+        // allowance from a trusted place is locked when the phone leaves it (11.9).
+        if crate::grants::sets_allowance(request.kind(), outcome, allowed) {
+            crate::grants::record_grant(
+                &mut l.grants,
+                &machine,
+                place_id,
+                at,
+                utc_offset_secs,
+                now,
+            );
         }
         l.dirty = true;
         let s = normalise(s);
@@ -945,6 +963,7 @@ impl Store {
                 l.leave_step = step;
                 l.leave_skipped = skipped;
             }
+            LocalEvent::GrantLocked { grant } => crate::grants::grant_locked(&mut l.grants, grant),
             LocalEvent::Synced { rev, uploaded } => {
                 l.state_rev = rev;
                 if uploaded {
@@ -1021,8 +1040,12 @@ impl Store {
     }
 
     /// Records an answer (SPEC.md 9.1 step 7): usage, summary, remembered answers, inventory,
-    /// the day record. `outcome` is `one_tap`, `automatic`, `once`, `denied`, `confirmed`,
-    /// `expired`; `allowed` says whether keys were handed out.
+    /// the day record and where the machine's allowance came from. `outcome` is `one_tap`,
+    /// `automatic`, `once`, `denied`, `confirmed`, `expired`; `allowed` says whether keys were
+    /// handed out. `place_id` is the trusted place the reply was decided at (it carried
+    /// `trusted`); `left_place` says the phone left it while the reply was on its way, so the
+    /// day does not begin there, though the allowance still came from there.
+    #[allow(clippy::too_many_arguments)]
     pub fn answered(
         &self,
         request: Arc<Request>,
@@ -1030,6 +1053,7 @@ impl Store {
         allowed: bool,
         remember: bool,
         place_id: Option<String>,
+        left_place: bool,
         utc_offset_secs: i32,
     ) -> Result<AnsweredResult> {
         let now = self.clock_now()?.now;
@@ -1039,6 +1063,7 @@ impl Store {
             allowed,
             remember,
             place_id,
+            left_place,
             utc_offset_secs,
             now,
             now,
@@ -1066,10 +1091,29 @@ impl Store {
             allowed,
             false,
             place_id,
+            false,
             utc_offset_secs,
             answered_at.min(now),
             now,
         )
+    }
+
+    /// The allowances to lock now that the phone is not inside the places `left` (SPEC.md
+    /// 11.9): every machine whose latest session was allowed at one of them, wherever its day
+    /// began, not locked yet and not ended. Places no longer trusted lock nothing. Send each a
+    /// lock, then [`LocalEvent::GrantLocked`].
+    pub fn grants_left(&self, left: Vec<String>, utc_offset_secs: i32) -> Result<Vec<GrantRecord>> {
+        let c = lock(&self.conn)?;
+        let s: State = read_doc(&c, "state")?;
+        let l: LocalState = read_doc(&c, "local")?;
+        let now = self.now(&c);
+        Ok(crate::grants::grants_to_lock(
+            l,
+            s.places,
+            left,
+            now,
+            utc_offset_secs,
+        ))
     }
 
     /// Records a `report` request: status, uses, inventory, hand-back. `utc_offset_secs` is
@@ -1813,7 +1857,15 @@ mod tests {
         st.set_now(MIDNIGHT + 13 * H);
         let r = request_at(&m, "open", MIDNIGHT + 13 * H, Vec::new());
         let first = st
-            .answered(r, "one_tap".into(), true, false, Some("desk".into()), 0)
+            .answered(
+                r,
+                "one_tap".into(),
+                true,
+                false,
+                Some("desk".into()),
+                false,
+                0,
+            )
             .unwrap();
         assert!(first.first_of_day);
         let day = day_of(&st, &m.id()).unwrap();
@@ -1823,7 +1875,15 @@ mod tests {
         let r = request_at(&m, "open", MIDNIGHT + 26 * H - 1000, Vec::new());
         st.set_now(MIDNIGHT + 26 * H + 2000);
         let late = st
-            .answered(r, "automatic".into(), true, false, Some("desk".into()), 0)
+            .answered(
+                r,
+                "automatic".into(),
+                true,
+                false,
+                Some("desk".into()),
+                false,
+                0,
+            )
             .unwrap();
         assert!(!late.first_of_day);
         assert_eq!(day_of(&st, &m.id()), Some(day));
@@ -1835,17 +1895,191 @@ mod tests {
         let r = request_at(&m, "open", MIDNIGHT + 30 * H, Vec::new());
         st.set_now(MIDNIGHT + 30 * H);
         let plan = st
-            .answered(r, "in_session".into(), true, false, Some("desk".into()), 0)
+            .answered(
+                r,
+                "in_session".into(),
+                true,
+                false,
+                Some("desk".into()),
+                false,
+                0,
+            )
             .unwrap();
         assert!(!plan.first_of_day);
         // A tap after 02:00 begins the day.
         let r = request_at(&m, "open", morning, Vec::new());
         st.set_now(morning);
         let tap = st
-            .answered(r, "once".into(), true, false, Some("desk".into()), 0)
+            .answered(r, "once".into(), true, false, Some("desk".into()), false, 0)
             .unwrap();
         assert!(tap.first_of_day);
         assert_eq!(day_of(&st, &m.id()).unwrap().first_approval, morning);
+    }
+
+    fn trust(st: &Store, id: &str) {
+        st.apply(Event::AddPlace {
+            place: TrustedPlace {
+                id: id.into(),
+                name: id.into(),
+                lat: 50.45,
+                lon: 30.52,
+                radius: 150.0,
+                created: MIDNIGHT,
+                manual: true,
+                ..TrustedPlace::default()
+            },
+        })
+        .unwrap();
+    }
+
+    fn keys_of(g: Vec<GrantRecord>) -> Vec<String> {
+        let mut k: Vec<String> = g.into_iter().map(|g| g.machine).collect();
+        k.sort();
+        k
+    }
+
+    /// The owner's morning: the Mac's day began at 07:13 before any place existed; at 07:26
+    /// Home was trusted and the Mac was allowed again there, so its reply carried `trusted`
+    /// (4 h). Leaving Home must lock it, though its day did not begin there (SPEC.md 11.9).
+    #[test]
+    fn leaving_a_place_locks_a_machine_allowed_there_whose_day_began_elsewhere() {
+        let st = store();
+        let mac = paired(&st);
+        let pc = paired(&st);
+        let laptop = paired(&st);
+        let t = |h: u64, m: u64| MIDNIGHT + h * H + m * MIN;
+        // 07:13, no place: the Mac's day begins with no place.
+        st.set_now(t(7, 13));
+        let r = request_at(&mac, "open", t(7, 13), Vec::new());
+        assert!(
+            st.answered(r, "one_tap".into(), true, false, None, false, 0)
+                .unwrap()
+                .first_of_day
+        );
+        assert_eq!(day_of(&st, &mac.id()).unwrap().place_id, None);
+        // The PC's and the laptop's days begin with no place too.
+        let r = request_at(&pc, "open", t(7, 15), Vec::new());
+        st.answered(r, "one_tap".into(), true, false, None, false, 0)
+            .unwrap();
+        // 07:26: "Trust where I am now".
+        trust(&st, "home");
+        // The Mac locked by itself and is allowed again at Home; the laptop too.
+        st.set_now(t(9, 0));
+        let r = request_at(&mac, "open", t(9, 0), Vec::new());
+        assert!(
+            !st.answered(
+                r,
+                "one_tap".into(),
+                true,
+                false,
+                Some("home".into()),
+                false,
+                0
+            )
+            .unwrap()
+            .first_of_day
+        );
+        assert_eq!(day_of(&st, &mac.id()).unwrap().place_id, None);
+        let r = request_at(&laptop, "open", t(9, 5), Vec::new());
+        st.answered(
+            r,
+            "automatic".into(),
+            true,
+            false,
+            Some("home".into()),
+            false,
+            0,
+        )
+        .unwrap();
+        // The PC's latest session was allowed elsewhere ("Allow once" at Home opens none).
+        let r = request_at(&pc, "open", t(9, 10), Vec::new());
+        st.answered(r, "once".into(), true, false, Some("home".into()), false, 0)
+            .unwrap();
+        // A walk: leaving Home locks the Mac and the laptop, not the PC.
+        st.set_now(t(10, 0));
+        let left = st.grants_left(vec!["home".into()], 0).unwrap();
+        assert_eq!(keys_of(left.clone()), {
+            let mut k = vec![mac.id(), laptop.id()];
+            k.sort();
+            k
+        });
+        // Once the locks are sent, leaving again sends none.
+        for g in left {
+            st.apply_local(LocalEvent::GrantLocked { grant: g })
+                .unwrap();
+        }
+        assert!(st.grants_left(vec!["home".into()], 0).unwrap().is_empty());
+        // Opened again at Home: the next exit locks it again.
+        let r = request_at(&mac, "open", t(11, 0), Vec::new());
+        st.set_now(t(11, 0));
+        st.answered(
+            r,
+            "one_tap".into(),
+            true,
+            false,
+            Some("home".into()),
+            false,
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            keys_of(st.grants_left(vec!["home".into()], 0).unwrap()),
+            vec![mac.id()]
+        );
+        // Opened again elsewhere: Home no longer locks it.
+        let r = request_at(&mac, "open", t(12, 0), Vec::new());
+        st.set_now(t(12, 0));
+        st.answered(r, "one_tap".into(), true, false, None, false, 0)
+            .unwrap();
+        assert!(st.grants_left(vec!["home".into()], 0).unwrap().is_empty());
+    }
+
+    /// An allow decided at the place and posted after the phone left it: the day does not
+    /// begin there, but the machine's allowance came from there, so the place still locks it.
+    #[test]
+    fn an_answer_on_its_way_when_the_phone_left_still_counts_for_the_place() {
+        let st = store();
+        let m = paired(&st);
+        trust(&st, "home");
+        st.set_now(MIDNIGHT + 9 * H);
+        let r = request_at(&m, "open", MIDNIGHT + 9 * H, Vec::new());
+        st.answered(
+            r,
+            "one_tap".into(),
+            true,
+            false,
+            Some("home".into()),
+            true,
+            0,
+        )
+        .unwrap();
+        assert_eq!(day_of(&st, &m.id()).unwrap().place_id, None);
+        assert_eq!(
+            keys_of(st.grants_left(vec!["home".into()], 0).unwrap()),
+            vec![m.id()]
+        );
+    }
+
+    /// Removing a place: machines opened there stay Open until their allowance ends (11.9).
+    #[test]
+    fn a_removed_place_locks_nothing() {
+        let st = store();
+        let m = paired(&st);
+        trust(&st, "home");
+        st.set_now(MIDNIGHT + 9 * H);
+        let r = request_at(&m, "open", MIDNIGHT + 9 * H, Vec::new());
+        st.answered(
+            r,
+            "one_tap".into(),
+            true,
+            false,
+            Some("home".into()),
+            false,
+            0,
+        )
+        .unwrap();
+        st.apply(Event::RemovePlace { id: "home".into() }).unwrap();
+        assert!(st.grants_left(vec!["home".into()], 0).unwrap().is_empty());
     }
 
     #[test]
@@ -2000,7 +2234,7 @@ mod tests {
         st.set_now(t0);
         assert!(st.see_request(req.id(), req.machine(), 0).unwrap());
         st.set_now(t0 + 25 * MIN);
-        st.answered(req.clone(), "one_tap".into(), true, false, None, 0)
+        st.answered(req.clone(), "one_tap".into(), true, false, None, false, 0)
             .unwrap();
         // Its body can be opened until 09:45: until then (and the 10 minutes after) the id is
         // refused, although it was first seen more than 30 minutes ago.
@@ -2038,13 +2272,14 @@ mod tests {
         let later = t0 + 91 * 24 * H;
         st.set_now(later);
         let r = request_at(&m, "agent", later, uses());
-        st.answered(r, "once".into(), true, false, None, 0).unwrap();
+        st.answered(r, "once".into(), true, false, None, false, 0)
+            .unwrap();
         let a = st.snapshot().unwrap().answers[0].clone();
         assert_eq!(a.last_used, t0);
         assert!(st.prune(later, 0).unwrap().answers[0].deleted);
         // Allowed and remembered: the answer is kept again from now.
         let r = request_at(&m, "agent", later, uses());
-        st.answered(r, "one_tap".into(), true, true, None, 0)
+        st.answered(r, "one_tap".into(), true, true, None, false, 0)
             .unwrap();
         let s = st.snapshot().unwrap();
         assert_eq!(s.live_answers().count(), 1);
@@ -2095,7 +2330,7 @@ mod tests {
             names: vec!["K".into()],
         }];
         let r = request_at(&m, "open", t0 + H, uses);
-        st.answered(r, "one_tap".into(), true, true, None, 0)
+        st.answered(r, "one_tap".into(), true, true, None, false, 0)
             .unwrap();
         let merged = crate::merge::merge_state(removed, st.snapshot().unwrap());
         assert_eq!(merged.live_answers().count(), 1);
@@ -2379,7 +2614,7 @@ mod tests {
         assert_eq!(crate::day::local_date(t, 0), "2026-12-01");
         st.set_now(t);
         let r = request_at(&m, "open", t, Vec::new());
-        st.answered(r, "one_tap".into(), true, false, None, -5 * 3600)
+        st.answered(r, "one_tap".into(), true, false, None, false, -5 * 3600)
             .unwrap();
         st.apply_status(
             m.id(),
@@ -2784,10 +3019,10 @@ mod tests {
         assert_eq!(counted(&st, "2026-11-21", 0), (4, 0));
         // a deny counts as declined, an expired answer as nothing
         let r = request_at(&m, "open", t, Vec::new());
-        st.answered(r, "denied".into(), false, false, None, 0)
+        st.answered(r, "denied".into(), false, false, None, false, 0)
             .unwrap();
         let r = request_at(&m, "open", t, Vec::new());
-        st.answered(r, "expired".into(), false, false, None, 0)
+        st.answered(r, "expired".into(), false, false, None, false, 0)
             .unwrap();
         assert_eq!(counted(&st, "2026-11-21", 0), (4, 1));
         // the same figures as the month
@@ -2847,7 +3082,7 @@ mod tests {
         for days_ago in [402, 398, 91, 89, 0] {
             st.set_now(at(days_ago));
             let r = request_at(&m, "open", at(days_ago), Vec::new());
-            st.answered(r, "one_tap".into(), true, false, None, 0)
+            st.answered(r, "one_tap".into(), true, false, None, false, 0)
                 .unwrap();
         }
         st.prune(now, 0).unwrap();
@@ -2881,14 +3116,14 @@ mod tests {
         let before = MIDNIGHT + 22 * H - MIN;
         st.set_now(before);
         let r = request_at(&m, "open", before, Vec::new());
-        st.answered(r, "one_tap".into(), true, false, None, utc2)
+        st.answered(r, "one_tap".into(), true, false, None, false, utc2)
             .unwrap();
         assert_eq!(counted(&st, "2026-11-21", utc2), (1, 0));
         // two minutes later it is the 22nd there
         let after = before + 2 * MIN;
         st.set_now(after);
         let r = request_at(&m, "open", after, Vec::new());
-        st.answered(r, "denied".into(), false, false, None, utc2)
+        st.answered(r, "denied".into(), false, false, None, false, utc2)
             .unwrap();
         assert_eq!(counted(&st, "2026-11-22", utc2), (0, 1));
         // a use made at 23:59 and reported at 00:01 counts when it reached the phone, as the
@@ -2957,7 +3192,7 @@ mod tests {
         let m = paired(&st);
         // A use recorded before the first prune counts once, live.
         let r = request_at(&m, "open", now, Vec::new());
-        st.answered(r, "one_tap".into(), true, false, None, 3600)
+        st.answered(r, "one_tap".into(), true, false, None, false, 3600)
             .unwrap();
         // The first prune removes the rows older than 90 days, after counting them.
         st.prune(now, 3600).unwrap();
@@ -3052,7 +3287,7 @@ mod tests {
             ),
         ];
         for (req, key, kind) in cases {
-            st.answered(req, "once".into(), true, false, None, 0)
+            st.answered(req, "once".into(), true, false, None, false, 0)
                 .unwrap();
             let u = st.usage(None, None, 1).unwrap().remove(0);
             assert_eq!((u.key.as_str(), u.kind.as_deref()), (key, kind));

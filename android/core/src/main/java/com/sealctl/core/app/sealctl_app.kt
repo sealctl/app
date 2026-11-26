@@ -758,6 +758,10 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_sealctl_app_checksum_func_running_phone_action(
     ): Int
+    external fun uniffi_sealctl_app_checksum_func_grants_to_lock(
+    ): Int
+    external fun uniffi_sealctl_app_checksum_func_places_left_by_fix(
+    ): Int
     external fun uniffi_sealctl_app_checksum_func_machine_model_name(
     ): Int
     external fun uniffi_sealctl_app_checksum_func_merge_state(
@@ -795,6 +799,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_sealctl_app_checksum_method_store_daily_counts(
     ): Int
     external fun uniffi_sealctl_app_checksum_method_store_erase(
+    ): Int
+    external fun uniffi_sealctl_app_checksum_method_store_grants_left(
     ): Int
     external fun uniffi_sealctl_app_checksum_method_store_local(
     ): Int
@@ -853,7 +859,7 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_sealctl_app_fn_constructor_store_open(`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
-    external fun uniffi_sealctl_app_fn_method_store_answered(`ptr`: Long,`request`: Long,`outcome`: RustBuffer.ByValue,`allowed`: Byte,`remember`: Byte,`placeId`: RustBuffer.ByValue,`utcOffsetSecs`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_sealctl_app_fn_method_store_answered(`ptr`: Long,`request`: Long,`outcome`: RustBuffer.ByValue,`allowed`: Byte,`remember`: Byte,`placeId`: RustBuffer.ByValue,`leftPlace`: Byte,`utcOffsetSecs`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_method_store_answered_at(`ptr`: Long,`request`: Long,`outcome`: RustBuffer.ByValue,`allowed`: Byte,`placeId`: RustBuffer.ByValue,`utcOffsetSecs`: Int,`answeredAt`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -875,6 +881,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_method_store_erase(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_sealctl_app_fn_method_store_grants_left(`ptr`: Long,`left`: RustBuffer.ByValue,`utcOffsetSecs`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_method_store_local(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_method_store_next_message_seq(`ptr`: Long,`machine`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -956,6 +964,10 @@ internal object UniffiLib {
     external fun uniffi_sealctl_app_fn_func_delay_phase(`action`: RustBuffer.ByValue,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_running_phone_action(`delayed`: RustBuffer.ByValue,`what`: RustBuffer.ByValue,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_sealctl_app_fn_func_grants_to_lock(`local`: RustBuffer.ByValue,`places`: RustBuffer.ByValue,`left`: RustBuffer.ByValue,`now`: Long,`utcOffsetSecs`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_sealctl_app_fn_func_places_left_by_fix(`places`: RustBuffer.ByValue,`fix`: RustBuffer.ByValue,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_machine_model_name(`model`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1173,6 +1185,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_sealctl_app_checksum_func_running_phone_action() and 0xFFFF) != 4141) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_sealctl_app_checksum_func_grants_to_lock() and 0xFFFF) != 8719) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_sealctl_app_checksum_func_places_left_by_fix() and 0xFFFF) != 3562) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_sealctl_app_checksum_func_machine_model_name() and 0xFFFF) != 64728) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1197,7 +1215,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_sealctl_app_checksum_func_open_answered_request() and 0xFFFF) != 53363) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_sealctl_app_checksum_method_store_answered() and 0xFFFF) != 64176) {
+    if ((lib.uniffi_sealctl_app_checksum_method_store_answered() and 0xFFFF) != 34913) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_method_store_answered_at() and 0xFFFF) != 28273) {
@@ -1228,6 +1246,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_method_store_erase() and 0xFFFF) != 22683) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_sealctl_app_checksum_method_store_grants_left() and 0xFFFF) != 61670) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_method_store_local() and 0xFFFF) != 60227) {
@@ -1776,10 +1797,13 @@ public interface StoreInterface {
     
     /**
      * Records an answer (SPEC.md 9.1 step 7): usage, summary, remembered answers, inventory,
-     * the day record. `outcome` is `one_tap`, `automatic`, `once`, `denied`, `confirmed`,
-     * `expired`; `allowed` says whether keys were handed out.
+     * the day record and where the machine's allowance came from. `outcome` is `one_tap`,
+     * `automatic`, `once`, `denied`, `confirmed`, `expired`; `allowed` says whether keys were
+     * handed out. `place_id` is the trusted place the reply was decided at (it carried
+     * `trusted`); `left_place` says the phone left it while the reply was on its way, so the
+     * day does not begin there, though the allowance still came from there.
      */
-    fun `answered`(`request`: Request, `outcome`: kotlin.String, `allowed`: kotlin.Boolean, `remember`: kotlin.Boolean, `placeId`: kotlin.String?, `utcOffsetSecs`: kotlin.Int): AnsweredResult
+    fun `answered`(`request`: Request, `outcome`: kotlin.String, `allowed`: kotlin.Boolean, `remember`: kotlin.Boolean, `placeId`: kotlin.String?, `leftPlace`: kotlin.Boolean, `utcOffsetSecs`: kotlin.Int): AnsweredResult
     
     /**
      * [`Store::answered`] for an answer given earlier, at `answered_at` (Unix ms): what the
@@ -1845,6 +1869,14 @@ public interface StoreInterface {
      * Erases everything (Erase sealctl from this phone).
      */
     fun `erase`()
+    
+    /**
+     * The allowances to lock now that the phone is not inside the places `left` (SPEC.md
+     * 11.9): every machine whose latest session was allowed at one of them, wherever its day
+     * began, not locked yet and not ended. Places no longer trusted lock nothing. Send each a
+     * lock, then [`LocalEvent::GrantLocked`].
+     */
+    fun `grantsLeft`(`left`: List<kotlin.String>, `utcOffsetSecs`: kotlin.Int): List<GrantRecord>
     
     /**
      * The local records.
@@ -2038,10 +2070,13 @@ open class Store: Disposable, AutoCloseable, StoreInterface
     
     /**
      * Records an answer (SPEC.md 9.1 step 7): usage, summary, remembered answers, inventory,
-     * the day record. `outcome` is `one_tap`, `automatic`, `once`, `denied`, `confirmed`,
-     * `expired`; `allowed` says whether keys were handed out.
+     * the day record and where the machine's allowance came from. `outcome` is `one_tap`,
+     * `automatic`, `once`, `denied`, `confirmed`, `expired`; `allowed` says whether keys were
+     * handed out. `place_id` is the trusted place the reply was decided at (it carried
+     * `trusted`); `left_place` says the phone left it while the reply was on its way, so the
+     * day does not begin there, though the allowance still came from there.
      */
-    @Throws(AppException::class)override fun `answered`(`request`: Request, `outcome`: kotlin.String, `allowed`: kotlin.Boolean, `remember`: kotlin.Boolean, `placeId`: kotlin.String?, `utcOffsetSecs`: kotlin.Int): AnsweredResult {
+    @Throws(AppException::class)override fun `answered`(`request`: Request, `outcome`: kotlin.String, `allowed`: kotlin.Boolean, `remember`: kotlin.Boolean, `placeId`: kotlin.String?, `leftPlace`: kotlin.Boolean, `utcOffsetSecs`: kotlin.Int): AnsweredResult {
             return FfiConverterTypeAnsweredResult.lift(
     callWithHandle {
     uniffiRustCallWithError(AppException) { _status ->
@@ -2053,6 +2088,7 @@ open class Store: Disposable, AutoCloseable, StoreInterface
         FfiConverterBoolean.lower(`allowed`),
         FfiConverterBoolean.lower(`remember`),
         FfiConverterOptionalString.lower(`placeId`),
+        FfiConverterBoolean.lower(`leftPlace`),
         FfiConverterInt.lower(`utcOffsetSecs`),_status)
 }
     }
@@ -2262,6 +2298,28 @@ open class Store: Disposable, AutoCloseable, StoreInterface
 }
     }
     
+    
+
+    
+    /**
+     * The allowances to lock now that the phone is not inside the places `left` (SPEC.md
+     * 11.9): every machine whose latest session was allowed at one of them, wherever its day
+     * began, not locked yet and not ended. Places no longer trusted lock nothing. Send each a
+     * lock, then [`LocalEvent::GrantLocked`].
+     */
+    @Throws(AppException::class)override fun `grantsLeft`(`left`: List<kotlin.String>, `utcOffsetSecs`: kotlin.Int): List<GrantRecord> {
+            return FfiConverterSequenceTypeGrantRecord.lift(
+    callWithHandle {
+    uniffiRustCallWithError(AppException) { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_method_store_grants_left(
+        it,
+        
+        FfiConverterSequenceString.lower(`left`),
+        FfiConverterInt.lower(`utcOffsetSecs`),_status)
+}
+    }
+    )
+    }
     
 
     
@@ -2856,7 +2914,8 @@ data class DayRecord (
     var `firstApproval`: kotlin.ULong
     , 
     /**
-     * TrustedPlace the day began at.
+     * TrustedPlace the day began at: an `open` answers by itself only there (SPEC.md 9.3).
+     * Leaving a place locks by [`GrantRecord`], not by this.
      */
     var `placeId`: kotlin.String?
     , 
@@ -3234,6 +3293,81 @@ public object FfiConverterTypeDeviceInfo: FfiConverterRustBuffer<DeviceInfo> {
             FfiConverterString.write(value.`platform`, buf)
             FfiConverterBoolean.write(value.`sandbox`, buf)
             FfiConverterULong.write(value.`registered`, buf)
+    }
+}
+
+
+
+/**
+ * Where a machine's allowance came from (SPEC.md 11.9): its latest `open` allowed for a
+ * session, which sets the machine's cap from the reply's place. Leaving that place locks the
+ * machine, wherever its day began.
+ */
+data class GrantRecord (
+    /**
+     * Machine key.
+     */
+    var `machine`: kotlin.String
+    , 
+    /**
+     * The trusted place the session was allowed at: set when the reply carried `trusted`,
+     * `None` when it carried `other` or `none`.
+     */
+    var `placeId`: kotlin.String?
+    , 
+    /**
+     * When it was allowed, Unix ms.
+     */
+    var `at`: kotlin.ULong
+    , 
+    /**
+     * The allowance ends by then at the latest: the end of the day it was allowed in, the
+     * machine's hard stop.
+     */
+    var `ends`: kotlin.ULong
+    , 
+    /**
+     * A lock for this allowance was sent; leaving again sends none.
+     */
+    var `locked`: kotlin.Boolean
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeGrantRecord: FfiConverterRustBuffer<GrantRecord> {
+    override fun read(buf: ByteBuffer): GrantRecord {
+        return GrantRecord(
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: GrantRecord) = (
+            FfiConverterString.allocationSize(value.`machine`) +
+            FfiConverterOptionalString.allocationSize(value.`placeId`) +
+            FfiConverterULong.allocationSize(value.`at`) +
+            FfiConverterULong.allocationSize(value.`ends`) +
+            FfiConverterBoolean.allocationSize(value.`locked`)
+    )
+
+    override fun write(value: GrantRecord, buf: ByteBuffer) {
+            FfiConverterString.write(value.`machine`, buf)
+            FfiConverterOptionalString.write(value.`placeId`, buf)
+            FfiConverterULong.write(value.`at`, buf)
+            FfiConverterULong.write(value.`ends`, buf)
+            FfiConverterBoolean.write(value.`locked`, buf)
     }
 }
 
@@ -3651,6 +3785,11 @@ data class LocalState (
      * Machines skipped while leaving.
      */
     var `leaveSkipped`: List<kotlin.String>
+    , 
+    /**
+     * Where each machine's allowance came from, one per machine.
+     */
+    var `grants`: List<GrantRecord>
     
 ){
     
@@ -3684,6 +3823,7 @@ public object FfiConverterTypeLocalState: FfiConverterRustBuffer<LocalState> {
             FfiConverterBoolean.read(buf),
             FfiConverterUInt.read(buf),
             FfiConverterSequenceString.read(buf),
+            FfiConverterSequenceTypeGrantRecord.read(buf),
         )
     }
 
@@ -3704,7 +3844,8 @@ public object FfiConverterTypeLocalState: FfiConverterRustBuffer<LocalState> {
             FfiConverterSequenceTypeMachineCounter.allocationSize(value.`messageSeq`) +
             FfiConverterBoolean.allocationSize(value.`backupShortened`) +
             FfiConverterUInt.allocationSize(value.`leaveStep`) +
-            FfiConverterSequenceString.allocationSize(value.`leaveSkipped`)
+            FfiConverterSequenceString.allocationSize(value.`leaveSkipped`) +
+            FfiConverterSequenceTypeGrantRecord.allocationSize(value.`grants`)
     )
 
     override fun write(value: LocalState, buf: ByteBuffer) {
@@ -3725,6 +3866,7 @@ public object FfiConverterTypeLocalState: FfiConverterRustBuffer<LocalState> {
             FfiConverterBoolean.write(value.`backupShortened`, buf)
             FfiConverterUInt.write(value.`leaveStep`, buf)
             FfiConverterSequenceString.write(value.`leaveSkipped`, buf)
+            FfiConverterSequenceTypeGrantRecord.write(value.`grants`, buf)
     }
 }
 
@@ -6704,6 +6846,21 @@ sealed class LocalEvent {
     }
     
     /**
+     * A lock was sent for this allowance because the phone left its place (SPEC.md 11.9).
+     */
+    data class GrantLocked(
+        /**
+         * The allowance, as [`Store::grants_left`] gave it.
+         */
+        val `grant`: com.sealctl.core.app.GrantRecord) : LocalEvent()
+        
+    {
+        
+
+        companion object
+    }
+    
+    /**
      * Sync bookkeeping.
      */
     data class Synced(
@@ -6770,7 +6927,10 @@ public object FfiConverterTypeLocalEvent : FfiConverterRustBuffer<LocalEvent>{
                 FfiConverterUInt.read(buf),
                 FfiConverterSequenceString.read(buf),
                 )
-            12 -> LocalEvent.Synced(
+            12 -> LocalEvent.GrantLocked(
+                FfiConverterTypeGrantRecord.read(buf),
+                )
+            13 -> LocalEvent.Synced(
                 FfiConverterULong.read(buf),
                 FfiConverterBoolean.read(buf),
                 )
@@ -6856,6 +7016,13 @@ public object FfiConverterTypeLocalEvent : FfiConverterRustBuffer<LocalEvent>{
                 + FfiConverterSequenceString.allocationSize(value.`skipped`)
             )
         }
+        is LocalEvent.GrantLocked -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeGrantRecord.allocationSize(value.`grant`)
+            )
+        }
         is LocalEvent.Synced -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
@@ -6923,8 +7090,13 @@ public object FfiConverterTypeLocalEvent : FfiConverterRustBuffer<LocalEvent>{
                 FfiConverterSequenceString.write(value.`skipped`, buf)
                 Unit
             }
-            is LocalEvent.Synced -> {
+            is LocalEvent.GrantLocked -> {
                 buf.putInt(12)
+                FfiConverterTypeGrantRecord.write(value.`grant`, buf)
+                Unit
+            }
+            is LocalEvent.Synced -> {
+                buf.putInt(13)
                 FfiConverterULong.write(value.`rev`, buf)
                 FfiConverterBoolean.write(value.`uploaded`, buf)
                 Unit
@@ -7650,6 +7822,34 @@ public object FfiConverterSequenceTypeDelayedAction: FfiConverterRustBuffer<List
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeDelayedAction.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeGrantRecord: FfiConverterRustBuffer<List<GrantRecord>> {
+    override fun read(buf: ByteBuffer): List<GrantRecord> {
+        val len = buf.getInt()
+        return List<GrantRecord>(len) {
+            FfiConverterTypeGrantRecord.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<GrantRecord>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeGrantRecord.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<GrantRecord>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeGrantRecord.write(it, buf)
         }
     }
 }
@@ -8643,6 +8843,44 @@ object CoreExceptionExternalErrorHandler : UniffiRustCallStatusErrorHandler<Core
         
         FfiConverterSequenceTypeDelayedAction.lower(`delayed`),
         FfiConverterString.lower(`what`),
+        FfiConverterULong.lower(`now`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * [`grants_left`] on the phone's local records: the allowances to lock now that the phone is
+         * not inside the places `left`. [`crate::store::Store::grants_left`] reads the same from the
+         * database.
+         */ fun `grantsToLock`(`local`: LocalState, `places`: List<TrustedPlace>, `left`: List<kotlin.String>, `now`: kotlin.ULong, `utcOffsetSecs`: kotlin.Int): List<GrantRecord> {
+            return FfiConverterSequenceTypeGrantRecord.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_func_grants_to_lock(
+    
+        
+        FfiConverterTypeLocalState.lower(`local`),
+        FfiConverterSequenceTypeTrustedPlace.lower(`places`),
+        FfiConverterSequenceString.lower(`left`),
+        FfiConverterULong.lower(`now`),
+        FfiConverterInt.lower(`utcOffsetSecs`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The trusted places a fix shows the phone is outside: farther from the centre than the
+         * radius plus the fix's accuracy, so a rough fix never says the phone left. Only a fresh fix
+         * counts, dated within [`FIX_FRESH_MS`] before `now` (Unix ms, the phone's clock).
+         */ fun `placesLeftByFix`(`places`: List<TrustedPlace>, `fix`: LocationSample, `now`: kotlin.ULong): List<kotlin.String> {
+            return FfiConverterSequenceString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_func_places_left_by_fix(
+    
+        
+        FfiConverterSequenceTypeTrustedPlace.lower(`places`),
+        FfiConverterTypeLocationSample.lower(`fix`),
         FfiConverterULong.lower(`now`),_status)
 }
     )

@@ -37,6 +37,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Fixed
 
+- Leaving a trusted place locks every machine whose session was allowed there, wherever its
+  day began. The phone keeps, per machine, the place its latest session was allowed at; a
+  machine whose latest session was allowed elsewhere stays Open. A lock the relay did not take
+  is sent again.
+- An exit the phone did not hear about locks the machines too: on Android the geofences now
+  also report the places the phone is outside when they are registered (every start of the
+  app), on iPhone the place monitor's records at launch count the same way, and a fresh
+  location fix clearly outside the place (taken at foreground, after an allow at a place, or
+  when a machine reports, only while a place is in use) counts as leaving it.
+- When location can no longer notice leaving a place ("Allow all the time" or Always taken
+  away, or location turned off on Android), the machines allowed at a trusted place are locked,
+  with a notification. Removing a place still leaves its machines Open until their allowance
+  ends.
 - The place the phone is inside is no longer lost when the system restarts the app: on Android
   it comes back while the geofences that would have reported leaving are still registered (same
   boot, no force stop or update since), and the geofences are registered again at every start;

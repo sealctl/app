@@ -156,6 +156,7 @@ extension AppEngine {
 
     func firstApprovalOfDay() async {
         guard let fix = await places?.sample() else { return }
+        await outsideByFix(fix)
         let sample = LocationSample(lat: fix.lat, lon: fix.lon, accuracy: fix.accuracy, time: UInt64(fix.time))
         let c = try? await db.run { try $0.placeSample(sample: sample, utcOffsetSecs: utcOffset()) }
         await refreshState()
@@ -205,9 +206,11 @@ extension AppEngine {
         await apply(.renamePlace(id: id, name: String(name.prefix(40))), upload: true)
     }
 
-    /// The phone crossed a place's edge; on exit, lock every machine whose day began there.
-    /// `entered` is nil when the monitor no longer knows (unknown or unmonitored): the place
-    /// stops counting as current, but that is not an exit, so nothing is locked or posted.
+    /// The phone crossed a place's edge. On exit (also the monitor's record at launch saying
+    /// the phone is outside), lock every machine whose allowance came from that place, wherever
+    /// its day began. `entered` is nil when the monitor no longer knows (unknown or
+    /// unmonitored): the place stops counting as current, but that is not an exit, so nothing
+    /// is locked or posted.
     public func onPlaceTransition(_ ids: [String], entered: Bool?) async {
         if entered == true {
             currentPlace = ids.first
@@ -217,19 +220,83 @@ extension AppEngine {
         if let c = currentPlace, ids.contains(c) { currentPlace = nil }
         writeSnapshot()
         guard entered == false else { return }
-        // An answer made at the place and still on its way locks its machine once it is posted.
-        placeExits += 1
+        await left(ids)
+    }
+
+    /// The phone is not inside these places: an exit, or a fix that shows it. An answer decided
+    /// at one and still on its way locks its machine once posted, and every machine allowed at
+    /// one is locked (11.9).
+    func left(_ ids: [String]) async {
+        if let c = currentPlace, ids.contains(c) {
+            currentPlace = nil
+            writeSnapshot()
+        }
+        for id in ids { placeExits[id, default: 0] += 1 }
+        await lockLeft(ids)
+    }
+
+    /// Locks every machine allowed at these places and says so, one notification per place.
+    func lockLeft(_ ids: [String]) async {
+        let locked = await lockGrants(grantsLeft(ids))
         for id in ids {
             guard let place = state.places.first(where: { $0.id == id }) else { continue }
-            var locked: [Machine] = []
-            for d in local.days where d.placeId == id {
-                if let m = machine(d.machine), await lock(m, reason: "place") { locked.append(m) }
-            }
-            if !locked.isEmpty {
+            let names = locked.filter { $0.0.placeId == id }.map { displayName($0.1) }
+            if !names.isEmpty {
                 await notifier.post(id: "left-\(id)", content: Notes.passive(
-                    Texts.leftPlace(place.name, names: locked.map(displayName).joined(separator: ", "))))
+                    Texts.leftPlace(place.name, names: names.joined(separator: ", "))))
             }
         }
+    }
+
+    /// The allowances to lock now that the phone is not inside these places (the shared core's
+    /// rule): each machine's latest session allowed at one, wherever its day began.
+    func grantsLeft(_ ids: [String]) async -> [GrantRecord] {
+        guard !ids.isEmpty else { return [] }
+        return (try? await db.run { try $0.grantsLeft(left: ids, utcOffsetSecs: utcOffset()) }) ?? []
+    }
+
+    /// Sends a lock for each allowance and records it once the relay took it; one that did not
+    /// go is sent again at the next exit, fix or launch.
+    func lockGrants(_ grants: [GrantRecord]) async -> [(GrantRecord, Machine)] {
+        var out: [(GrantRecord, Machine)] = []
+        for g in grants {
+            guard let m = machine(g.machine), await lock(m, reason: "place") else { continue }
+            await applyLocal(.grantLocked(grant: g))
+            out.append((g, m))
+        }
+        return out
+    }
+
+    var livePlaceIds: [String] { state.places.filter { !$0.deleted }.map(\.id) }
+
+    /// The phone can no longer notice leaving a place (location access Always taken away, or
+    /// location turned off): a machine allowed at a trusted place was given its longer
+    /// allowance because leaving would lock it, so it is locked now (11.9). Not an exit.
+    public func lockUnwatched() async {
+        let locked = await lockGrants(grantsLeft(livePlaceIds))
+        if !locked.isEmpty {
+            await notifier.post(id: "unwatched", content: Notes.passive(
+                Texts.placesUnwatched(names: locked.map { displayName($0.1) }.joined(separator: ", "))))
+        }
+    }
+
+    /// The monitor can report an exit late (or, after a restart, not at all). While a place
+    /// counts as current or a machine's allowance came from one, a fresh fix outside that place
+    /// counts as leaving it. At most one fix per `minGap` ms.
+    public func checkPlaceByFix(minGap: Int64) async {
+        if currentPlace == nil, await grantsLeft(livePlaceIds).isEmpty { return }
+        let now = nowMs()
+        guard now - lastFixCheck >= minGap || now < lastFixCheck else { return }
+        lastFixCheck = now
+        guard let fix = await places?.sample() else { return }
+        await outsideByFix(fix)
+    }
+
+    /// A fix: the trusted places it is clearly outside count as left (11.9).
+    func outsideByFix(_ fix: Fix) async {
+        let sample = LocationSample(lat: fix.lat, lon: fix.lon, accuracy: fix.accuracy, time: UInt64(max(fix.time, 0)))
+        let ids = placesLeftByFix(places: state.places, fix: sample, now: UInt64(nowMs()))
+        if !ids.isEmpty { await left(ids) }
     }
 }
 

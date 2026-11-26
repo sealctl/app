@@ -58,6 +58,7 @@ import com.sealctl.notify.NoteAction
 import com.sealctl.notify.Notify
 import com.sealctl.notify.RequestNote
 import com.sealctl.places.Fence
+import com.sealctl.places.Fix
 import com.sealctl.places.LocationPermissions
 import com.sealctl.places.PlaceMemory
 import com.sealctl.places.Places
@@ -76,7 +77,6 @@ import com.sealctl.vault.KeysInvalidatedException
 import com.sealctl.vault.Vault
 import java.io.IOException
 import java.util.TimeZone
-import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -190,13 +190,25 @@ class Engine(
     private val cancelResends = CancelResends()
     /** Delayed ids this install is registering with the relay (SPEC.md 11.23). */
     private val startingDelayed = StartingDelayed()
-    /** Exits from trusted places so far, to tell whether one came while an answer was on its way. */
-    private val placeExits = AtomicInteger(0)
+    /** Leaving trusted places: exits by place, and the machines allowed there (SPEC.md 11.9). */
+    private val placeExits = PlaceExits(
+        grantsLeft = { ids -> safe { store.grantsLeft(ids, offset()) }.orEmpty() },
+        places = { state.value.places },
+        machine = ::machine,
+        lock = { lock(it, "place") },
+        onLocked = { applyLocal(LocalEvent.GrantLocked(it)) },
+    )
     private var uploadJob: Job? = null
     private var onWifi = false
     /** Location permission, read at every decision; instrumented tests give their own. */
     @androidx.annotation.VisibleForTesting
     var permissions: LocationPermissions = places
+    /** One location fix, for a missed exit; instrumented tests give their own. */
+    @androidx.annotation.VisibleForTesting
+    var locate: suspend () -> Fix? = { places.sample() }
+    /** Instrumented tests only: takes the lock messages instead of the relay. */
+    @androidx.annotation.VisibleForTesting
+    var lockSender: (suspend (Machine, String) -> Boolean)? = null
     private val placeMemory = PlaceMemory(context)
     /** The geofences are registered (SPEC.md 11.9); false sends the next foreground to register them. */
     @Volatile private var fencesOn = false
@@ -339,6 +351,10 @@ class Engine(
             registerPush()
             // Location "Allow all the time" given in the system settings: places count from now.
             if (!fencesOn && location() == LocationAccess.ALWAYS && state.value.places.any { !it.deleted }) monitorPlaces()
+            // Taken away: leaving a place would go unnoticed (SPEC.md 11.9).
+            if (location() != LocationAccess.ALWAYS) lockUnwatched()
+            // An exit the geofences missed while the app was away.
+            checkPlaceByFix(FOREGROUND_FIX_GAP_MS)
         }
     }
 
@@ -561,6 +577,8 @@ class Engine(
         post(r, sealed, null, userTapped = false)
         safe { store.closeRequest(r.id, "answered") }
         result?.handback?.let { reportArrived(it) }
+        // An Open machine reports while it stays Open: a moment to notice an exit the geofences missed.
+        scope.launch { checkPlaceByFix(BACKGROUND_FIX_GAP_MS) }
     }
 
     private fun reportArrived(report: HandbackReport) {
@@ -584,7 +602,7 @@ class Engine(
         val approval = PlanApproval(plan.machine, plan.planHash, plan.notBefore, plan.keys.map { com.sealctl.core.KeyRef(it.purpose, it.id) })
         val sealed = withRoot { root -> runCatching { sealPlanKeysReply(root, keys, req, approval) }.getOrNull() } ?: return
         if (post(r, sealed, null, userTapped = false).first == Sent.POSTED) {
-            safe { store.answered(req, "in_session", true, false, here(), offset()) }
+            safe { store.answered(req, "in_session", true, false, here(), false, offset()) }
             refreshState()
         }
     }
@@ -610,7 +628,7 @@ class Engine(
         } ?: return
         Notify.cancel(context, id)
         safe { store.closeRequest(id, "expired") }
-        safe { store.answered(w.request, "expired", false, false, null, offset()) }
+        safe { store.answered(w.request, "expired", false, false, null, false, offset()) }
         refreshState()
     }
 
@@ -741,7 +759,7 @@ class Engine(
     /** Where the phone was when a decision was made, and how many place exits it had seen. */
     data class PlaceMark(val place: String?, val exits: Int)
 
-    private fun placeMark() = PlaceMark(here(), placeExits.get())
+    private fun placeMark() = here().let { PlaceMark(it, placeExits.exitsFrom(it)) }
 
     /** Opens a request on the card again from the relay's text: the core seals a request once. */
     private fun reopen(r: RelayRequest, keys: PhoneKeys) {
@@ -808,20 +826,29 @@ class Engine(
         return sent
     }
 
-    /** Records an answer the relay took (or may have taken): usage, the day and its place. */
+    /**
+     * Records an answer the relay took (or may have taken): usage, the day, and the place the
+     * machine's allowance came from.
+     */
     private suspend fun record(req: Request, r: RelayRequest, outcome: String, allowed: Boolean, remember: Boolean, mark: PlaceMark) {
-        // A place left while this was on its way: the day did not begin there after all.
-        val leftBefore = mark.place != null && placeExits.get() != mark.exits
-        val place = if (leftBefore) here() else mark.place
-        safe { store.answered(req, outcome, allowed, remember, place, offset()) }?.let { result ->
+        // A place left while this was on its way: the day did not begin there after all, but the
+        // reply carried `trusted`, so the allowance still came from there.
+        val leftBefore = mark.place != null && placeExits.exitsFrom(mark.place) != mark.exits
+        safe { store.answered(req, outcome, allowed, remember, mark.place, leftBefore, offset()) }?.let { result ->
             if (result.firstOfDay) scope.launch { firstApprovalOfDay() }
         }
         refreshState()
         scheduleUpload(10_000)
-        // Read once the day is in `local`: an exit from here on finds the day and locks the
+        // Read once the allowance is in `local`: an exit from here on finds it and locks the
         // machine itself. An exit before it could not, and a lock it sent may have reached the
         // machine before this answer did (SPEC.md 11.9).
-        if (allowed && mark.place != null && placeExits.get() != mark.exits) machine(r.machine)?.let { lock(it, "place") }
+        if (allowed && mark.place != null && placeExits.exitsFrom(mark.place) != mark.exits) {
+            val locked = placeExits.lockAt(mark.place)
+            if (locked.none { it.second.key == r.machine }) machine(r.machine)?.let { lock(it, "place") }
+        } else if (allowed && mark.place != null) {
+            // The geofences may have missed leaving the place this was decided at.
+            scope.launch { checkPlaceByFix(BACKGROUND_FIX_GAP_MS) }
+        }
     }
 
     /** The time a reply may still go, on this phone's clock. */
@@ -1086,6 +1113,7 @@ class Engine(
 
     /** Sends a lock to a machine; the relay holds it up to 24 hours. */
     suspend fun lock(machine: Machine, reason: String = "phone"): Boolean {
+        lockSender?.let { return it(machine, reason) }
         val keys = phoneKeys() ?: return false
         if (machine.boxKey.isEmpty()) return false
         val msg = MachineMessage(1u, System.currentTimeMillis().toULong(), nextSeq(machine.key), MessageKind.Lock(reason))
@@ -1278,7 +1306,8 @@ class Engine(
     // ---------- places (SPEC.md 11.9) ----------
 
     private suspend fun firstApprovalOfDay() {
-        val fix = places.sample() ?: return
+        val fix = locate() ?: return
+        outsideByFix(fix)
         val c = safe {
             store.placeSample(LocationSample(fix.lat, fix.lon, fix.accuracy, fix.time.toULong()), offset())
         }
@@ -1296,7 +1325,11 @@ class Engine(
      */
     suspend fun monitorPlaces() {
         fencesOn = places.monitor(state.value.places.filter { !it.deleted }.map { Fence(it.id, it.lat, it.lon, it.radius.toFloat()) })
-        if (!fencesOn) forgetPlace()
+        if (!fencesOn) {
+            forgetPlace()
+            // Nothing watches the edges now (no permission, location off, no registration).
+            lockUnwatched()
+        }
     }
 
     /**
@@ -1317,15 +1350,23 @@ class Engine(
         placeMemory.clear()
     }
 
-    /** Location was turned off: the geofences are gone, so no place counts until they are back. */
+    /**
+     * Location was turned off: the geofences are gone, so no place counts until they are back,
+     * and leaving one would go unnoticed: the machines allowed at one are locked (SPEC.md 11.9).
+     */
     fun onPlacesUnavailable() {
         scope.launch {
             fencesOn = false
             forgetPlace()
+            lockUnwatched()
         }
     }
 
-    /** The phone left a place: lock every machine whose day began there. */
+    /**
+     * A geofence transition. An exit, including the geofences' initial exit for a place the
+     * phone is outside when they are registered, locks every machine whose allowance came from
+     * that place, wherever its day began.
+     */
     fun onPlaceTransition(ids: List<String>, entered: Boolean) {
         scope.launch {
             if (entered) {
@@ -1333,18 +1374,58 @@ class Engine(
                 ids.firstOrNull()?.let(placeMemory::save)
                 return@launch
             }
-            if (currentPlace.value in ids) forgetPlace()
-            // An answer made at the place and still on its way locks its machine once posted.
-            placeExits.incrementAndGet()
-            for (id in ids) {
-                val place = state.value.places.firstOrNull { it.id == id } ?: continue
-                val days = local.value.days.filter { it.placeId == id }
-                val locked = days.mapNotNull { d -> machine(d.machine) }.filter { lock(it, "place") }
-                if (locked.isNotEmpty()) {
-                    Notify.show(context, Notify.PLACES, "left-$id", Texts.leftPlace(place.name, locked.joinToString { displayName(it) }), null)
-                }
-            }
+            left(ids)
         }
+    }
+
+    /**
+     * The phone is not inside these places: an exit, or a fix that shows it. The place stops
+     * counting, an answer decided there and still on its way locks its machine once posted, and
+     * every machine allowed there is locked (SPEC.md 11.9).
+     */
+    private suspend fun left(ids: List<String>) {
+        if (ids.isEmpty()) return
+        if (currentPlace.value in ids) forgetPlace()
+        val locked = placeExits.left(ids)
+        for (id in ids) {
+            val place = state.value.places.firstOrNull { it.id == id } ?: continue
+            val names = locked.filter { it.first.placeId == id }.map { displayName(it.second) }
+            if (names.isNotEmpty()) Notify.show(context, Notify.PLACES, "left-$id", Texts.leftPlace(place.name, names.joinToString()), null)
+        }
+    }
+
+    /**
+     * The phone can no longer notice leaving a place: location "Allow all the time" taken away,
+     * location turned off, or the geofences not registered. A machine allowed at a trusted
+     * place was given its longer allowance because leaving would lock it; it is locked now
+     * (SPEC.md 11.9). Not an exit: no place is counted as left.
+     */
+    suspend fun lockUnwatched() {
+        val locked = placeExits.unwatched()
+        if (locked.isNotEmpty()) {
+            Notify.show(context, Notify.PLACES, "unwatched", Texts.placesUnwatched(locked.joinToString { displayName(it.second) }), null)
+        }
+    }
+
+    /**
+     * Geofence exits can come late or not at all (Doze, battery limits). While a place counts
+     * as current or a machine's allowance came from one, a fresh fix outside that place counts
+     * as leaving it. At most one fix per [minGapMs]; nothing when no place is claimed.
+     */
+    suspend fun checkPlaceByFix(minGapMs: Long) {
+        if (!placeExits.fixDue(currentPlace.value, System.currentTimeMillis(), minGapMs)) return
+        locate()?.let { outsideByFix(it) }
+    }
+
+    /** A fix: the trusted places it is clearly outside count as left (SPEC.md 11.9). */
+    @androidx.annotation.VisibleForTesting
+    suspend fun outsideByFix(fix: Fix) {
+        val left = placeExits.leftByFix(fix, System.currentTimeMillis())
+        if (left.isEmpty()) return
+        val missed = currentPlace.value in left
+        left(left)
+        // The geofences missed that exit; registered again, they report the phone's place anew.
+        if (missed && fencesOn) monitorPlaces()
     }
 
     // ---------- network ----------
@@ -1370,12 +1451,15 @@ class Engine(
 
     companion object {
         private const val TAG = "sealctl"
+        /** The least time between two fixes for a missed exit: at foreground, and in the background. */
+        const val FOREGROUND_FIX_GAP_MS = 60_000L
+        const val BACKGROUND_FIX_GAP_MS = 10 * 60_000L
 
         fun emptyState() = State(emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), null,
             com.sealctl.core.app.Settings(true, true, 0u), emptyList())
 
         fun emptyLocal() = LocalState(emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(),
-            DeviceInfo("", null, "fcm", false, 0u), 0u, 0u, 0u, 0u, false, false, emptyList(), false, 0u, emptyList())
+            DeviceInfo("", null, "fcm", false, 0u), 0u, 0u, 0u, 0u, false, false, emptyList(), false, 0u, emptyList(), emptyList())
     }
 }
 

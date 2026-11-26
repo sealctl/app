@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -53,16 +55,7 @@ import com.sealctl.designsystem.Sealctl
 @Composable
 fun Page(title: String?, onBack: (() -> Unit)? = { Ui.pop() }, bottom: (@Composable ColumnScope.() -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
     Column(Modifier.fillMaxSize().background(Sealctl.colors.paper).safeDrawingPadding()) {
-        if (onBack != null || title != null) {
-            Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (onBack != null) {
-                    IconButton(onClick = onBack, modifier = Modifier.semantics { contentDescription = "Back" }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = Sealctl.colors.ink)
-                    }
-                } else Spacer(Modifier.width(16.dp))
-                if (title != null) Text(title, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = Sealctl.colors.ink)
-            }
-        }
+        PageTitle(title, onBack)
         Column(
             Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -71,6 +64,36 @@ fun Page(title: String?, onBack: (() -> Unit)? = { Ui.pop() }, bottom: (@Composa
         if (bottom != null) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = bottom)
         }
+    }
+}
+
+/** The title row of a [Page] or [LazyPage]: back, then the title. */
+@Composable
+private fun PageTitle(title: String?, onBack: (() -> Unit)?) {
+    if (onBack == null && title == null) return
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (onBack != null) {
+            IconButton(onClick = onBack, modifier = Modifier.semantics { contentDescription = "Back" }) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = Sealctl.colors.ink)
+            }
+        } else Spacer(Modifier.width(16.dp))
+        if (title != null) Text(title, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = Sealctl.colors.ink)
+    }
+}
+
+/**
+ * A [Page] whose content is a lazy list: only the items on screen are composed and drawn. For
+ * long lists (Activity). Items set their own gap; [Page]'s is 12 dp.
+ */
+@Composable
+fun LazyPage(title: String?, onBack: (() -> Unit)? = { Ui.pop() }, content: LazyListScope.() -> Unit) {
+    Column(Modifier.fillMaxSize().background(Sealctl.colors.paper).safeDrawingPadding()) {
+        PageTitle(title, onBack)
+        LazyColumn(
+            Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
+            content = content,
+        )
     }
 }
 

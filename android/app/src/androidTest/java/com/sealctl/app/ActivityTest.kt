@@ -1,6 +1,5 @@
 package com.sealctl.app
 
-import androidx.compose.foundation.layout.Column
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -15,14 +14,16 @@ import androidx.compose.ui.test.assertContentDescriptionContains
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasScrollToIndexAction
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.sealctl.core.LogEntry
 import com.sealctl.core.MachineStatus
 import com.sealctl.core.app.Event
 import com.sealctl.core.app.Machine
 import com.sealctl.designsystem.SealctlTheme
-import com.sealctl.ui.ActivityList
-import com.sealctl.ui.Page
+import com.sealctl.ui.ActivityScreen
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -72,7 +73,9 @@ class ActivityTest {
         )
         engine.store.applyStatus(key, MachineStatus(version = 1u, time = 0u, seq = 1u, state = null, log = log, inventory = emptyList(), migrate = null), engine.offset())
         engine.refreshState()
-        rule.setContent { SealctlTheme { Page("Activity", onBack = null) { ActivityList(null) } } }
+        rule.setContent { SealctlTheme { ActivityScreen("Activity", onBack = null, machine = null) } }
+        // The days and the heatmap are read off the main thread: wait for the first read.
+        rule.waitUntil(10_000) { rule.onAllNodes(hasTestTag("day $today")).fetchSemanticsNodes().isNotEmpty() }
     }
 
     @After
@@ -106,7 +109,9 @@ class ActivityTest {
 
     @Test
     fun theHeatmapCountsTheYearAndShowsATappedDay() {
-        rule.onNodeWithTag("heatmap").performScrollTo().assertIsDisplayed()
+        // The list is lazy: scroll it until the heatmap is composed.
+        rule.onNode(hasScrollToIndexAction()).performScrollToNode(hasTestTag("heatmap"))
+        rule.onNodeWithTag("heatmap").assertIsDisplayed()
         // The report reached the phone now, so its four uses count today.
         rule.onNodeWithText("4 key uses in the last year").assertIsDisplayed()
         // Today is the last filled cell; the grid opens scrolled to it at the right edge.

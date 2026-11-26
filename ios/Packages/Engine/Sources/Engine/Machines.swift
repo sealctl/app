@@ -288,7 +288,11 @@ extension AppEngine {
         let now = nowMs()
         guard now - lastFixCheck >= minGap || now < lastFixCheck else { return }
         lastFixCheck = now
-        guard let fix = await places?.sample() else { return }
+        guard let fix = await places?.sample() else {
+            // No fix came: the next check may try again at once.
+            if lastFixCheck == now { lastFixCheck = 0 }
+            return
+        }
         await outsideByFix(fix)
     }
 

@@ -466,8 +466,11 @@ extension AppEngine {
         // machine itself. An exit before it could not, and a lock it sent may have reached the
         // machine before this answer did (SPEC.md 11.9).
         if allowed, let p = mark.place, exitsFrom(p) != mark.exits {
-            let locked = await lockGrants(grantsLeft([p]))
-            if !locked.contains(where: { $0.1.key == r.machine }), let m = machine(r.machine) {
+            let grants = await grantsLeft([p])
+            _ = await lockGrants(grants)
+            // Its own lock only when it set no allowance there ("Allow once"): an allowance's lock
+            // that did not go is sent again at the next exit, fix or launch, not at once.
+            if !grants.contains(where: { $0.machine == r.machine }), let m = machine(r.machine) {
                 await lock(m, reason: "place")
             }
         } else if allowed, mark.place != nil {

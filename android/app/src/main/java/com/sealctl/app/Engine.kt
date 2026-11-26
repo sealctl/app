@@ -843,8 +843,9 @@ class Engine(
         // machine itself. An exit before it could not, and a lock it sent may have reached the
         // machine before this answer did (SPEC.md 11.9).
         if (allowed && mark.place != null && placeExits.exitsFrom(mark.place) != mark.exits) {
-            val locked = placeExits.lockAt(mark.place)
-            if (locked.none { it.second.key == r.machine }) machine(r.machine)?.let { lock(it, "place") }
+            // Its own lock only when it set no allowance there ("Allow once"): an allowance's lock
+            // that did not go is sent again at the next exit, fix or start, not at once.
+            if (!placeExits.lockAt(mark.place, r.machine)) machine(r.machine)?.let { lock(it, "place") }
         } else if (allowed && mark.place != null) {
             // The geofences may have missed leaving the place this was decided at.
             scope.launch { checkPlaceByFix(BACKGROUND_FIX_GAP_MS) }
@@ -1413,8 +1414,10 @@ class Engine(
      * as leaving it. At most one fix per [minGapMs]; nothing when no place is claimed.
      */
     suspend fun checkPlaceByFix(minGapMs: Long) {
-        if (!placeExits.fixDue(currentPlace.value, System.currentTimeMillis(), minGapMs)) return
-        locate()?.let { outsideByFix(it) }
+        val now = System.currentTimeMillis()
+        if (!placeExits.fixDue(currentPlace.value, now, minGapMs)) return
+        val fix = locate() ?: return placeExits.noFix(now)
+        outsideByFix(fix)
     }
 
     /** A fix: the trusted places it is clearly outside count as left (SPEC.md 11.9). */

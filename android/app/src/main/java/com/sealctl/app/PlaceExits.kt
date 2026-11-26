@@ -50,9 +50,15 @@ class PlaceExits(
 
     /**
      * An answer decided at [place] was posted after the phone left it: the allowances from
-     * there, this one among them, are locked now that it is recorded.
+     * there, this one among them, are locked now that it is recorded. Whether [machine] had one
+     * there (locked now or not): without one ("Allow once") the caller locks it itself; with one
+     * whose lock did not go, the next exit, fix or start sends it again.
      */
-    suspend fun lockAt(place: String): List<Pair<GrantRecord, Machine>> = lockAll(grantsLeft(listOf(place)))
+    suspend fun lockAt(place: String, machine: String): Boolean {
+        val grants = grantsLeft(listOf(place))
+        lockAll(grants)
+        return grants.any { it.machine == machine }
+    }
 
     /**
      * The phone can no longer notice leaving a place (location "Allow all the time" taken away,
@@ -68,13 +74,18 @@ class PlaceExits(
     /**
      * Whether to take a fix now to check for a missed exit: only while a place counts as
      * [current] or a machine's allowance came from one, and at most once per [minGapMs]. Claims
-     * the slot when it says yes.
+     * the slot when it says yes; [noFix] gives it back when no fix came.
      */
     fun fixDue(current: String?, now: Long, minGapMs: Long): Boolean {
         if (current == null && grantsLeft(liveIds()).isEmpty()) return false
         val last = lastFix.get()
         if (now - last in 0 until minGapMs) return false
         return lastFix.compareAndSet(last, now)
+    }
+
+    /** The fix claimed at [claimedAt] did not come: the next check may try again at once. */
+    fun noFix(claimedAt: Long) {
+        lastFix.compareAndSet(claimedAt, 0)
     }
 
     private fun liveIds(): List<String> = places().filter { !it.deleted }.map { it.id }

@@ -153,5 +153,22 @@ class PlaceExitsTest {
         // A machine allowed at Home, wherever the phone thinks it is.
         grants.add(grant("mac", "home"))
         assertTrue(exits.fixDue(null, now + 200_000, 60_000))
+        // No fix came: the next check tries again at once.
+        exits.noFix(now + 200_000)
+        assertTrue(exits.fixDue(null, now + 200_001, 60_000))
+    }
+
+    @Test
+    fun anAnswerOnItsWayLocksItsMachineByItsAllowance() = runTest {
+        ownersMorning()
+        // The Mac's allowance is from Home: found, and locked with the others from there.
+        assertTrue(exits.lockAt("home", "mac"))
+        assertEquals(listOf("mac"), sent)
+        // The relay did not take it: still found, so the caller does not send it again at once.
+        grants = mutableListOf(grant("mac", "home"))
+        relayUp = false
+        assertTrue(exits.lockAt("home", "mac"))
+        // "Allow once" at Home set no allowance there: the caller locks the machine itself.
+        assertFalse(exits.lockAt("home", "laptop"))
     }
 }

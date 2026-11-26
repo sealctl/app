@@ -218,11 +218,7 @@ struct PlacesView: View {
                         // created 0: added by hand while the clock could not be checked (SPEC.md 8.1)
                         MutedText((p.created == 0 ? "trusted just now" : "trusted since \(Texts.isoDate(Int64(p.created)))")
                                   + (e.currentPlace == p.id ? " · You're here" : ""))
-                        if p.manual && p.created == 0 {
-                            MutedText("Skips the two-hour wait 24 hours after your phone next reaches sealctl")
-                        } else if p.manual && Int64(p.created) + 86_400_000 > nowMs() {
-                            MutedText("Skips the two-hour wait from \(Texts.time(Int64(p.created) + 86_400_000)) tomorrow")
-                        }
+                        PlaceSettlesView(place: p)
                         if removing == p.id {
                             BodyText("Remove \(p.name)? Machines opened here stay Open until their allowance ends.")
                             HStack {
@@ -251,7 +247,7 @@ struct PlacesView: View {
 }
 
 /// "Trust where I am now": a place added by hand (11.9), with biometrics. Its comforts start
-/// at once; it lifts the level 3 delay only after 24 hours.
+/// at once; it lifts the level 3 delay two hours after it is announced to every paired computer.
 struct TrustHereView: View {
     @Environment(AppModel.self) private var model
     /// No gate yet or a changed enrolment: the card first (9.6), then `then` asks again.
@@ -267,7 +263,7 @@ struct TrustHereView: View {
             SurfaceCard {
                 TitleText("Trust this place?")
                 BodyText("From now on here: reopening your machines needs no tap while your phone is unlocked and near them, sessions can stay open up to 4 hours, and leaving locks the machines you opened here.")
-                BodyText("Showing your words and leaving sealctl skip the two-hour wait here from \(Texts.time(nowMs() + 86_400_000)) tomorrow, so someone holding your unlocked phone can't trust a place to skip it.")
+                BodyText(Texts.trustHere(nowMs() + Int64(e.delaySecs(AppEngine.levelThreeDelaySecs)) * 1000))
                 MutedText("Accurate to \(Int(f.accuracy)) m. The location stays on this phone.")
                 TextField("Name", text: $name).textFieldStyle(.roundedBorder)
                 ErrorText(error)
@@ -307,13 +303,14 @@ struct TrustHereView: View {
                 error = "Couldn't confirm it's you."
                 return
             }
-            // `created` 0: the store stamps it on the corrected clock (8.1).
-            await e.apply(.addPlace(place: TrustedPlace(id: randomId(), name: n.isEmpty ? "Place" : String(n.prefix(40)),
-                                                        lat: f.lat, lon: f.lon, radius: 150, created: 0,
-                                                        updated: 0, deleted: false, manual: true)), upload: true)
+            // `created` 0: the store stamps it on the corrected clock (8.1). Announced to every
+            // paired computer, which can cancel it for two hours (11.9).
+            let announced = await e.trustPlace(TrustedPlace(id: randomId(), name: n.isEmpty ? "Place" : String(n.prefix(40)),
+                                                            lat: f.lat, lon: f.lon, radius: 150, created: 0,
+                                                            updated: 0, deleted: false, manual: true))
             await e.monitorPlaces()
             fix = nil
-            e.show("Trusted \(n.isEmpty ? "Place" : n).")
+            e.show("Trusted \(n.isEmpty ? "Place" : n)." + (announced ? "" : " " + Texts.placeUnconfirmed))
             await e.askAlways()
         }
     }
@@ -552,8 +549,7 @@ struct PhoneAction<Intro: View>: View {
                 Page(onBack: { router.pop() }) {
                     Gap(16)
                     intro
-                    BodyText(e.delayLifted() ? "At your trusted place: this happens as soon as you confirm."
-                             : "This starts two hours after you confirm. Your phone and your computers can cancel it until then.")
+                    WaitBeforeStart(what: what, now: now)
                     if let other = e.runningAction(Texts.otherDevice, now: now) {
                         // Not started blindly next to another install's action, whose kind is unknown here.
                         MutedText(Texts.otherDeviceRunning(Int64(other.releaseAt)))
@@ -605,6 +601,58 @@ struct PhoneAction<Intro: View>: View {
             } catch {
                 self.error = Texts.relayDown
             }
+        }
+    }
+}
+
+/// Before a level 3 action on the phone starts (11.23): at a trusted place that lifts the wait,
+/// that it happens at once; otherwise that it waits two hours, the real reason, and what comes
+/// after, before the person confirms.
+struct WaitBeforeStart: View {
+    @Environment(AppModel.self) private var model
+    let what: String
+    let now: Int64
+
+    var body: some View {
+        let e = model.engine!
+        let reason = e.delayReasonNow()
+        let here = e.herePlace
+        if reason == .none {
+            BodyText("At \(here?.name ?? "your trusted place"): this happens as soon as you confirm.")
+        } else {
+            let inside = reason == .unsettled ? here : nil
+            BodyText(Texts.beforeStart(what, reason: delayReasonCode(reason: reason), place: inside?.name,
+                                       until: inside.map { Int64(placeSettlesAt(place: $0)) } ?? 0,
+                                       at: now + Int64(e.delaySecs(AppEngine.levelThreeDelaySecs)) * 1000,
+                                       biometry: e.biometryName))
+        }
+    }
+}
+
+/// A trusted place's row (11.9): when it starts to skip the two-hour wait, or that its trusting
+/// was not confirmed with the relay, with [Confirm again].
+struct PlaceSettlesView: View {
+    @Environment(AppModel.self) private var model
+    let place: TrustedPlace
+
+    var body: some View {
+        let e = model.engine!
+        let p = place
+        let now = nowMs()
+        if p.trustId != nil && p.trustedAt == 0 {
+            let record = e.local.delayed.first { $0.id == p.trustId }
+            if let r = record, r.state == "waiting" || r.state == "released", now < Int64(r.expires) {
+                MutedText(Texts.placeSettles(Int64(r.releaseAt)))
+            } else {
+                MutedText(Texts.placeUnconfirmed)
+                TextButton(Texts.placeConfirmAgain) {
+                    Task { if await !e.announceTrust(p.id) { e.show(Texts.relayDown) } }
+                }
+            }
+        } else if p.trustId == nil && p.manual && p.created == 0 {
+            MutedText(Texts.placeStaleClock)
+        } else if p.trustId == nil, Int64(placeSettlesAt(place: p)) > now {
+            MutedText(Texts.placeSettles(Int64(placeSettlesAt(place: p))))
         }
     }
 }

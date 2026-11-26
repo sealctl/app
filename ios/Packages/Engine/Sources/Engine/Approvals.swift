@@ -144,6 +144,15 @@ extension AppEngine {
     /// A level 3 action happens at once here (SPEC.md 9.6).
     public func delayLifted() -> Bool { placeKind() == .trusted && placeSettledNow() }
 
+    /// The trusted place the phone is inside, while it counts (`here`).
+    public var herePlace: TrustedPlace? { here.flatMap { id in state.places.first { $0.id == id && !$0.deleted } } }
+
+    /// Why a level 3 action would wait two hours if it started now (11.23).
+    public func delayReasonNow() -> DelayReason {
+        delayReason(location: locationAccess(), here: herePlace, settled: placeSettledNow(),
+                    anyPlaces: state.places.contains { !$0.deleted })
+    }
+
     public func placeKind() -> SealCore.Place {
         SealCore.placeKind(location: locationAccess(), currentPlace: here)
     }
@@ -633,7 +642,10 @@ extension AppEngine {
                     m.state = d.state
                     if d.state == "cancelled" { m.cancelledBy = d.by }
                     await applyLocal(.putDelayed(action: m))
-                    if d.state == "cancelled" { await notifier.remove(ids: ["ready-\(d.id)"]) }
+                    if d.state == "cancelled" {
+                        await notifier.remove(ids: ["ready-\(d.id)"])
+                        await untrustCancelled(d.id)
+                    }
                 } else if mine.state == "cancelled" && mine.cancelledBy == "phone"
                             && (d.state == "waiting" || d.state == "released") && cancelResends.due(d.id, now: now()) {
                     // Cancelled here while the relay did not answer: it still holds the record. Not
@@ -647,6 +659,12 @@ extension AppEngine {
             }
         }
         await cancelPlansOfCancelledDelays()
+        // A place this install announced, whose two hours are over with no cancel: confirm it.
+        for d in list where d.state == "released" {
+            if local.delayed.contains(where: { $0.id == d.id && $0.what == Texts.place && $0.state != "cancelled" }) {
+                await confirmPlace(d.id)
+            }
+        }
         // Records the relay no longer has: fetched by the machine, finished or expired.
         let ids = Set(list.map(\.id))
         for d in local.delayed where !ids.contains(d.id) && nowMs() > Int64(d.releaseAt) {
@@ -695,6 +713,7 @@ extension AppEngine {
             await applyLocal(.putPlan(plan: p))
         }
         await notifier.remove(ids: ["ready-\(id)"])
+        await untrustCancelled(id)
         delayedTick = nowMs()
         var took = true
         do {
@@ -703,9 +722,11 @@ extension AppEngine {
             relayFailed(error)
             took = false
         }
-        Task {
-            await self.sendNotice(what: d?.what ?? "unseal_all", state: "cancelled", machine: d?.machine, delayId: id,
-                                  at: d.map { Int64($0.releaseAt) })
+        if d?.what != Texts.place {
+            Task {
+                await self.sendNotice(what: d?.what ?? "unseal_all", state: "cancelled", machine: d?.machine, delayId: id,
+                                      at: d.map { Int64($0.releaseAt) })
+            }
         }
         return took
     }
@@ -748,10 +769,15 @@ extension AppEngine {
             writeSnapshot()
         }
         let started = nowMs()
+        // Why it waits, kept for its screen (11.23).
+        let reason = delayReasonNow()
+        let inside = reason == .unsettled ? herePlace : nil
         let d = try await relay.addDelayed(id: id, delay: delay)
         let action = DelayedAction(id: id, what: what, machine: nil, releaseAt: UInt64(clamping: d.releaseAt),
                                    expires: UInt64(clamping: d.expires),
-                                   state: "waiting", cancelledBy: nil, started: UInt64(clamping: started))
+                                   state: "waiting", cancelledBy: nil, started: UInt64(clamping: started),
+                                   reason: delayReasonCode(reason: reason), reasonPlace: inside?.name,
+                                   reasonUntil: inside.map { placeSettlesAt(place: $0) } ?? 0)
         await applyLocal(.putDelayed(action: action))
         // A time-interval trigger: iOS delivers it at releaseAt (10.1); a cancel removes it.
         await notifier.post(id: Self.readyId(id), content: Notes.active(Texts.ready(what), body: Texts.readyNote(d.expires),

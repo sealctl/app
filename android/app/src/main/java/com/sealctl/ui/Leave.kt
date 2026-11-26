@@ -145,10 +145,7 @@ fun LeaveScreen(activity: MainActivity) {
                 Gap(24)
                 Title("Delete your data and the last copy of your words?")
                 Body("Next, this phone deletes your data on the relay and removes your words from your Google backup.")
-                Body(
-                    if (engine.delayLifted()) "At your trusted place: this happens as soon as you confirm."
-                    else "This starts two hours after you confirm. Your phone and your computers can cancel it until then.",
-                )
+                WaitBeforeStart("leave", now)
             }
         }
         4 -> {

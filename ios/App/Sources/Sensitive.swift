@@ -280,11 +280,20 @@ struct DelayView: View {
                             Text(Texts.minutesLeft(Int64(d.releaseAt), now: now)).font(.title3.weight(.semibold)).foregroundStyle(Palette.waiting)
                                 .accessibilityIdentifier("countdown")
                             MutedText(Texts.goesAheadAt(started: Int64(d.started), at: Int64(d.releaseAt)))
+                            // Why it waits, as it was when it started; what happens next; what Cancel does.
+                            BodyText(Texts.waitReason(d.reason, place: d.reasonPlace, until: Int64(d.reasonUntil)) + " " + Texts.waitTold)
+                            BodyText(Texts.waitNext(d.what, at: Int64(d.releaseAt), until: Int64(d.expires), biometry: e.biometryName))
+                            MutedText(Texts.waitCancel)
+                        } else if d.what == Texts.place {
+                            Text(Texts.minutesLeft(Int64(d.releaseAt), now: now)).font(.title3.weight(.semibold)).foregroundStyle(Palette.waiting)
+                                .accessibilityIdentifier("countdown")
+                            BodyText(Texts.delayedAt(Texts.place, name: d.reasonPlace ?? "This place", at: Int64(d.releaseAt)))
+                            BodyText(Texts.placeWaiting)
                         } else {
                             Text(Texts.startsAt(Int64(d.releaseAt), now: now)).font(.title3.weight(.semibold)).foregroundStyle(Palette.waiting)
                                 .accessibilityIdentifier("countdown")
+                            BodyText(Texts.delayWaiting(d.what, at: Int64(d.releaseAt)))
                         }
-                        BodyText(Texts.delayWaiting(d.what, at: Int64(d.releaseAt)))
                     case .ready:
                         if phone != nil {
                             Text(Texts.readyUntil(Int64(d.expires))).font(.title3.weight(.semibold)).foregroundStyle(Palette.accent)
@@ -348,7 +357,8 @@ struct DelayedView: View {
         } else if own, d?.what == "leave", e.local.leaveStep == 3 {
             LeaveView()
         } else {
-            DelayView(id: id, title: Texts.delayScreenTitle(d?.what, name: d?.machine.flatMap { e.machine($0) }.map(e.displayName)))
+            DelayView(id: id, title: Texts.delayScreenTitle(d?.what, name: d?.what == Texts.place ? d?.reasonPlace
+                                                            : d?.machine.flatMap { e.machine($0) }.map(e.displayName)))
         }
     }
 }

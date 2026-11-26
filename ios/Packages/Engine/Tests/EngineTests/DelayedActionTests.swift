@@ -78,4 +78,25 @@ struct DelayedActionTests {
         #expect(runningPhoneAction(delayed: [d], what: "words", now: UInt64(release)) == d)
         #expect(runningPhoneAction(delayed: [d], what: "words", now: UInt64(until)) == nil)
     }
+
+    /// The real reason for the wait, what comes next and what Cancel does (11.23); as on Android,
+    /// with Face ID and "Always" for the iPhone.
+    @Test func whyItWaitsAndWhatComesNext() {
+        let at: Int64 = 7_200_000
+        let until = at + 3_600_000
+        #expect(Texts.waitReason("away", place: nil, until: 0) == "You started this away from your trusted places, so it waits two hours.")
+        #expect(Texts.waitReason("away", place: nil, until: 0, started: false) == "You're away from your trusted places, so this waits two hours.")
+        #expect(Texts.waitReason("unsettled", place: "Home", until: at)
+            == "You're at Home, which was trusted less than two hours ago, so this still waits two hours. Home skips the wait from \(Texts.time(at)).")
+        #expect(Texts.waitReason("no_always", place: nil, until: 0)
+            == "Location isn't set to \"Always\" for sealctl, so it can't tell when you're at a trusted place. This waits two hours.")
+        #expect(Texts.waitReason("places_off", place: nil, until: 0) == "You have no trusted places, so this waits two hours.")
+        #expect(Texts.waitReason("", place: nil, until: 0) == "You approved this away from your trusted places, so it waits two hours.")
+        #expect(Texts.waitNext("words", at: at, until: until)
+            == "At \(Texts.time(at)) sealctl will notify you. Open it then and confirm with Face ID to see your words. You'll have until \(Texts.time(until)).")
+        #expect(Texts.waitCancel == "Cancel stops it: nothing happens, and your computers are told.")
+        #expect(Texts.placeSettles(at) == "Skips the two-hour wait from \(Texts.time(at)), unless one of your computers cancels it.")
+        #expect(Texts.delayedAt(Texts.place, name: "Home", at: at) == "Home skips the two-hour wait from \(Texts.time(at)), unless one of your computers cancels it.")
+        #expect(Texts.delayScreenTitle(Texts.place, name: "Home") == "Trusting Home")
+    }
 }

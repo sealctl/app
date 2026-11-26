@@ -73,9 +73,11 @@ class ReadyTest {
             action("cancelled", state = "cancelled"),
             action("other", what = Texts.OTHER_DEVICE),
             action("machine", what = "unseal_all", machine = "m1"),
+            action("place", what = Texts.PLACE, releaseAt = release + 5_000),
         )
         val due = Ready.restore(list, release - 1_000)
-        assertEquals(listOf(Triple("waiting", release, true)), alarms.set)
+        // Trusting a place gets its alarm too: it makes the app ask the relay to confirm it.
+        assertEquals(listOf(Triple("waiting", release, true), Triple("place", release + 5_000, true)), alarms.set)
         assertEquals(listOf("ready"), due)
         // Ended ones have no alarm left behind.
         assertEquals(listOf("expired", "cancelled"), alarms.cancelled)

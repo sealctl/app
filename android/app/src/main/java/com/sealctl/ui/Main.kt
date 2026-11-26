@@ -222,7 +222,8 @@ private fun DelayedBanners(delayed: List<DelayedAction>, clock: State<Long>, onC
             DelayPhase.READY -> if (Ready.isOwn(d)) true else continue
             else -> continue
         }
-        val name = d.machine?.let { k -> engine.machine(k)?.let { engine.displayName(it) } } ?: "This phone"
+        val name = if (d.what == Texts.PLACE) d.reasonPlace ?: "This place"
+            else d.machine?.let { k -> engine.machine(k)?.let { engine.displayName(it) } } ?: "This phone"
         val text = if (ready) Texts.readyBanner(d.what, d.expires.toLong()) else Texts.delayedAt(d.what, name, d.releaseAt.toLong())
         Banner(text, tone = Sealctl.colors.accentSoft) {
             Row {

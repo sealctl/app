@@ -8,11 +8,15 @@ final class SettingsTests: SealctlTestCase {
         tab("Settings")
         tap("Show words")
         see("Showing the words is a sensitive action. Every paired computer is told.")
-        see("This starts two hours after you confirm.")
+        // Before confirming: the wait, its real reason (no trusted places here) and what comes next.
+        see("You have no trusted places, so this waits two hours. If you confirm now, sealctl will notify you at")
         tap("Confirm with Face ID")
         // The first level 3 action on this phone: two card words first (9.6).
         gate(then: "Showing your words")
         see("goes ahead at")
+        see("You have no trusted places, so this waits two hours.")
+        see("sealctl will notify you. Open it then and confirm with Face ID to see your words. You'll have until")
+        see("Cancel stops it: nothing happens, and your computers are told.")
         // Show words again while it waits: the same delay, not a second start (11.23).
         tap("Back")
         tap("Show words")

@@ -224,6 +224,7 @@ object Texts {
         "words" -> "Your words can be shown at ${time(at)}."
         "delete" -> "Your relay data is deleted at ${time(at)}."
         "leave" -> "This phone leaves sealctl at ${time(at)}."
+        PLACE -> "$name skips the two-hour wait from ${time(at)}, unless one of your computers cancels it."
         OTHER_DEVICE -> "$OTHER_DEVICE_NOTE goes ahead at ${time(at)}."
         else -> handsBackAt(name, at)
     }
@@ -243,6 +244,7 @@ object Texts {
         "words" -> "Showing your words"
         "delete" -> "Deleting your relay data"
         "leave" -> "Leaving sealctl"
+        PLACE -> "Trusting ${name ?: "a place"}"
         OTHER_DEVICE -> OTHER_DEVICE_TITLE
         else -> leaving(name ?: "this computer")
     }
@@ -256,6 +258,7 @@ object Texts {
     /** A delayed action whose wait is over. */
     fun delayOver(what: String?) = when (what) {
         "unseal_all" -> "The hour is over. The computer goes ahead."
+        PLACE -> "Nobody cancelled it. The place now skips the two-hour wait."
         OTHER_DEVICE -> "The wait is over. The phone or tablet that started it can go ahead."
         else -> "The hour is over."
     }
@@ -266,6 +269,54 @@ object Texts {
         else "This waited too long. Start again."
 
     // ---------- an action on the phone, by where its delay stands (SPEC.md 11.23) ----------
+
+    /** The kind of the delayed record that announces trusting a place (SPEC.md 11.9). */
+    const val PLACE = "place"
+
+    /**
+     * Why an action on the phone waits two hours, from the reason kept when it started (or, with
+     * [started] false, the one that applies if it starts now). [place] and [until]: the trusted
+     * place the phone is in that doesn't lift the wait yet, and when it will.
+     */
+    fun waitReason(reason: String, place: String?, until: Long, started: Boolean = true): String = when (reason) {
+        "away" -> if (started) "You started this away from your trusted places, so it waits two hours."
+            else "You're away from your trusted places, so this waits two hours."
+        "unsettled" -> "You're at ${place ?: "a place"}, which was trusted less than two hours ago, so this " +
+            (if (started) "still waits" else "waits") + " two hours." +
+            (if (until > 0) " ${place ?: "It"} skips the wait from ${time(until)}." else "")
+        "no_always" -> "Location isn't set to \"Allow all the time\" for sealctl, so it can't tell when you're at a trusted place. This waits two hours."
+        "places_off" -> "You have no trusted places, so this waits two hours."
+        else -> "You approved this away from your trusted places, so it waits two hours."
+    }
+
+    /** What the person does at the end of the wait, by kind. */
+    private fun goal(what: String?) = when (what) {
+        "words" -> "see your words"
+        "delete" -> "delete your relay data"
+        else -> "finish leaving"
+    }
+
+    /** What happens next while it waits: the note at [at], confirming, and until when ([until], 0 unknown). */
+    fun waitNext(what: String?, at: Long, until: Long) =
+        "At ${time(at)} sealctl will notify you. Open it then and confirm with your fingerprint or face to ${goal(what)}." +
+            (if (until > 0) " You'll have until ${time(until)}." else "")
+    const val WAIT_TOLD = "Every paired computer has been told, and can cancel it."
+    const val WAIT_CANCEL = "Cancel stops it: nothing happens, and your computers are told."
+
+    /** The start screen, before confirming: the wait, why, and what comes after (SPEC.md 11.23). */
+    fun beforeStart(what: String?, reason: String, place: String?, until: Long, at: Long) =
+        waitReason(reason, place, until, started = false) +
+            " If you confirm now, sealctl will notify you at ${time(at)}. Open it then and confirm with your fingerprint or face to ${goal(what)}." +
+            " Every paired computer is told, and can cancel it until then."
+
+    /** A trusted place's row (11.9): when it starts to skip the wait, or why it doesn't. */
+    fun placeSettles(at: Long) = "Skips the two-hour wait from ${time(at)}, unless one of your computers cancels it."
+    const val PLACE_WAITING = "Every paired computer has been told, and can cancel it with sealctl cancel. Cancel here and the place is not trusted."
+    const val PLACE_UNCONFIRMED = "Not confirmed with the relay yet, so it doesn't skip the two-hour wait."
+    const val PLACE_CONFIRM_AGAIN = "Confirm again"
+    const val PLACE_STALE_CLOCK = "Skips the two-hour wait two hours after your phone next reaches sealctl."
+    fun trustHere(at: Long) = "Showing your words and leaving sealctl skip the two-hour wait here from ${time(at)}, two hours from now. " +
+        "Every paired computer is told and can cancel it until then, so someone holding your unlocked phone can't trust a place unseen."
 
     /** Under the title while it waits: when it was started (unknown for an old record) and when it goes ahead. */
     fun goesAheadAt(started: Long, at: Long) =

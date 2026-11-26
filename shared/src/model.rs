@@ -105,9 +105,22 @@ pub struct TrustedPlace {
     pub updated: u64,
     /// Tombstone.
     pub deleted: bool,
-    /// Added by hand ("Trust where I am now") rather than learned over three mornings: it counts
-    /// for the level 3 delay only 24 hours after `created` (SPEC.md 9.6).
+    /// Added by hand ("Trust where I am now") rather than learned over three mornings. Without a
+    /// `trust_id` (a place trusted before trusting was announced) it counts for the level 3 delay
+    /// only two hours after `created` (SPEC.md 9.6).
     pub manual: bool,
+    /// The relay's delayed record that announced trusting this place to every paired computer
+    /// and install, which any of them can cancel for two hours (SPEC.md 11.9). With one, the
+    /// place lifts the level 3 delay only once the relay confirmed it (`trusted_at`).
+    #[uniffi(default = None)]
+    pub trust_id: Option<String>,
+    /// When that record's two hours end (its `releaseAt`), Unix ms; 0 when not known.
+    #[uniffi(default = 0)]
+    pub trust_from: u64,
+    /// When the relay confirmed that record (`finish` answered `200`: nobody cancelled it),
+    /// Unix ms; 0 until then.
+    #[uniffi(default = 0)]
+    pub trusted_at: u64,
 }
 
 /// One derived key the phone handed out, on one machine.
@@ -455,6 +468,17 @@ pub struct DelayedAction {
     /// When it was started, Unix ms; 0 for a record kept before this was recorded.
     #[uniffi(default = 0)]
     pub started: u64,
+    /// Why an action on the phone waits, recorded when it starts so its screen gives the real
+    /// reason ([`crate::decide::DelayReason`]): `away`, `unsettled`, `no_always`, `places_off`,
+    /// or "" when not recorded. `place` marks the announcement of a newly trusted place.
+    #[uniffi(default = "")]
+    pub reason: String,
+    /// For `unsettled`: the trusted place the phone was inside.
+    #[uniffi(default = None)]
+    pub reason_place: Option<String>,
+    /// For `unsettled`: when that place starts to lift the wait, Unix ms; 0 when not known.
+    #[uniffi(default = 0)]
+    pub reason_until: u64,
 }
 
 /// One location sample of a place candidate.

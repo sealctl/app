@@ -1,6 +1,6 @@
 //! The phone's clock, corrected against the relay (SPEC.md 8.1).
 //!
-//! Every security window (a hold, the 24 hours of a place added by hand, the level 3 delay
+//! Every security window (a hold, the two hours of a place added by hand, the level 3 delay
 //! and a plan's window) is counted on this clock, not on the system clock, which the person
 //! holding the phone can set. The relay's time is taken when the phone reaches it (`GET
 //! /v1/health`, a `401 clock_skew`) and carried forward on the phone's since-boot clock,
@@ -128,11 +128,13 @@ pub fn relay_clock_learned(relay_ms: u64) -> RelayClock {
 }
 
 /// Whether a trusted place lifts the level 3 delay at `now` ([`crate::decide::place_settled`]
-/// on the corrected clock). A place added by hand never does while the clock is stale: its 24
-/// hours can't be counted on a clock the person may have set.
+/// on the corrected clock). A place added by hand without an announcement never does while the
+/// clock is stale: its two hours can't be counted on a clock the person may have set. An
+/// announced place needs no clock: the relay confirmed its two hours.
 #[uniffi::export]
 pub fn place_settled_at(place: TrustedPlace, now: ClockNow) -> bool {
-    (now.fresh || !place.manual) && crate::decide::place_settled(place, now.now)
+    (now.fresh || !place.manual || place.trust_id.is_some())
+        && crate::decide::place_settled(place, now.now)
 }
 
 /// The system clock, Unix ms.

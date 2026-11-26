@@ -156,7 +156,8 @@ struct MachinesTab: View {
             }
         }
         ForEach(change, id: \.id) { d in
-            let name = d.machine.flatMap { e.machine($0) }.map(e.displayName) ?? "This phone"
+            let name = d.what == Texts.place ? (d.reasonPlace ?? "This place")
+                : d.machine.flatMap { e.machine($0) }.map(e.displayName) ?? "This phone"
             let ready = Int64(d.releaseAt) <= now
             Banner(ready ? Texts.readyBanner(d.what, expires: Int64(d.expires)) : Texts.delayedAt(d.what, name: name, at: Int64(d.releaseAt)),
                    tone: Palette.accentSoft) {

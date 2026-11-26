@@ -95,4 +95,38 @@ class TextsTest {
         assertEquals("Open it by ${Texts.time(until)}, or it has to start again.", Texts.readyNote(until))
         assertEquals("This phone leaves sealctl at ${Texts.time(at)}.", Texts.delayedAt("leave", "This phone", at))
     }
+
+    /** The delay screen gives the real reason, what happens next and what Cancel does (11.23). */
+    @Test
+    fun whyItWaitsAndWhatComesNext() {
+        val at = 7_200_000L
+        val until = at + 3_600_000
+        assertEquals("You started this away from your trusted places, so it waits two hours.", Texts.waitReason("away", null, 0))
+        assertEquals("You're away from your trusted places, so this waits two hours.", Texts.waitReason("away", null, 0, started = false))
+        assertEquals(
+            "You're at Home, which was trusted less than two hours ago, so this still waits two hours. Home skips the wait from ${Texts.time(at)}.",
+            Texts.waitReason("unsettled", "Home", at),
+        )
+        assertEquals("Location isn't set to \"Allow all the time\" for sealctl, so it can't tell when you're at a trusted place. This waits two hours.",
+            Texts.waitReason("no_always", null, 0))
+        assertEquals("You have no trusted places, so this waits two hours.", Texts.waitReason("places_off", null, 0))
+        // A record started before reasons were kept.
+        assertEquals("You approved this away from your trusted places, so it waits two hours.", Texts.waitReason("", null, 0))
+        assertEquals(
+            "At ${Texts.time(at)} sealctl will notify you. Open it then and confirm with your fingerprint or face to see your words. You'll have until ${Texts.time(until)}.",
+            Texts.waitNext("words", at, until),
+        )
+        assertEquals("Cancel stops it: nothing happens, and your computers are told.", Texts.WAIT_CANCEL)
+        assertTrue(Texts.beforeStart("delete", "away", null, 0, at).endsWith(
+            "If you confirm now, sealctl will notify you at ${Texts.time(at)}. Open it then and confirm with your fingerprint or face to delete your relay data. Every paired computer is told, and can cancel it until then."))
+    }
+
+    /** Trusting a place: its row and its banner (11.9). */
+    @Test
+    fun trustingAPlace() {
+        val at = 7_200_000L
+        assertEquals("Skips the two-hour wait from ${Texts.time(at)}, unless one of your computers cancels it.", Texts.placeSettles(at))
+        assertEquals("Home skips the two-hour wait from ${Texts.time(at)}, unless one of your computers cancels it.", Texts.delayedAt(Texts.PLACE, "Home", at))
+        assertEquals("Trusting Home", Texts.delayScreenTitle(Texts.PLACE, "Home"))
+    }
 }

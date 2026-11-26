@@ -250,6 +250,7 @@ fun AnswersScreen() {
 fun PlacesScreen(activity: MainActivity) {
     val engine = Graph.engine
     val state by engine.state.collectAsState()
+    val local by engine.local.collectAsState()
     val current by engine.currentPlace.collectAsState()
     val offer by engine.placeOffer.collectAsState()
     var name by remember { mutableStateOf("Place ${state.places.count { !it.deleted } + 1}") }
@@ -271,9 +272,12 @@ fun PlacesScreen(activity: MainActivity) {
             Body("At a trusted place, reopening needs no tap while your phone is unlocked and near the machine, sessions can stay open up to 4 hours, and leaving locks the machines you opened here. The location stays on this phone.")
             OutlinedTextField(name, { name = it.take(40) }, label = { Text("Name") }, modifier = Modifier.fillMaxWidth())
             PrimaryButton("Trust", {
-                engine.apply(Event.AddPlace(com.sealctl.core.app.TrustedPlace(o.id, name, o.lat, o.lon, 150.0, 0u, 0u, false, false)), upload = true)
                 engine.placeOffer.value = null
-                scope.launch { engine.monitorPlaces() }
+                // Announced to every paired computer; it skips the wait in two hours (11.9).
+                scope.launch {
+                    if (!engine.trustPlace(com.sealctl.core.app.TrustedPlace(o.id, name, o.lat, o.lon, 150.0, 0u, 0u, false, false))) Ui.toast(Texts.RELAY_DOWN)
+                    engine.monitorPlaces()
+                }
                 // Leaving the place is noticed only with location all the time: explain, then ask.
                 if (engine.location() != LocationAccess.ALWAYS) Ui.push(Route.PlacesAlways)
             })
@@ -291,20 +295,41 @@ fun PlacesScreen(activity: MainActivity) {
             // created 0: added by hand while the clock could not be checked (SPEC.md 8.1)
             val since = if (p.created == 0uL) "trusted just now" else "trusted since ${Texts.isoDate(p.created.toLong())}"
             Muted(since + if (current == p.id) " · You're here" else "")
-            if (p.manual && p.created == 0uL)
-                Muted("Skips the two-hour wait 24 hours after your phone next reaches sealctl")
-            else if (p.manual && p.created.toLong() + 86_400_000 > System.currentTimeMillis())
-                Muted("Skips the two-hour wait from ${Texts.time(p.created.toLong() + 86_400_000)} tomorrow")
+            PlaceSettles(p, local.delayed)
             if (removing == p.id) {
                 Body("Remove ${p.name}? Machines opened here stay Open until their allowance ends.")
-                Row { TextButton({ engine.apply(Event.RemovePlace(p.id), upload = true); removing = null; scope.launch { engine.monitorPlaces() } }) { Text("Remove") }; TextButton({ removing = null }) { Text("Cancel") } }
+                Row { TextButton({ removing = null; scope.launch { engine.removePlace(p) } }) { Text("Remove") }; TextButton({ removing = null }) { Text("Cancel") } }
             } else TextButton({ removing = p.id }) { Text("Remove") }
         }
         Muted("Places are learned: after three mornings of approving at the same spot, sealctl asks whether to trust it. You can also trust where you are now.")
     }
 }
 
-/** "Trust where I am now": a place added by hand (SPEC.md 11.9). Its comforts start at once; it lifts the level 3 delay after 24 hours. */
+/**
+ * A trusted place's row (SPEC.md 11.9): when it starts to skip the two-hour wait, or that its
+ * trusting was not confirmed with the relay, with [Confirm again].
+ */
+@Composable
+private fun PlaceSettles(p: com.sealctl.core.app.TrustedPlace, delayed: List<com.sealctl.core.app.DelayedAction>) {
+    val engine = Graph.engine
+    val scope = rememberCoroutineScope()
+    val now = System.currentTimeMillis()
+    val record = p.trustId?.let { id -> delayed.firstOrNull { it.id == id } }
+    when {
+        p.trustId != null && p.trustedAt == 0uL -> {
+            val waiting = record != null && (record.state == "waiting" || record.state == "released") && now < record.expires.toLong()
+            if (waiting) Muted(Texts.placeSettles(record!!.releaseAt.toLong()))
+            else {
+                Muted(Texts.PLACE_UNCONFIRMED)
+                TextButton({ scope.launch { if (!engine.announceTrust(p.id)) Ui.toast(Texts.RELAY_DOWN) } }) { Text(Texts.PLACE_CONFIRM_AGAIN) }
+            }
+        }
+        p.trustId == null && p.manual && p.created == 0uL -> Muted(Texts.PLACE_STALE_CLOCK)
+        p.trustId == null && com.sealctl.core.app.placeSettlesAt(p).toLong() > now -> Muted(Texts.placeSettles(com.sealctl.core.app.placeSettlesAt(p).toLong()))
+    }
+}
+
+/** "Trust where I am now": a place added by hand (SPEC.md 11.9). Its comforts start at once; it lifts the level 3 delay two hours after it is announced. */
 @Composable
 private fun TrustHere(activity: MainActivity, onCard: (GateResult, suspend () -> Unit) -> Unit) {
     val engine = Graph.engine
@@ -320,10 +345,11 @@ private fun TrustHere(activity: MainActivity, onCard: (GateResult, suspend () ->
                 // `created` 0: the store stamps it on the corrected clock (SPEC.md 8.1).
                 val place = com.sealctl.core.app.TrustedPlace(randomPlaceId(), name.ifBlank { "Place" }, f.lat, f.lon, 150.0,
                     0u, 0u, false, true)
-                engine.apply(Event.AddPlace(place), upload = true)
+                // Announced to every paired computer, which can cancel it for two hours (11.9).
+                val announced = engine.trustPlace(place)
                 engine.monitorPlaces()
                 fix = null
-                Ui.toast("Trusted ${place.name}.")
+                Ui.toast(if (announced) "Trusted ${place.name}." else "Trusted ${place.name}. ${Texts.PLACE_UNCONFIRMED}")
                 if (engine.location() != LocationAccess.ALWAYS) Ui.push(Route.PlacesAlways)
             }
             GateResult.Cancelled -> {}
@@ -352,7 +378,7 @@ private fun TrustHere(activity: MainActivity, onCard: (GateResult, suspend () ->
     } else SurfaceCard {
         Title("Trust this place?")
         Body("From now on here: reopening your machines needs no tap while your phone is unlocked and near them, sessions can stay open up to 4 hours, and leaving locks the machines you opened here.")
-        Body("Showing your words and leaving sealctl skip the two-hour wait here from ${Texts.time(System.currentTimeMillis() + 86_400_000)} tomorrow, so someone holding your unlocked phone can't trust a place to skip it.")
+        Body(Texts.trustHere(System.currentTimeMillis() + engine.delaySecs(com.sealctl.app.Delays.LEVEL3_SECS) * 1000L))
         Muted("Accurate to ${f.accuracy.toInt()} m. The location stays on this phone.")
         OutlinedTextField(name, { name = it.take(40) }, label = { Text("Name") }, modifier = Modifier.fillMaxWidth())
         PrimaryButton("Trust", { scope.launch { trust(f, name) } })
@@ -589,13 +615,32 @@ private fun PhoneAction(
     }) {
         Gap(16)
         intro()
-        Body(if (engine.delayLifted()) "At your trusted place: this happens as soon as you confirm." else "This starts two hours after you confirm. Your phone and your computers can cancel it until then.")
+        WaitBeforeStart(what, now)
         if (other != null) {
             // Not started blindly next to another install's action, whose kind is unknown here.
             Muted(Texts.otherDeviceRunning(other.releaseAt.toLong()))
             TextButton({ Ui.push(Route.Delayed(other.id)) }) { Text("Show it") }
         }
     }
+}
+
+/**
+ * Before a level 3 action on the phone starts (SPEC.md 11.23): at a trusted place that lifts the
+ * wait, that it happens at once; otherwise that it waits two hours, the real reason, and what
+ * comes after, before the person confirms.
+ */
+@Composable
+fun WaitBeforeStart(what: String, now: Long) {
+    val engine = Graph.engine
+    val reason = engine.delayReasonNow()
+    val here = engine.herePlace()
+    if (reason == com.sealctl.core.app.DelayReason.NONE) {
+        Body("At ${here?.name ?: "your trusted place"}: this happens as soon as you confirm.")
+        return
+    }
+    val unsettled = here?.takeIf { reason == com.sealctl.core.app.DelayReason.UNSETTLED }
+    Body(Texts.beforeStart(what, com.sealctl.core.app.delayReasonCode(reason), unsettled?.name,
+        unsettled?.let { com.sealctl.core.app.placeSettlesAt(it).toLong() } ?: 0L, now + engine.delaySecs(com.sealctl.app.Delays.LEVEL3_SECS) * 1000L))
 }
 
 @Composable

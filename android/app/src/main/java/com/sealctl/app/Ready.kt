@@ -59,16 +59,22 @@ object Ready {
     fun isOwn(d: DelayedAction): Boolean = d.machine == null && d.what in KINDS
 
     /**
+     * Trusting a place this install announced: its alarm posts nothing, it makes the app ask
+     * the relay, which confirms the place at the end of its two hours (SPEC.md 11.9).
+     */
+    fun isPlace(d: DelayedAction): Boolean = d.machine == null && d.what == Texts.PLACE
+
+    /**
      * Sets the alarms again ([alarms] lost them, or exact alarms were allowed since): one for
      * each action still waiting. Returns the ids already ready, whose notification is due now;
      * the caller posts it when the notification may have gone with the alarm (a reboot).
      */
     fun restore(delayed: List<DelayedAction>, now: Long): List<String> {
         val ready = mutableListOf<String>()
-        for (d in delayed.filter(::isOwn)) {
+        for (d in delayed.filter { isOwn(it) || isPlace(it) }) {
             when (delayPhase(d, now.toULong())) {
                 DelayPhase.WAITING -> schedule(d.id, d.what, d.releaseAt.toLong())
-                DelayPhase.READY -> ready += d.id
+                DelayPhase.READY -> if (isOwn(d)) ready += d.id else schedule(d.id, d.what, now)
                 else -> cancel(d.id)
             }
         }

@@ -329,10 +329,18 @@ fun DelayView(id: String, title: String, phone: PhoneActionButtons? = null) {
                 if (phone != null) {
                     Text(Texts.minutesLeft(d.releaseAt.toLong(), now), fontSize = 20.sp, color = Sealctl.colors.waiting, fontWeight = FontWeight.SemiBold)
                     Muted(Texts.goesAheadAt(d.started.toLong(), d.releaseAt.toLong()))
+                    // Why it waits, as it was when it started; what happens next; what Cancel does.
+                    Body(Texts.waitReason(d.reason, d.reasonPlace, d.reasonUntil.toLong()) + " " + Texts.WAIT_TOLD)
+                    Body(Texts.waitNext(d.what, d.releaseAt.toLong(), d.expires.toLong()))
+                    Muted(Texts.WAIT_CANCEL)
+                } else if (d.what == Texts.PLACE) {
+                    Text(Texts.minutesLeft(d.releaseAt.toLong(), now), fontSize = 20.sp, color = Sealctl.colors.waiting, fontWeight = FontWeight.SemiBold)
+                    Body(Texts.delayedAt(Texts.PLACE, d.reasonPlace ?: "This place", d.releaseAt.toLong()))
+                    Body(Texts.PLACE_WAITING)
                 } else {
                     Text(Texts.startsAt(d.releaseAt.toLong(), now), fontSize = 20.sp, color = Sealctl.colors.waiting, fontWeight = FontWeight.SemiBold)
+                    Body(Texts.delayWaiting(d.what, d.releaseAt.toLong()))
                 }
-                Body(Texts.delayWaiting(d.what, d.releaseAt.toLong()))
                 if (phone != null && !exactAlarms) {
                     Muted(Texts.EXACT_ALARMS_OFF)
                     SecondaryButton(Texts.ALLOW_ALARMS, { openExactAlarmSettings(context) })
@@ -372,7 +380,8 @@ fun DelayedScreen(activity: MainActivity, id: String) {
         d != null && Ready.isOwn(d) && d.what == "words" -> ShowWordsScreen(activity, focus = id)
         d != null && Ready.isOwn(d) && d.what == "delete" -> DeleteRelayScreen(activity, focus = id)
         d != null && Ready.isOwn(d) && d.what == "leave" && local.leaveStep.toInt() == 3 -> LeaveScreen(activity)
-        else -> DelayView(id, Texts.delayScreenTitle(d?.what, d?.machine?.let { k -> engine.machine(k)?.let { engine.displayName(it) } }))
+        else -> DelayView(id, Texts.delayScreenTitle(d?.what,
+            if (d?.what == Texts.PLACE) d.reasonPlace else d?.machine?.let { k -> engine.machine(k)?.let { engine.displayName(it) } }))
     }
 }
 

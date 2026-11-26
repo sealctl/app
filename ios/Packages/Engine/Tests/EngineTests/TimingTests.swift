@@ -895,3 +895,73 @@ extension TimingTests {
     }
 }
 #endif
+
+#if os(macOS)
+extension TimingTests {
+    /// Why an action waits is recorded when it starts (11.23): away from places, then at a
+    /// trusted place that does not lift the wait yet.
+    @Test func theReasonForTheWaitIsRecordedAtTheStart() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, _, _) = try await paired(relay, places: StubPlaces())
+        // No place yet.
+        let first = try #require(try await engine.startPhoneAction("words"))
+        #expect(first.reason == "places_off")
+        #expect(await engine.cancelDelayed(first.id))
+        // At a place trusted (announced) just now: it does not lift the wait yet.
+        #expect(await engine.trustPlace(TrustedPlace(id: "p1", name: "Desk", lat: 0, lon: 0, radius: 150, created: 0,
+                                                     updated: 0, deleted: false, manual: true)))
+        await engine.onPlaceTransition(["p1"], entered: true)
+        #expect(engine.placeKind() == .trusted)
+        #expect(engine.delayReasonNow() == .unsettled)
+        let second = try #require(try await engine.startPhoneAction("delete"))
+        #expect(second.reason == "unsettled")
+        #expect(second.reasonPlace == "Desk")
+        let place = try #require(engine.state.places.first { $0.id == "p1" })
+        #expect(second.reasonUntil == place.trustFrom && place.trustFrom > 0)
+        #expect(Texts.waitReason(second.reason, place: second.reasonPlace, until: Int64(second.reasonUntil))
+            == "You're at Desk, which was trusted less than two hours ago, so this still waits two hours. Desk skips the wait from \(Texts.time(Int64(place.trustFrom)))."
+        )
+    }
+
+    /// Trusting a place is announced through the relay (11.9): it lifts the wait only once the
+    /// relay confirmed nobody cancelled it, after its two hours; a cancel from a computer
+    /// removes the place.
+    @Test func aTrustedPlaceLiftsTheWaitOnlyOnceConfirmed() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, _, m) = try await paired(relay, places: StubPlaces())
+        #expect(await engine.trustPlace(TrustedPlace(id: "p1", name: "Home", lat: 0, lon: 0, radius: 150, created: 0,
+                                                     updated: 0, deleted: false, manual: true)))
+        await engine.onPlaceTransition(["p1"], entered: true)
+        let p = try #require(engine.state.places.first { $0.id == "p1" })
+        let id = try #require(p.trustId)
+        #expect(try await engine.relay.listDelayed().map(\.id) == [id])
+        #expect(engine.local.delayed.first { $0.id == id }?.what == Texts.place)
+        #expect(!engine.delayLifted())
+        // The two (test) seconds pass: the next read of the relay's list confirms it.
+        try await Task.sleep(for: .milliseconds(Int(Int64(p.trustFrom) - nowMs()) + 300))
+        #expect(!engine.delayLifted())
+        #expect(await engine.refreshDelayed())
+        #expect(engine.state.places.first { $0.id == "p1" }?.trustedAt ?? 0 > 0)
+        #expect(engine.delayLifted())
+        #expect(try await engine.startPhoneAction("words") == nil)
+
+        // Another place, cancelled from the computer within its two hours: no longer trusted.
+        #expect(await engine.trustPlace(TrustedPlace(id: "p2", name: "Cafe", lat: 1, lon: 1, radius: 150, created: 0,
+                                                     updated: 0, deleted: false, manual: false)))
+        let id2 = try #require(engine.state.places.first { $0.id == "p2" }?.trustId)
+        let (code, out) = try m.run(["delayed", "cancel", id2])
+        #expect(code == 0, "\(out)")
+        #expect(await engine.refreshDelayed())
+        #expect(engine.state.places.first { $0.id == "p2" && !$0.deleted } == nil)
+
+        // A third, removed here: its announcement is cancelled on the relay.
+        #expect(await engine.trustPlace(TrustedPlace(id: "p3", name: "Office", lat: 2, lon: 2, radius: 150, created: 0,
+                                                     updated: 0, deleted: false, manual: true)))
+        let id3 = try #require(engine.state.places.first { $0.id == "p3" }?.trustId)
+        await engine.removePlace("p3")
+        #expect(try await engine.relay.listDelayed().first { $0.id == id3 }?.state == "cancelled")
+    }
+}
+#endif

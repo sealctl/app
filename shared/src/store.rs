@@ -1293,7 +1293,7 @@ impl Store {
         }
         write_doc(&c, CLOCK, &RelayClock::learned(relay_ms, &self.boot()))?;
         let clock = self.clock_in(&c);
-        // places added by hand while the clock was stale start their 24 hours now
+        // places added by hand while the clock was stale start their two hours now
         let mut s: State = read_doc(&c, "state")?;
         if clock.fresh && stamp_hand_added_places(&mut s, clock.now) {
             write_doc(&c, "state", &normalise(s))?;
@@ -1318,7 +1318,7 @@ impl Store {
 
     /// Whether a trusted place lifts the level 3 delay now ([`crate::decide::place_settled`]
     /// on the corrected clock). A place added by hand never does while the clock is stale:
-    /// its 24 hours can't be counted on a clock the person may have set.
+    /// its two hours can't be counted on a clock the person may have set.
     pub fn place_settled_now(&self, place: TrustedPlace) -> Result<bool> {
         Ok(crate::clock::place_settled_at(place, self.clock_now()?))
     }
@@ -1515,7 +1515,7 @@ pub fn open_answered_request(
 }
 
 /// Stamps `created` on the live places added by hand that have none (added while the clock was
-/// stale), so their 24 hours start on a fresh clock (SPEC.md 8.1, 9.6). Returns whether any was.
+/// stale), so their two hours start on a fresh clock (SPEC.md 8.1, 9.6). Returns whether any was.
 fn stamp_hand_added_places(s: &mut State, now: u64) -> bool {
     let mut changed = false;
     for p in s
@@ -1641,7 +1641,7 @@ fn apply_event(s: &mut State, event: Event, clock: ClockNow) -> Result<()> {
                 place.updated,
                 now,
             );
-            // A place added by hand starts its 24 hours only on a fresh clock: a stale one can
+            // A place added by hand starts its two hours only on a fresh clock: a stale one can
             // be days behind, and the place would be settled as soon as the clock is fresh.
             // Until then `created` stays 0 (see stamp_hand_added_places).
             if place.created == 0 && (clock.fresh || !place.manual) {
@@ -3265,7 +3265,7 @@ mod tests {
         let place = hand_added(&st);
         assert_eq!(place.created, 0);
         assert!(!st.place_settled_now(place).unwrap());
-        // The relay is reached two days on: the place's 24 hours start then, not before.
+        // The relay is reached two days on: the place's two hours start then, not before.
         reach_relay(&st, t0 + 48 * H);
         let place = st
             .snapshot()

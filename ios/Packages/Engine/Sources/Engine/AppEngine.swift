@@ -296,6 +296,7 @@ public final class AppEngine {
                 d.cancelledBy = o["by"].string
                 await applyLocal(.putDelayed(action: d))
                 await notifier.remove(ids: ["ready-\(id)"])
+                await untrustCancelled(id)
             }
             if var p = local.plans.first(where: { $0.delayId == id }) {
                 p.state = "cancelled"

@@ -14,6 +14,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Changed
 
+- A newly trusted place (learned, or "Trust where I am now") skips the two-hour wait of Show
+  words, Delete my relay data and Leave sealctl two hours after it is trusted, instead of from
+  the same time the next day. Trusting it is announced to every paired computer and your other
+  phones, which can cancel it in those two hours ("Run: sealctl cancel"); a cancel, or removing
+  the place, means it is not trusted. Only once the relay confirms nobody cancelled does the place
+  skip the wait. Its row says from when, or offers [Confirm again] when it could not be confirmed.
+  The place's other comforts start at once, as before.
 - Activity: the newest day is open and each of the ten days before today with uses is one row
   with its figures ("37 uses · 2 declined"); a tap opens or closes it. Older days are no longer
   listed. The same for one machine's Activity.
@@ -52,6 +59,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
   WorkManager job, which Android could hold back past the time to finish. It is exact when
   sealctl may set alarms (Alarms & reminders; the delay screen offers [Allow alarms]), and is set
   again after a reboot, an update or a force stop.
+- The waiting screen of Show words, Delete my relay data and Leave sealctl gives the real reason
+  for the wait, recorded when it started (away from your trusted places; at a place trusted less
+  than two hours ago, and when it will skip the wait; location not set to "Allow all the time";
+  no trusted places) instead of always "You approved this away from your trusted places". It
+  also says what happens next ("At 12:04 sealctl will notify you. Open it then and confirm with
+  your fingerprint or face to see your words. You'll have until 13:04.") and what Cancel does.
+  The start screens say the same before you confirm.
+- Android: leaving a start screen while the relay was registering the delay could leave a record
+  the phone never stored, which it then showed as started on another device.
 - A record the relay no longer lists after it said "released" is shown as expired instead of
   offering a Finish that could only fail.
 - The Machines banner of Leave sealctl says "This phone leaves sealctl at 11:00." instead of

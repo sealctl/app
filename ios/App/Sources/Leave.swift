@@ -139,11 +139,7 @@ struct LeaveView: View {
                     Gap(24)
                     TitleText("Delete your data and the last copy of your words?")
                     BodyText("Next, this phone deletes your data on the relay and removes your words from iCloud Keychain.")
-                    if e.delayLifted() {
-                        BodyText("At \(e.currentPlaceName ?? "your trusted place"): this happens as soon as you confirm.")
-                    } else {
-                        BodyText("This starts two hours after you confirm. Your phone and your computers can cancel it until then.")
-                    }
+                    WaitBeforeStart(what: "leave", now: now)
                 } bottom: {
                     ErrorText(error)
                     PrimaryButton(Texts.confirm(e.biometryName), enabled: !busy) { confirm(e, nil) }

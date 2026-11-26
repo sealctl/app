@@ -199,19 +199,104 @@ pub fn place_kind(location: LocationAccess, current_place: Option<String>) -> Pl
     }
 }
 
-/// A place added by hand lifts the level 3 delay only this long after it was added (SPEC.md 9.6):
-/// someone holding the unlocked phone cannot trust "here" and skip the hour.
-pub const MANUAL_PLACE_SETTLE_MS: u64 = 24 * 3_600_000;
+/// How long a newly trusted place waits before it lifts the level 3 delay (SPEC.md 9.6): the
+/// same two hours as the delay itself, announced to every paired computer, which can cancel it.
+/// Someone holding the unlocked phone cannot trust "here" and skip the wait unseen.
+pub const PLACE_SETTLE_MS: u64 = 2 * 3_600_000;
 
-/// Whether a trusted place also lifts the level 3 delay at `now`: a learned place at once, a place
-/// added by hand 24 hours after it was added. Every other comfort of a place starts at once. A
-/// place added by hand with `created` 0 was added while the clock was stale and its 24 hours
-/// have not started (the store stamps it once the clock is fresh, SPEC.md 8.1).
+/// The earlier name of [`PLACE_SETTLE_MS`].
+pub const MANUAL_PLACE_SETTLE_MS: u64 = PLACE_SETTLE_MS;
+
+/// Whether a trusted place also lifts the level 3 delay at `now`. A place whose trusting was
+/// announced (`trust_id`) does once the relay confirmed nobody cancelled it (`trusted_at`), which
+/// it can only do two hours after the announcement. A place trusted before announcements: a
+/// learned one at once, one added by hand two hours after it was added. Every other comfort of a
+/// place starts at once. A place added by hand with `created` 0 was added while the clock was
+/// stale and its two hours have not started (the store stamps it once the clock is fresh, 8.1).
 #[uniffi::export]
 pub fn place_settled(place: TrustedPlace, now: u64) -> bool {
-    !place.deleted
-        && (!place.manual
-            || (place.created != 0 && now >= place.created.saturating_add(MANUAL_PLACE_SETTLE_MS)))
+    if place.deleted {
+        return false;
+    }
+    if place.trust_id.is_some() {
+        return place.trusted_at != 0;
+    }
+    !place.manual || (place.created != 0 && now >= place.created.saturating_add(PLACE_SETTLE_MS))
+}
+
+/// When a trusted place starts to lift the level 3 delay, Unix ms, for its row and the delay
+/// screen: the end of its announcement's two hours, or two hours after a hand-added place was
+/// added. 0 when it already does, or when the time is not known yet.
+#[uniffi::export]
+pub fn place_settles_at(place: TrustedPlace) -> u64 {
+    if place.trust_id.is_some() {
+        return if place.trusted_at != 0 {
+            0
+        } else {
+            place.trust_from
+        };
+    }
+    if place.manual && place.created != 0 {
+        place.created.saturating_add(PLACE_SETTLE_MS)
+    } else {
+        0
+    }
+}
+
+/// Why a level 3 action on the phone waits two hours (SPEC.md 11.23), recorded when it starts
+/// so its delay screen gives the real reason.
+#[derive(uniffi::Enum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DelayReason {
+    /// No wait: at a trusted place that lifts it.
+    None,
+    /// Location is Always, and the phone is not inside a trusted place.
+    Away,
+    /// Inside a trusted place that does not lift the wait yet (trusted under two hours ago, not
+    /// yet confirmed, or the clock can't be checked).
+    Unsettled,
+    /// Trusted places exist, but location is not "Allow all the time" (or not given), so they
+    /// count for nothing.
+    NoAlways,
+    /// No trusted places at all.
+    PlacesOff,
+}
+
+impl DelayReason {
+    /// The code kept with a delayed action ([`crate::model::DelayedAction::reason`]).
+    pub fn code(self) -> &'static str {
+        match self {
+            DelayReason::None => "",
+            DelayReason::Away => "away",
+            DelayReason::Unsettled => "unsettled",
+            DelayReason::NoAlways => "no_always",
+            DelayReason::PlacesOff => "places_off",
+        }
+    }
+}
+
+/// The code of a [`DelayReason`], as kept with a delayed action.
+#[uniffi::export]
+pub fn delay_reason_code(reason: DelayReason) -> String {
+    reason.code().to_owned()
+}
+
+/// The reason for a level 3 wait from where the phone is: `location` access, the trusted place it
+/// is inside (`here`, if any), whether that place lifts the wait now (`settled`), and whether any
+/// trusted place exists.
+#[uniffi::export]
+pub fn delay_reason(
+    location: LocationAccess,
+    here: Option<TrustedPlace>,
+    settled: bool,
+    any_places: bool,
+) -> DelayReason {
+    match (location, here) {
+        (LocationAccess::Always, Some(_)) if settled => DelayReason::None,
+        (LocationAccess::Always, Some(_)) => DelayReason::Unsettled,
+        _ if !any_places => DelayReason::PlacesOff,
+        (LocationAccess::Always, None) => DelayReason::Away,
+        _ => DelayReason::NoAlways,
+    }
 }
 
 /// Whether every agent use has a live answer at `now` (not removed, within its 90 days).
@@ -753,30 +838,77 @@ mod tests {
     }
 
     #[test]
-    fn hand_added_places_settle_after_a_day() {
+    fn hand_added_places_settle_after_two_hours() {
         let learned = TrustedPlace {
             id: "p".into(),
             created: NOW,
             ..TrustedPlace::default()
         };
         assert!(place_settled(learned.clone(), NOW));
+        assert_eq!(place_settles_at(learned.clone()), 0);
         let manual = TrustedPlace {
             manual: true,
             ..learned
         };
+        assert_eq!(PLACE_SETTLE_MS, 2 * H);
         assert!(!place_settled(manual.clone(), NOW));
-        assert!(!place_settled(
-            manual.clone(),
-            NOW + MANUAL_PLACE_SETTLE_MS - 1
-        ));
-        assert!(place_settled(manual.clone(), NOW + MANUAL_PLACE_SETTLE_MS));
+        assert!(!place_settled(manual.clone(), NOW + PLACE_SETTLE_MS - 1));
+        assert!(place_settled(manual.clone(), NOW + PLACE_SETTLE_MS));
+        assert_eq!(place_settles_at(manual.clone()), NOW + 2 * H);
         assert!(!place_settled(
             TrustedPlace {
                 deleted: true,
                 ..manual
             },
-            NOW + 2 * MANUAL_PLACE_SETTLE_MS
+            NOW + 2 * PLACE_SETTLE_MS
         ));
+    }
+
+    /// A place whose trusting was announced lifts the wait only once the relay confirmed nobody
+    /// cancelled the announcement, however long ago it was added, learned or by hand.
+    #[test]
+    fn an_announced_place_settles_only_when_confirmed() {
+        for manual in [false, true] {
+            let p = TrustedPlace {
+                id: "p".into(),
+                created: NOW,
+                manual,
+                trust_id: Some("d1".into()),
+                trust_from: NOW + 2 * H,
+                ..TrustedPlace::default()
+            };
+            assert!(!place_settled(p.clone(), NOW + 30 * 24 * H));
+            assert_eq!(place_settles_at(p.clone()), NOW + 2 * H);
+            let confirmed = TrustedPlace {
+                trusted_at: NOW + 2 * H + 1,
+                ..p
+            };
+            assert!(place_settled(confirmed.clone(), NOW + 2 * H + 1));
+            assert_eq!(place_settles_at(confirmed), 0);
+        }
+    }
+
+    #[test]
+    fn the_reason_for_a_wait() {
+        let home = TrustedPlace {
+            id: "p".into(),
+            ..TrustedPlace::default()
+        };
+        use DelayReason::*;
+        use LocationAccess::*;
+        assert_eq!(delay_reason(Always, Some(home.clone()), true, true), None);
+        assert_eq!(
+            delay_reason(Always, Some(home.clone()), false, true),
+            Unsettled
+        );
+        assert_eq!(delay_reason(Always, Option::None, false, true), Away);
+        assert_eq!(delay_reason(Always, Option::None, false, false), PlacesOff);
+        assert_eq!(
+            delay_reason(WhileInUse, Option::None, false, true),
+            NoAlways
+        );
+        assert_eq!(delay_reason(Off, Option::None, false, true), NoAlways);
+        assert_eq!(delay_reason(Off, Option::None, false, false), PlacesOff);
     }
 
     #[test]

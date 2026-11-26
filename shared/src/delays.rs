@@ -75,6 +75,7 @@ mod tests {
             state: state.into(),
             cancelled_by: None,
             started: release_at - 7_200_000,
+            ..Default::default()
         }
     }
 

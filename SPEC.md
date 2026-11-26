@@ -1048,7 +1048,7 @@ Each machine row shows one state, from the machine's last status (`GET .../statu
 
 - iOS: at launch the monitor sends only what changed while the app was not running, so the app first reads each condition's record (`CLMonitor.record(for:)`, last event satisfied), as `requestState(for:)` did for region monitoring. With Always only: with When In Use the system watches the edges only while the app is in use.
 - Android: the place the phone entered is kept on the phone (its id and the boot count, never a location) and comes back at a start of the process only while every exit from it would have been seen: location all the time, the same boot, the geofences still registered (their `PendingIntent` still exists: a reboot, a force stop or an update cancels it) and the place still trusted. Otherwise no place counts until the geofences' initial enter. The geofences are then registered again, and an exit clears the kept place.
-- Location turned off (`GEOFENCE_NOT_AVAILABLE` on Android; an unknown state on iOS): the place stops counting, which is not an exit, so nothing is locked. The geofences are registered again at the next foreground.
+- Location turned off (`GEOFENCE_NOT_AVAILABLE` on Android; an unknown state on iOS): the place stops counting, which is not an exit, so nothing is locked. On Android the geofences are registered again at the next foreground.
 
 **Without location access Always.** Places count for nothing (9.4: `none`). While a trusted place exists and location is not allowed all the time, the Machines tab, Settings and the Places screen show a banner, with [Open settings] (Android: the request of 11.3 step 9; iOS: the app's settings):
 

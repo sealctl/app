@@ -744,9 +744,19 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_sealctl_app_checksum_func_decide(
     ): Int
+    external fun uniffi_sealctl_app_checksum_func_delay_reason(
+    ): Int
+    external fun uniffi_sealctl_app_checksum_func_delay_reason_code(
+    ): Int
     external fun uniffi_sealctl_app_checksum_func_place_kind(
     ): Int
     external fun uniffi_sealctl_app_checksum_func_place_settled(
+    ): Int
+    external fun uniffi_sealctl_app_checksum_func_place_settles_at(
+    ): Int
+    external fun uniffi_sealctl_app_checksum_func_delay_phase(
+    ): Int
+    external fun uniffi_sealctl_app_checksum_func_running_phone_action(
     ): Int
     external fun uniffi_sealctl_app_checksum_func_grants_to_lock(
     ): Int
@@ -941,10 +951,20 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_decide(`request`: Long,`ctx`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_sealctl_app_fn_func_delay_reason(`location`: RustBuffer.ByValue,`here`: RustBuffer.ByValue,`settled`: Byte,`anyPlaces`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_sealctl_app_fn_func_delay_reason_code(`reason`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_place_kind(`location`: RustBuffer.ByValue,`currentPlace`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBufferPlace.ByValue
     external fun uniffi_sealctl_app_fn_func_place_settled(`place`: RustBuffer.ByValue,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_sealctl_app_fn_func_place_settles_at(`place`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Long
+    external fun uniffi_sealctl_app_fn_func_delay_phase(`action`: RustBuffer.ByValue,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_sealctl_app_fn_func_running_phone_action(`delayed`: RustBuffer.ByValue,`what`: RustBuffer.ByValue,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_grants_to_lock(`local`: RustBuffer.ByValue,`places`: RustBuffer.ByValue,`left`: RustBuffer.ByValue,`now`: Long,`utcOffsetSecs`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_places_left_by_fix(`places`: RustBuffer.ByValue,`fix`: RustBuffer.ByValue,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -1117,7 +1137,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_sealctl_app_checksum_func_word_entry() and 0xFFFF) != 42711) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_sealctl_app_checksum_func_place_settled_at() and 0xFFFF) != 45879) {
+    if ((lib.uniffi_sealctl_app_checksum_func_place_settled_at() and 0xFFFF) != 37283) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_func_relay_clock_learned() and 0xFFFF) != 31114) {
@@ -1144,10 +1164,25 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_sealctl_app_checksum_func_decide() and 0xFFFF) != 1771) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_sealctl_app_checksum_func_delay_reason() and 0xFFFF) != 42833) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_sealctl_app_checksum_func_delay_reason_code() and 0xFFFF) != 40482) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_sealctl_app_checksum_func_place_kind() and 0xFFFF) != 5228) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_sealctl_app_checksum_func_place_settled() and 0xFFFF) != 45654) {
+    if ((lib.uniffi_sealctl_app_checksum_func_place_settled() and 0xFFFF) != 36926) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_sealctl_app_checksum_func_place_settles_at() and 0xFFFF) != 7674) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_sealctl_app_checksum_func_delay_phase() and 0xFFFF) != 65285) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_sealctl_app_checksum_func_running_phone_action() and 0xFFFF) != 4141) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_func_grants_to_lock() and 0xFFFF) != 8719) {
@@ -1225,7 +1260,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_sealctl_app_checksum_method_store_place_sample() and 0xFFFF) != 47269) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_sealctl_app_checksum_method_store_place_settled_now() and 0xFFFF) != 56412) {
+    if ((lib.uniffi_sealctl_app_checksum_method_store_place_settled_now() and 0xFFFF) != 11512) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_method_store_prune() and 0xFFFF) != 13406) {
@@ -1862,7 +1897,7 @@ public interface StoreInterface {
     /**
      * Whether a trusted place lifts the level 3 delay now ([`crate::decide::place_settled`]
      * on the corrected clock). A place added by hand never does while the clock is stale:
-     * its 24 hours can't be counted on a clock the person may have set.
+     * its two hours can't be counted on a clock the person may have set.
      */
     fun `placeSettledNow`(`place`: TrustedPlace): kotlin.Boolean
     
@@ -2346,7 +2381,7 @@ open class Store: Disposable, AutoCloseable, StoreInterface
     /**
      * Whether a trusted place lifts the level 3 delay now ([`crate::decide::place_settled`]
      * on the corrected clock). A place added by hand never does while the clock is stale:
-     * its 24 hours can't be counted on a clock the person may have set.
+     * its two hours can't be counted on a clock the person may have set.
      */
     @Throws(AppException::class)override fun `placeSettledNow`(`place`: TrustedPlace): kotlin.Boolean {
             return FfiConverterBoolean.lift(
@@ -3101,7 +3136,7 @@ data class DelayedAction (
     var `expires`: kotlin.ULong
     , 
     /**
-     * `waiting`, `released`, `cancelled`, `finished`.
+     * `waiting`, `released`, `cancelled`, `finished`, `gone`, `expired` ([`crate::delays::delay_phase`]).
      */
     var `state`: kotlin.String
     , 
@@ -3109,6 +3144,28 @@ data class DelayedAction (
      * Who cancelled: `phone` or a machine key.
      */
     var `cancelledBy`: kotlin.String?
+    , 
+    /**
+     * When it was started, Unix ms; 0 for a record kept before this was recorded.
+     */
+    var `started`: kotlin.ULong = 0uL 
+    , 
+    /**
+     * Why an action on the phone waits, recorded when it starts so its screen gives the real
+     * reason ([`crate::decide::DelayReason`]): `away`, `unsettled`, `no_always`, `places_off`,
+     * or "" when not recorded. `place` marks the announcement of a newly trusted place.
+     */
+    var `reason`: kotlin.String = "" 
+    , 
+    /**
+     * For `unsettled`: the trusted place the phone was inside.
+     */
+    var `reasonPlace`: kotlin.String? = null 
+    , 
+    /**
+     * For `unsettled`: when that place starts to lift the wait, Unix ms; 0 when not known.
+     */
+    var `reasonUntil`: kotlin.ULong = 0uL 
     
 ){
     
@@ -3132,6 +3189,10 @@ public object FfiConverterTypeDelayedAction: FfiConverterRustBuffer<DelayedActio
             FfiConverterULong.read(buf),
             FfiConverterString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterULong.read(buf),
         )
     }
 
@@ -3142,7 +3203,11 @@ public object FfiConverterTypeDelayedAction: FfiConverterRustBuffer<DelayedActio
             FfiConverterULong.allocationSize(value.`releaseAt`) +
             FfiConverterULong.allocationSize(value.`expires`) +
             FfiConverterString.allocationSize(value.`state`) +
-            FfiConverterOptionalString.allocationSize(value.`cancelledBy`)
+            FfiConverterOptionalString.allocationSize(value.`cancelledBy`) +
+            FfiConverterULong.allocationSize(value.`started`) +
+            FfiConverterString.allocationSize(value.`reason`) +
+            FfiConverterOptionalString.allocationSize(value.`reasonPlace`) +
+            FfiConverterULong.allocationSize(value.`reasonUntil`)
     )
 
     override fun write(value: DelayedAction, buf: ByteBuffer) {
@@ -3153,6 +3218,10 @@ public object FfiConverterTypeDelayedAction: FfiConverterRustBuffer<DelayedActio
             FfiConverterULong.write(value.`expires`, buf)
             FfiConverterString.write(value.`state`, buf)
             FfiConverterOptionalString.write(value.`cancelledBy`, buf)
+            FfiConverterULong.write(value.`started`, buf)
+            FfiConverterString.write(value.`reason`, buf)
+            FfiConverterOptionalString.write(value.`reasonPlace`, buf)
+            FfiConverterULong.write(value.`reasonUntil`, buf)
     }
 }
 
@@ -5242,10 +5311,29 @@ data class TrustedPlace (
     var `deleted`: kotlin.Boolean
     , 
     /**
-     * Added by hand ("Trust where I am now") rather than learned over three mornings: it counts
-     * for the level 3 delay only 24 hours after `created` (SPEC.md 9.6).
+     * Added by hand ("Trust where I am now") rather than learned over three mornings. Without a
+     * `trust_id` (a place trusted before trusting was announced) it counts for the level 3 delay
+     * only two hours after `created` (SPEC.md 9.6).
      */
     var `manual`: kotlin.Boolean
+    , 
+    /**
+     * The relay's delayed record that announced trusting this place to every paired computer
+     * and install, which any of them can cancel for two hours (SPEC.md 11.9). With one, the
+     * place lifts the level 3 delay only once the relay confirmed it (`trusted_at`).
+     */
+    var `trustId`: kotlin.String? = null 
+    , 
+    /**
+     * When that record's two hours end (its `releaseAt`), Unix ms; 0 when not known.
+     */
+    var `trustFrom`: kotlin.ULong = 0uL 
+    , 
+    /**
+     * When the relay confirmed that record (`finish` answered `200`: nobody cancelled it),
+     * Unix ms; 0 until then.
+     */
+    var `trustedAt`: kotlin.ULong = 0uL 
     
 ){
     
@@ -5271,6 +5359,9 @@ public object FfiConverterTypeTrustedPlace: FfiConverterRustBuffer<TrustedPlace>
             FfiConverterULong.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
         )
     }
 
@@ -5283,7 +5374,10 @@ public object FfiConverterTypeTrustedPlace: FfiConverterRustBuffer<TrustedPlace>
             FfiConverterULong.allocationSize(value.`created`) +
             FfiConverterULong.allocationSize(value.`updated`) +
             FfiConverterBoolean.allocationSize(value.`deleted`) +
-            FfiConverterBoolean.allocationSize(value.`manual`)
+            FfiConverterBoolean.allocationSize(value.`manual`) +
+            FfiConverterOptionalString.allocationSize(value.`trustId`) +
+            FfiConverterULong.allocationSize(value.`trustFrom`) +
+            FfiConverterULong.allocationSize(value.`trustedAt`)
     )
 
     override fun write(value: TrustedPlace, buf: ByteBuffer) {
@@ -5296,6 +5390,9 @@ public object FfiConverterTypeTrustedPlace: FfiConverterRustBuffer<TrustedPlace>
             FfiConverterULong.write(value.`updated`, buf)
             FfiConverterBoolean.write(value.`deleted`, buf)
             FfiConverterBoolean.write(value.`manual`, buf)
+            FfiConverterOptionalString.write(value.`trustId`, buf)
+            FfiConverterULong.write(value.`trustFrom`, buf)
+            FfiConverterULong.write(value.`trustedAt`, buf)
     }
 }
 
@@ -5981,6 +6078,119 @@ public object FfiConverterTypeBiometrics: FfiConverterRustBuffer<Biometrics> {
     override fun allocationSize(value: Biometrics) = 4UL
 
     override fun write(value: Biometrics, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+/**
+ * Where a delayed action stands (SPEC.md 11.23 Delay).
+ */
+
+enum class DelayPhase {
+    
+    /**
+     * Counting down to `release_at`.
+     */
+    WAITING,
+    /**
+     * Past `release_at` and before `expires`: an action on the phone can be finished.
+     */
+    READY,
+    /**
+     * Past `expires`, or the relay no longer has it: it can only be started again.
+     */
+    EXPIRED,
+    /**
+     * Cancelled, here or elsewhere.
+     */
+    CANCELLED,
+    /**
+     * Finished on the phone, or, for a machine's `unseal --all`, its wait is over.
+     */
+    FINISHED;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDelayPhase: FfiConverterRustBuffer<DelayPhase> {
+    override fun read(buf: ByteBuffer) = try {
+        DelayPhase.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: DelayPhase) = 4UL
+
+    override fun write(value: DelayPhase, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+/**
+ * Why a level 3 action on the phone waits two hours (SPEC.md 11.23), recorded when it starts
+ * so its delay screen gives the real reason.
+ */
+
+enum class DelayReason {
+    
+    /**
+     * No wait: at a trusted place that lifts it.
+     */
+    NONE,
+    /**
+     * Location is Always, and the phone is not inside a trusted place.
+     */
+    AWAY,
+    /**
+     * Inside a trusted place that does not lift the wait yet (trusted under two hours ago, not
+     * yet confirmed, or the clock can't be checked).
+     */
+    UNSETTLED,
+    /**
+     * Trusted places exist, but location is not "Allow all the time" (or not given), so they
+     * count for nothing.
+     */
+    NO_ALWAYS,
+    /**
+     * No trusted places at all.
+     */
+    PLACES_OFF;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDelayReason: FfiConverterRustBuffer<DelayReason> {
+    override fun read(buf: ByteBuffer) = try {
+        DelayReason.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: DelayReason) = 4UL
+
+    override fun write(value: DelayReason, buf: ByteBuffer) {
         buf.putInt(value.ordinal + 1)
     }
 }
@@ -7092,6 +7302,38 @@ public object FfiConverterOptionalTypeDayRecord: FfiConverterRustBuffer<DayRecor
         } else {
             buf.put(1)
             FfiConverterTypeDayRecord.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeDelayedAction: FfiConverterRustBuffer<DelayedAction?> {
+    override fun read(buf: ByteBuffer): DelayedAction? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeDelayedAction.read(buf)
+    }
+
+    override fun allocationSize(value: DelayedAction?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeDelayedAction.allocationSize(value)
+        }
+    }
+
+    override fun write(value: DelayedAction?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeDelayedAction.write(value, buf)
         }
     }
 }
@@ -8349,8 +8591,9 @@ object CoreExceptionExternalErrorHandler : UniffiRustCallStatusErrorHandler<Core
 
         /**
          * Whether a trusted place lifts the level 3 delay at `now` ([`crate::decide::place_settled`]
-         * on the corrected clock). A place added by hand never does while the clock is stale: its 24
-         * hours can't be counted on a clock the person may have set.
+         * on the corrected clock). A place added by hand without an announcement never does while the
+         * clock is stale: its two hours can't be counted on a clock the person may have set. An
+         * announced place needs no clock: the relay confirmed its two hours.
          */ fun `placeSettledAt`(`place`: TrustedPlace, `now`: ClockNow): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     uniffiRustCall() { _status ->
@@ -8486,6 +8729,39 @@ object CoreExceptionExternalErrorHandler : UniffiRustCallStatusErrorHandler<Core
     
 
         /**
+         * The reason for a level 3 wait from where the phone is: `location` access, the trusted place it
+         * is inside (`here`, if any), whether that place lifts the wait now (`settled`), and whether any
+         * trusted place exists.
+         */ fun `delayReason`(`location`: LocationAccess, `here`: TrustedPlace?, `settled`: kotlin.Boolean, `anyPlaces`: kotlin.Boolean): DelayReason {
+            return FfiConverterTypeDelayReason.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_func_delay_reason(
+    
+        
+        FfiConverterTypeLocationAccess.lower(`location`),
+        FfiConverterOptionalTypeTrustedPlace.lower(`here`),
+        FfiConverterBoolean.lower(`settled`),
+        FfiConverterBoolean.lower(`anyPlaces`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The code of a [`DelayReason`], as kept with a delayed action.
+         */ fun `delayReasonCode`(`reason`: DelayReason): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_func_delay_reason_code(
+    
+        
+        FfiConverterTypeDelayReason.lower(`reason`),_status)
+}
+    )
+    }
+    
+
+        /**
          * The place kind for a reply (SPEC.md 9.4). A phone that cannot notice leaving a place does not
          * know where it is: without location access Always the kind is `none`, as without location at
          * all, never `other` (a 10-minute allowance for being somewhere unknown) and never `trusted`
@@ -8504,10 +8780,12 @@ object CoreExceptionExternalErrorHandler : UniffiRustCallStatusErrorHandler<Core
     
 
         /**
-         * Whether a trusted place also lifts the level 3 delay at `now`: a learned place at once, a place
-         * added by hand 24 hours after it was added. Every other comfort of a place starts at once. A
-         * place added by hand with `created` 0 was added while the clock was stale and its 24 hours
-         * have not started (the store stamps it once the clock is fresh, SPEC.md 8.1).
+         * Whether a trusted place also lifts the level 3 delay at `now`. A place whose trusting was
+         * announced (`trust_id`) does once the relay confirmed nobody cancelled it (`trusted_at`), which
+         * it can only do two hours after the announcement. A place trusted before announcements: a
+         * learned one at once, one added by hand two hours after it was added. Every other comfort of a
+         * place starts at once. A place added by hand with `created` 0 was added while the clock was
+         * stale and its two hours have not started (the store stamps it once the clock is fresh, 8.1).
          */ fun `placeSettled`(`place`: TrustedPlace, `now`: kotlin.ULong): kotlin.Boolean {
             return FfiConverterBoolean.lift(
     uniffiRustCall() { _status ->
@@ -8515,6 +8793,56 @@ object CoreExceptionExternalErrorHandler : UniffiRustCallStatusErrorHandler<Core
     
         
         FfiConverterTypeTrustedPlace.lower(`place`),
+        FfiConverterULong.lower(`now`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * When a trusted place starts to lift the level 3 delay, Unix ms, for its row and the delay
+         * screen: the end of its announcement's two hours, or two hours after a hand-added place was
+         * added. 0 when it already does, or when the time is not known yet.
+         */ fun `placeSettlesAt`(`place`: TrustedPlace): kotlin.ULong {
+            return FfiConverterULong.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_func_place_settles_at(
+    
+        
+        FfiConverterTypeTrustedPlace.lower(`place`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Where `action` stands at `now` (Unix ms). A machine's record (`unseal --all`) needs nothing
+         * from the phone when its wait ends, so it is `Finished` from `release_at` on.
+         */ fun `delayPhase`(`action`: DelayedAction, `now`: kotlin.ULong): DelayPhase {
+            return FfiConverterTypeDelayPhase.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_func_delay_phase(
+    
+        
+        FfiConverterTypeDelayedAction.lower(`action`),
+        FfiConverterULong.lower(`now`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The phone-only action of kind `what` that is still waiting or ready at `now`, the newest
+         * when there are several. A start button of that kind shows it instead of starting another,
+         * and with `what` = [`OTHER_DEVICE`] it finds one another install started (SPEC.md 11.23).
+         */ fun `runningPhoneAction`(`delayed`: List<DelayedAction>, `what`: kotlin.String, `now`: kotlin.ULong): DelayedAction? {
+            return FfiConverterOptionalTypeDelayedAction.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_func_running_phone_action(
+    
+        
+        FfiConverterSequenceTypeDelayedAction.lower(`delayed`),
+        FfiConverterString.lower(`what`),
         FfiConverterULong.lower(`now`),_status)
 }
     )

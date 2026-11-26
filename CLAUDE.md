@@ -24,7 +24,9 @@ SPEC disagree, say so and fix one of them in the pull request; don't silently pi
   history.
 - Approval is per work session or on every use. "One tap per use" is wrong.
 - Level 3 (unseal everything, show the words, delete relay data) waits two hours away from a
-  trusted place; a place added by hand lifts that wait only after 24 hours.
+  trusted place; a trusted place, learned or added by hand, lifts the two-hour wait two hours
+  after it is trusted, and trusting it is announced to every paired computer and can be
+  cancelled.
 - Same words everywhere: Locked, Open, Waiting, One tap, Places, Answers, Inventory, words,
   card.
 - The rules in SPEC 2 are never broken: words never leave the phone readable; the card check

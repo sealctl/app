@@ -18,6 +18,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -25,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.fragment.app.FragmentActivity
 import com.sealctl.app.Delays
+import com.sealctl.app.Ready
 import com.sealctl.app.Graph
 import com.sealctl.app.MainActivity
 import com.sealctl.app.Route
@@ -35,6 +37,8 @@ import com.sealctl.core.Place as PlaceKind
 import com.sealctl.core.RefuseReason
 import com.sealctl.core.RequestKind
 import com.sealctl.core.app.Biometrics
+import com.sealctl.core.app.DelayPhase
+import com.sealctl.core.app.delayPhase
 import com.sealctl.designsystem.Body
 import com.sealctl.designsystem.Muted
 import com.sealctl.designsystem.PlainButton
@@ -271,40 +275,114 @@ private fun PlanView(w: Waiting, name: String, level3: Boolean, error: String?, 
 
 fun label(kind: String) = when (kind) { "ai" -> "AI tools"; "local" -> "local files"; else -> kind }
 
-/** The countdown of a delayed approval, with Cancel (SPEC.md 11.23 Delay). */
+/**
+ * What the delay screen of an action this install started on the phone does once its wait is
+ * over (SPEC.md 11.23): [onReady] (Show my words, Finish) until it expires, then [onStartAgain].
+ * [busy] while one of them runs, so a second tap starts nothing.
+ */
+class PhoneActionButtons(
+    val what: String,
+    val busy: Boolean,
+    val error: String?,
+    val onReady: () -> Unit,
+    val onStartAgain: () -> Unit,
+)
+
+/**
+ * A delayed approval (SPEC.md 11.23 Delay): its countdown with Cancel. For an action this
+ * install started on the phone ([phone]), the screen turns ready by itself at `releaseAt`,
+ * notification or not: "Ready until …" with [PhoneActionButtons.onReady]; after `expires`,
+ * "This waited too long" with Start again.
+ */
 @Composable
-fun DelayView(id: String, title: String) {
+fun DelayView(id: String, title: String, phone: PhoneActionButtons? = null) {
     val engine = Graph.engine
     val scope = rememberCoroutineScope()
     val local by engine.local.collectAsState()
     val d = local.delayed.firstOrNull { it.id == id }
     val now by rememberNow()
+    val phase = d?.let { delayPhase(it, now.toULong()) }
     // A cancel from a computer shows within 15 s while this screen is on show; not in the background.
     WhileStarted(15_000, id) { engine.refreshDelayed() }
+    val context = LocalContext.current
+    // Whether the "Ready" alarm is exact: asked again every 15 s, not on every tick.
+    val exactAlarms = remember(now / 15_000) { Ready.alarms?.canExact() ?: true }
     Page(null, bottom = {
-        if (d?.state == "waiting") PrimaryButton("Cancel", { scope.launch { engine.cancelDelayed(id) } })
-        else PrimaryButton("Close", { Ui.pop() })
+        ErrorText(phone?.error)
+        when {
+            phase == DelayPhase.WAITING -> PrimaryButton("Cancel", { scope.launch { engine.cancelDelayed(id) } })
+            phase == DelayPhase.READY && phone != null -> {
+                PrimaryButton(Texts.readyButton(phone.what), phone.onReady, enabled = !phone.busy)
+                PlainButton("Cancel", { scope.launch { engine.cancelDelayed(id) } })
+            }
+            phase == DelayPhase.EXPIRED && phone != null -> {
+                PrimaryButton(Texts.START_AGAIN, phone.onStartAgain, enabled = !phone.busy)
+                PlainButton("Close", { Ui.pop() })
+            }
+            else -> PrimaryButton("Close", { Ui.pop() })
+        }
     }) {
         Gap(24)
         Title(title)
-        when (d?.state) {
-            "waiting" -> {
-                Text(Texts.startsAt(d.releaseAt.toLong(), now), fontSize = 20.sp, color = Sealctl.colors.waiting, fontWeight = FontWeight.SemiBold)
-                Body(Texts.delayWaiting(d.what, d.releaseAt.toLong()))
+        when (phase) {
+            DelayPhase.WAITING -> {
+                if (phone != null) {
+                    Text(Texts.minutesLeft(d.releaseAt.toLong(), now), fontSize = 20.sp, color = Sealctl.colors.waiting, fontWeight = FontWeight.SemiBold)
+                    Muted(Texts.goesAheadAt(d.started.toLong(), d.releaseAt.toLong()))
+                    // Why it waits, as it was when it started; what happens next; what Cancel does.
+                    Body(Texts.waitReason(d.reason, d.reasonPlace, d.reasonUntil.toLong()) + " " + Texts.WAIT_TOLD)
+                    Body(Texts.waitNext(d.what, d.releaseAt.toLong(), d.expires.toLong()))
+                    Muted(Texts.WAIT_CANCEL)
+                } else if (d.what == Texts.PLACE) {
+                    Text(Texts.minutesLeft(d.releaseAt.toLong(), now), fontSize = 20.sp, color = Sealctl.colors.waiting, fontWeight = FontWeight.SemiBold)
+                    Body(Texts.delayedAt(Texts.PLACE, d.reasonPlace ?: "This place", d.releaseAt.toLong()))
+                    Body(Texts.PLACE_WAITING)
+                } else {
+                    Text(Texts.startsAt(d.releaseAt.toLong(), now), fontSize = 20.sp, color = Sealctl.colors.waiting, fontWeight = FontWeight.SemiBold)
+                    Body(Texts.delayWaiting(d.what, d.releaseAt.toLong()))
+                }
+                if (phone != null && !exactAlarms) {
+                    Muted(Texts.EXACT_ALARMS_OFF)
+                    SecondaryButton(Texts.ALLOW_ALARMS, { openExactAlarmSettings(context) })
+                }
             }
-            "cancelled" -> Body(if (d.cancelledBy == null || d.cancelledBy == "phone") Texts.delayCancelledHere(d.what)
+            DelayPhase.READY -> if (phone != null) {
+                Text(Texts.readyUntil(d.expires.toLong()), fontSize = 20.sp, color = Sealctl.colors.accent, fontWeight = FontWeight.SemiBold)
+                Body(Texts.READY_BODY)
+            } else Body(Texts.delayOver(d.what))
+            DelayPhase.CANCELLED -> Body(if (d.cancelledBy == null || d.cancelledBy == "phone") Texts.delayCancelledHere(d.what)
                 else Texts.cancelledFrom(engine.machine(d.cancelledBy!!)?.let { engine.displayName(it) } ?: "a computer"))
-            "released", "finished" -> Body(Texts.delayOver(d.what))
+            DelayPhase.FINISHED -> Body(Texts.delayOver(d.what))
             else -> Body(Texts.delayGone(d?.what))
         }
     }
 }
 
+/** "Alarms & reminders" for sealctl (Android 12 and later), where exact alarms are allowed. */
+private fun openExactAlarmSettings(context: android.content.Context) {
+    if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S) return
+    runCatching {
+        context.startActivity(android.content.Intent(android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+            android.net.Uri.fromParts("package", context.packageName, null)))
+    }
+}
+
+/**
+ * A delayed record's screen, from a notification or a banner. An action this install started on
+ * the phone opens its own screen, which can finish it once ready (SPEC.md 11.23).
+ */
 @Composable
-fun DelayedScreen(id: String) {
+fun DelayedScreen(activity: MainActivity, id: String) {
     val engine = Graph.engine
-    val d = engine.local.collectAsState().value.delayed.firstOrNull { it.id == id }
-    DelayView(id, Texts.delayScreenTitle(d?.what, d?.machine?.let { k -> engine.machine(k)?.let { engine.displayName(it) } }))
+    val local by engine.local.collectAsState()
+    val d = local.delayed.firstOrNull { it.id == id }
+    when {
+        d != null && Ready.isOwn(d) && d.what == "words" -> ShowWordsScreen(activity, focus = id)
+        d != null && Ready.isOwn(d) && d.what == "delete" -> DeleteRelayScreen(activity, focus = id)
+        d != null && Ready.isOwn(d) && d.what == "leave" && local.leaveStep.toInt() == 3 -> LeaveScreen(activity)
+        else -> DelayView(id, Texts.delayScreenTitle(d?.what,
+            if (d?.what == Texts.PLACE) d.reasonPlace else d?.machine?.let { k -> engine.machine(k)?.let { engine.displayName(it) } }))
+    }
 }
 
 /** The hand-back report (SPEC.md 11.23 Report). */

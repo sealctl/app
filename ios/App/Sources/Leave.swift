@@ -1,6 +1,7 @@
 import DesignSystem
 import Engine
 import EngineKit
+import Relay
 import SealCore
 import SwiftUI
 import UIKit
@@ -19,13 +20,18 @@ struct LeaveView: View {
     /// card words, then a new gate (9.6), then the step goes on.
     @SwiftUI.State private var cardAt: Int?
     @SwiftUI.State private var gateWhy: GateResult = .changed
+    /// Step 3: one start or finish at a time, the delay on screen until closed, and the record
+    /// a card check interrupted the finish of.
+    @SwiftUI.State private var busy = false
+    @SwiftUI.State private var delayId: String?
+    @SwiftUI.State private var finishing: String?
 
     var body: some View {
         let e = model.engine!
         if let at = cardAt {
             GateCardWordsView(why: gateWhy, onPassed: {
                 cardAt = nil
-                if at == 1 { start(e) } else { confirm(e, pendingLeave(e)) }
+                if at == 1 { start(e) } else { confirm(e, finishing) }
             }, onCancel: { cardAt = nil })
         } else {
             steps(e)
@@ -120,33 +126,27 @@ struct LeaveView: View {
 
     @ViewBuilder
     private func confirmStep(_ e: AppEngine) -> some View {
-        let pending = pendingLeave(e)
         Ticker { now in
-            if let p = pending, Int64(p.releaseAt) > now {
-                DelayView(id: p.id, title: "Leaving sealctl")
+            // A leave still waiting or ready is shown, never started again (11.23).
+            if let id = e.runningAction("leave", now: now)?.id ?? delayId, e.local.delayed.contains(where: { $0.id == id }) {
+                DelayView(id: id, title: "Leaving sealctl",
+                          phone: PhoneActionButtons(what: "leave", busy: busy, error: error,
+                                                    onReady: { confirm(e, id) },
+                                                    onStartAgain: { delayId = nil; confirm(e, nil) }))
+                    .onAppear { delayId = id }
             } else {
                 Page(onBack: { cancel(e) }) {
                     Gap(24)
                     TitleText("Delete your data and the last copy of your words?")
                     BodyText("Next, this phone deletes your data on the relay and removes your words from iCloud Keychain.")
-                    if pending != nil {
-                        BodyText("The hour is over. Confirm again to finish.")
-                    } else if e.delayLifted() {
-                        BodyText("At \(e.currentPlaceName ?? "your trusted place"): this happens as soon as you confirm.")
-                    } else {
-                        BodyText("This starts two hours after you confirm. Your phone and your computers can cancel it until then.")
-                    }
+                    WaitBeforeStart(what: "leave", now: now)
                 } bottom: {
                     ErrorText(error)
-                    PrimaryButton(Texts.confirm(e.biometryName)) { confirm(e, pending) }
+                    PrimaryButton(Texts.confirm(e.biometryName), enabled: !busy) { confirm(e, nil) }
                     PlainButton("Cancel") { cancel(e) }
                 }
             }
         }
-    }
-
-    private func pendingLeave(_ e: AppEngine) -> DelayedAction? {
-        e.local.delayed.last { $0.what == "leave" && ($0.state == "waiting" || $0.state == "released") }
     }
 
     private func start(_ e: AppEngine) {
@@ -162,28 +162,35 @@ struct LeaveView: View {
         }
     }
 
-    private func confirm(_ e: AppEngine, _ pending: DelayedAction?) {
+    /// Step 3: biometrics, then the delayed record `id` finished, or a new start (nil) (11.22, 11.23).
+    private func confirm(_ e: AppEngine, _ id: String?) {
+        guard !busy else { return }
+        busy = true
         Task {
+            defer { busy = false }
+            error = nil
             let result = await e.vault.gate(reason: "Confirm leaving sealctl.")
             switch result {
             case .passed: break
             case .cancelled: return
             case .lockedOut: error = Texts.lockedOut(e.biometryName); return
-            case .changed, .noGate: gateWhy = result; cardAt = 3; return
+            case .changed, .noGate: gateWhy = result; finishing = id; cardAt = 3; return
             default: error = Texts.noBiometrics(e.biometryName); return
             }
-            if let pending {
-                switch await e.finishPhoneAction(pending.id) {
+            if let id {
+                switch await e.finishPhoneAction(id) {
                 case nil: await go(e, 4)
                 case "relay": error = "The relay isn't answering, and sealctl can't finish until it confirms nothing was cancelled."
-                case "gone": error = "This waited too long. Start again."
                 case "too_early": error = "Not yet."
-                default: error = "Cancelled from another device. Nothing happened."
+                // Expired or cancelled: the delay screen says so itself.
+                default: break
                 }
                 return
             }
             do {
-                if try await e.startPhoneAction("leave") == nil { await go(e, 4) }
+                if let started = try await e.startPhoneAction("leave") { delayId = started.id } else { await go(e, 4) }
+            } catch let err as RelayError where err.code == "too_many_delayed" {
+                self.error = Texts.tooManyDelayed
             } catch {
                 self.error = Texts.relayDown
             }

@@ -898,3 +898,229 @@ extension TimingTests {
     }
 }
 #endif
+
+#if os(macOS)
+extension TimingTests {
+    /// A double tap on Show words: the second start comes while the first is still waiting for
+    /// the relay's answer. It waits its turn and gets the first's record; the relay has one
+    /// delay, and one "Ready" note is scheduled (SPEC.md 11.23).
+    @Test func aSecondStartWhileTheFirstIsOnItsWayGetsTheSameRecord() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, notifier, _) = try await paired(relay)
+        try await relay.control("/test/hold", #"{"method": "POST", "path": "/delayed"}"#)
+        let first = Task { try await engine.startPhoneAction("words") }
+        #expect(try await relay.untilHeld("/delayed"))
+        let second = Task { try await engine.startPhoneAction("words") }
+        try await relay.control("/test/release", #"{"path": "/delayed"}"#)
+        let a = try #require(try await first.value)
+        let b = try #require(try await second.value)
+        #expect(a.id == b.id)
+        #expect(try await engine.relay.listDelayed().count == 1)
+        #expect(notifier.posted.filter { $0.0 == "ready-\(a.id)" }.count == 1)
+        // Later, while it waits: the same again, nothing new on the relay.
+        #expect(try await engine.startPhoneAction("words")?.id == a.id)
+        #expect(try await engine.relay.listDelayed().count == 1)
+        // Another kind is its own action.
+        let delete = try #require(try await engine.startPhoneAction("delete"))
+        #expect(delete.id != a.id)
+    }
+
+    /// Each kind has its own turn (11.23): while a Show words start waits for the relay's answer
+    /// (a slow or hanging call), a Delete starts and gets its own record.
+    @Test func aSlowStartOfOneKindDoesNotHoldBackAnother() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, _, _) = try await paired(relay)
+        try await relay.control("/test/hold", #"{"method": "POST", "path": "/delayed"}"#)
+        let words = Task { try await engine.startPhoneAction("words") }
+        #expect(try await relay.untilHeld("/delayed"))
+        // Show words' answer is still held: Delete's call reaches the relay all the same.
+        let delete = Task { try await engine.startPhoneAction("delete") }
+        #expect(try await relay.untilHeld("/delayed", count: 2))
+        try await relay.control("/test/release", #"{"path": "/delayed"}"#)
+        let w = try #require(try await words.value)
+        let d = try #require(try await delete.value)
+        #expect((w.what, d.what) == ("words", "delete"))
+        #expect(w.id != d.id)
+        #expect(try await engine.relay.listDelayed().count == 2)
+    }
+
+    /// At a trusted place there is no delay: the start goes ahead at once (nil), the relay keeps
+    /// no record and no "Ready" note is scheduled. One started away and still waiting is shown
+    /// instead, also at the desk; once cancelled, the desk start goes ahead (11.23).
+    @Test func atATrustedPlaceTheActionGoesAheadAtOnce() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, notifier, _) = try await paired(relay, places: StubPlaces())
+        let away = try #require(try await engine.startPhoneAction("words"))
+        try await atDesk(engine)
+        #expect(try await engine.startPhoneAction("words")?.id == away.id)
+        #expect(await engine.cancelDelayed(away.id))
+        let posted = notifier.posted.count
+        #expect(try await engine.startPhoneAction("words") == nil)
+        #expect(try await engine.relay.listDelayed().allSatisfy { $0.id == away.id })
+        #expect(notifier.posted.count == posted)
+    }
+
+    /// The "Ready" note is due at `releaseAt`, says until when, and goes with a cancel; a new
+    /// start after the cancel is a new record (SPEC.md 10.1, 11.23).
+    @Test func theReadyNoteIsDueAtReleaseAtAndGoesWithACancel() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, notifier, _) = try await paired(relay)
+        let d = try #require(try await engine.startPhoneAction("words"))
+        #expect(d.started > 0 && d.started <= d.releaseAt)
+        let due = try #require(notifier.due["ready-\(d.id)"])
+        #expect(abs(due.timeIntervalSince1970 * 1000 - Double(d.releaseAt)) < 1)
+        #expect(notifier.bodies.last == Texts.readyNote(Int64(d.expires)))
+        #expect(await engine.cancelDelayed(d.id))
+        #expect(notifier.removed.contains("ready-\(d.id)"))
+        let again = try #require(try await engine.startPhoneAction("words"))
+        #expect(again.id != d.id)
+    }
+
+    /// The wait ends with the app open: the record reads as ready from `releaseAt` on, the
+    /// finish goes through, and its note is taken back; once the relay no longer has a record
+    /// (it expired), a refresh calls it gone, also after the list had said `released`.
+    @Test func readyAtReleaseAtThenFinishedOrGone() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, notifier, _) = try await paired(relay)
+        let d = try #require(try await engine.startPhoneAction("words"))
+        #expect(delayPhase(action: d, now: d.releaseAt - 1) == .waiting)
+        #expect(delayPhase(action: d, now: d.releaseAt) == .ready)
+        try await Task.sleep(for: .milliseconds(Int(Int64(d.releaseAt) - nowMs()) + 300))
+        #expect(await engine.refreshDelayed())
+        #expect(engine.local.delayed.first { $0.id == d.id }?.state == "released")
+        #expect(engine.runningAction("words")?.id == d.id)
+        #expect(await engine.finishPhoneAction(d.id) == nil)
+        #expect(notifier.removed.contains("ready-\(d.id)"))
+        #expect(engine.runningAction("words") == nil)
+
+        // A record the relay dropped while the list last said released.
+        let gone = DelayedAction(id: randomId(), what: "delete", machine: nil, releaseAt: UInt64(nowMs() - 60_000),
+                                 expires: UInt64(nowMs() + 60_000), state: "released", cancelledBy: nil, started: 0)
+        await engine.applyLocal(.putDelayed(action: gone))
+        #expect(engine.runningAction("delete")?.id == gone.id)
+        #expect(await engine.refreshDelayed())
+        #expect(engine.local.delayed.first { $0.id == gone.id }?.state == "gone")
+        #expect(engine.runningAction("delete") == nil)
+        #expect(notifier.removed.contains("ready-\(gone.id)"))
+    }
+}
+#endif
+
+#if os(macOS)
+extension TimingTests {
+    /// Why an action waits is recorded when it starts (11.23): away from places, then at a
+    /// trusted place that does not lift the wait yet.
+    @Test func theReasonForTheWaitIsRecordedAtTheStart() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, _, _) = try await paired(relay, places: StubPlaces())
+        // No place yet.
+        let first = try #require(try await engine.startPhoneAction("words"))
+        #expect(first.reason == "places_off")
+        #expect(await engine.cancelDelayed(first.id))
+        // At a place trusted (announced) just now: it does not lift the wait yet.
+        #expect(await engine.trustPlace(TrustedPlace(id: "p1", name: "Desk", lat: 0, lon: 0, radius: 150, created: 0,
+                                                     updated: 0, deleted: false, manual: true)))
+        await engine.onPlaceTransition(["p1"], entered: true)
+        #expect(engine.placeKind() == .trusted)
+        #expect(engine.delayReasonNow() == .unsettled)
+        let second = try #require(try await engine.startPhoneAction("delete"))
+        #expect(second.reason == "unsettled")
+        #expect(second.reasonPlace == "Desk")
+        let place = try #require(engine.state.places.first { $0.id == "p1" })
+        #expect(second.reasonUntil == place.trustFrom && place.trustFrom > 0)
+        #expect(Texts.waitReason(second.reason, place: second.reasonPlace, until: Int64(second.reasonUntil))
+            == "You're at Desk, which was trusted less than two hours ago, so this still waits two hours. Desk skips the wait from \(Texts.time(Int64(place.trustFrom)))."
+        )
+    }
+
+    /// Trusting a place is announced through the relay (11.9): it lifts the wait only once the
+    /// relay confirmed nobody cancelled it, after its two hours; a cancel from a computer
+    /// removes the place.
+    @Test func aTrustedPlaceLiftsTheWaitOnlyOnceConfirmed() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, _, m) = try await paired(relay, places: StubPlaces())
+        #expect(await engine.trustPlace(TrustedPlace(id: "p1", name: "Home", lat: 0, lon: 0, radius: 150, created: 0,
+                                                     updated: 0, deleted: false, manual: true)))
+        await engine.onPlaceTransition(["p1"], entered: true)
+        let p = try #require(engine.state.places.first { $0.id == "p1" })
+        let id = try #require(p.trustId)
+        #expect(try await engine.relay.listDelayed().map(\.id) == [id])
+        #expect(engine.local.delayed.first { $0.id == id }?.what == Texts.place)
+        #expect(!engine.delayLifted())
+        // The two (test) seconds pass: the next read of the relay's list confirms it.
+        try await Task.sleep(for: .milliseconds(Int(Int64(p.trustFrom) - nowMs()) + 300))
+        #expect(!engine.delayLifted())
+        #expect(await engine.refreshDelayed())
+        #expect(engine.state.places.first { $0.id == "p1" }?.trustedAt ?? 0 > 0)
+        #expect(engine.delayLifted())
+        #expect(try await engine.startPhoneAction("words") == nil)
+
+        // Another place, cancelled from the computer within its two hours: no longer trusted.
+        #expect(await engine.trustPlace(TrustedPlace(id: "p2", name: "Cafe", lat: 1, lon: 1, radius: 150, created: 0,
+                                                     updated: 0, deleted: false, manual: false)))
+        let id2 = try #require(engine.state.places.first { $0.id == "p2" }?.trustId)
+        let (code, out) = try m.run(["delayed", "cancel", id2])
+        #expect(code == 0, "\(out)")
+        #expect(await engine.refreshDelayed())
+        #expect(engine.state.places.first { $0.id == "p2" && !$0.deleted } == nil)
+
+        // A third, removed here: its announcement is cancelled on the relay.
+        #expect(await engine.trustPlace(TrustedPlace(id: "p3", name: "Office", lat: 2, lon: 2, radius: 150, created: 0,
+                                                     updated: 0, deleted: false, manual: true)))
+        let id3 = try #require(engine.state.places.first { $0.id == "p3" }?.trustId)
+        await engine.removePlace("p3")
+        #expect(try await engine.relay.listDelayed().first { $0.id == id3 }?.state == "cancelled")
+    }
+
+    /// A refresh whose list was read before the place was confirmed still says `released`: the
+    /// place is not finished again (no second `finish` reaches the relay), and its record keeps
+    /// "finished", also when a later answer says `404 gone` (11.9, 11.23).
+    @Test func aConfirmedPlaceIsNotFinishedAgainAndStaysFinished() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, _, _) = try await paired(relay, places: StubPlaces())
+        #expect(await engine.trustPlace(TrustedPlace(id: "p1", name: "Home", lat: 0, lon: 0, radius: 150, created: 0,
+                                                     updated: 0, deleted: false, manual: true)))
+        let p = try #require(engine.state.places.first { $0.id == "p1" })
+        let id = try #require(p.trustId)
+        try await Task.sleep(for: .milliseconds(Int(Int64(p.trustFrom) - nowMs()) + 300))
+        // The relay's list is read (released), its answer held; meanwhile the place is confirmed.
+        try await relay.control("/test/hold", #"{"method": "GET", "path": "/delayed"}"#)
+        let stale = Task { await engine.refreshDelayed() }
+        #expect(try await relay.untilHeld("/delayed"))
+        await engine.confirmPlace(id)
+        #expect(engine.local.delayed.first { $0.id == id }?.state == "finished")
+        let trustedAt = try #require(engine.state.places.first { $0.id == "p1" }?.trustedAt)
+        #expect(trustedAt > 0)
+        // A finish sent from here on gets this 503 first; still there at the end, none went out.
+        try await relay.control("/test/fail", #"{"path": "/finish", "status": 503, "error": "internal"}"#)
+        try await relay.control("/test/release", #"{"path": "/delayed"}"#)
+        #expect(await stale.value)
+        #expect(await engine.refreshDelayed())
+        await engine.confirmPlace(id)
+        #expect(engine.local.delayed.first { $0.id == id }?.state == "finished")
+        #expect(engine.state.places.first { $0.id == "p1" }?.trustedAt == trustedAt)
+        for want in ["internal", "gone"] {
+            // The 503 left over, then the relay's own answer: 404 gone.
+            do {
+                _ = try await engine.relay.finishDelayed(id)
+                Issue.record("the relay finished it twice")
+            } catch let e as RelayError {
+                #expect(e.code == want)
+            }
+        }
+        // That 404 written as the engine writes it does not replace "finished".
+        var gone = try #require(engine.local.delayed.first { $0.id == id })
+        gone.state = "gone"
+        await engine.applyLocal(.putDelayed(action: gone))
+        #expect(engine.local.delayed.first { $0.id == id }?.state == "finished")
+    }
+}
+#endif

@@ -33,8 +33,8 @@ final class LeaveTests: SealctlTestCase {
         see("Delete your data and the last copy of your words?")
         tap("Confirm with Face ID")
         faceID(then: "Leaving sealctl")
-        see("The hour is over. Confirm again to finish.", TimeInterval(Env.delay + 30))
-        tap("Confirm with Face ID")
+        see("Ready until", TimeInterval(Env.delay + 30))
+        tap("Finish")
         faceID(then: "Check your card first", 30)
 
         // Step 4: three words from the card.

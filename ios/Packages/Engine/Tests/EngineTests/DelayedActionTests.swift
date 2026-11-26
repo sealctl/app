@@ -54,5 +54,49 @@ struct DelayedActionTests {
         #expect(Texts.delayedNote("words", at: at) == (Texts.delayedTitle, Texts.delayedBody))
         #expect(Texts.delayedNote(nil, at: at) == (Texts.delayedTitle, Texts.delayedBody))
         #expect(Texts.delayGone("words") == "This waited too long. Start again.")
+        #expect(Texts.delayedAt("leave", name: "This phone", at: at) == "This phone leaves sealctl at \(Texts.time(at)).")
+    }
+
+    /// An action on the phone, by where its delay stands (11.23); the same texts as Android.
+    @Test func phoneActionPhases() {
+        let started: Int64 = 1_000_000
+        let release = started + 7_200_000
+        let until = release + 3_600_000
+        #expect(Texts.goesAheadAt(started: started, at: release) == "Started at \(Texts.time(started)) · goes ahead at \(Texts.time(release))")
+        #expect(Texts.goesAheadAt(started: 0, at: release) == "Goes ahead at \(Texts.time(release))")
+        #expect(Texts.minutesLeft(release, now: release - 59 * 60_000) == "59 min left")
+        #expect(Texts.readyUntil(until) == "Ready until \(Texts.time(until))")
+        #expect(Texts.readyButton("words") == "Show my words")
+        #expect(Texts.readyButton("delete") == "Finish")
+        #expect(Texts.readyBanner("words", expires: until) == "Showing your words: ready until \(Texts.time(until)).")
+        #expect(Texts.readyNote(until) == "Open it by \(Texts.time(until)), or it has to start again.")
+        let d = DelayedAction(id: "a", what: "words", machine: nil, releaseAt: UInt64(release), expires: UInt64(until),
+                              state: "waiting", cancelledBy: nil, started: UInt64(started))
+        #expect(delayPhase(action: d, now: UInt64(release - 1)) == .waiting)
+        #expect(delayPhase(action: d, now: UInt64(release)) == .ready)
+        #expect(delayPhase(action: d, now: UInt64(until)) == .expired)
+        #expect(runningPhoneAction(delayed: [d], what: "words", now: UInt64(release)) == d)
+        #expect(runningPhoneAction(delayed: [d], what: "words", now: UInt64(until)) == nil)
+    }
+
+    /// The real reason for the wait, what comes next and what Cancel does (11.23); as on Android,
+    /// with Face ID and "Always" for the iPhone.
+    @Test func whyItWaitsAndWhatComesNext() {
+        let at: Int64 = 7_200_000
+        let until = at + 3_600_000
+        #expect(Texts.waitReason("away", place: nil, until: 0) == "You started this away from your trusted places, so it waits two hours.")
+        #expect(Texts.waitReason("away", place: nil, until: 0, started: false) == "You're away from your trusted places, so this waits two hours.")
+        #expect(Texts.waitReason("unsettled", place: "Home", until: at)
+            == "You're at Home, which was trusted less than two hours ago, so this still waits two hours. Home skips the wait from \(Texts.time(at)).")
+        #expect(Texts.waitReason("no_always", place: nil, until: 0)
+            == "Location isn't set to \"Always\" for sealctl, so it can't tell when you're at a trusted place. This waits two hours.")
+        #expect(Texts.waitReason("places_off", place: nil, until: 0) == "You have no trusted places, so this waits two hours.")
+        #expect(Texts.waitReason("", place: nil, until: 0) == "You approved this away from your trusted places, so it waits two hours.")
+        #expect(Texts.waitNext("words", at: at, until: until)
+            == "At \(Texts.time(at)) sealctl will notify you. Open it then and confirm with Face ID to see your words. You'll have until \(Texts.time(until)).")
+        #expect(Texts.waitCancel == "Cancel stops it: nothing happens, and your computers are told.")
+        #expect(Texts.placeSettles(at) == "Skips the two-hour wait from \(Texts.time(at)), unless one of your computers cancels it.")
+        #expect(Texts.delayedAt(Texts.place, name: "Home", at: at) == "Home skips the two-hour wait from \(Texts.time(at)), unless one of your computers cancels it.")
+        #expect(Texts.delayScreenTitle(Texts.place, name: "Home") == "Trusting Home")
     }
 }

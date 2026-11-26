@@ -6,6 +6,8 @@ import com.sealctl.relay.RateLimitedException
 import com.sealctl.relay.RelayDelayed
 import com.sealctl.relay.RelayException
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Which approved plan answers a machine's later key requests (SPEC.md 9.6). A plan stops
@@ -20,7 +22,7 @@ internal object Plans {
      */
     fun fromRelay(d: RelayDelayed): DelayedAction =
         DelayedAction(d.id, if (d.machine != null) "unseal_all" else Texts.OTHER_DEVICE, d.machine,
-            d.releaseAt.toULong(), d.expires.toULong(), d.state, d.by)
+            d.releaseAt.toULong(), d.expires.toULong(), d.state, d.by, d.created.toULong())
 
     /** Plans of [machine] that may still hand out keys. */
     fun live(plans: List<PlanApprovalRecord>, delayed: List<DelayedAction>, machine: String): List<PlanApprovalRecord> {
@@ -78,6 +80,20 @@ internal object Plans {
         } catch (e: Exception) {
             e
         }
+    }
+
+    /** A delayed record's state from which it never waits again (SPEC.md 11.23). */
+    fun ended(state: String): Boolean = state == "cancelled" || state == "finished" || state == "gone" || state == "expired"
+
+    /**
+     * Whether the relay's list ([relayState]) is written over the stored record [mine] (SPEC.md
+     * 11.23): a record that ended stays ended, since the list may have been read before that end;
+     * only a cancel, which says who cancelled, replaces "gone" or "expired".
+     */
+    fun takesRelayState(mine: DelayedAction, relayState: String): Boolean = when {
+        mine.state == relayState -> false
+        !ended(mine.state) -> true
+        else -> relayState == "cancelled" && (mine.state == "gone" || mine.state == "expired")
     }
 
     /**
@@ -170,5 +186,52 @@ internal class StartingDelayed {
      */
     fun fromRelay(d: RelayDelayed, stored: (String) -> Boolean, put: (DelayedAction) -> Unit) {
         synchronized(this) { if (d.id !in ids && !stored(d.id)) put(Plans.fromRelay(d)) }
+    }
+}
+
+/**
+ * Starts of the actions on the phone (SPEC.md 11.23), one at a time per kind ([what]): a start
+ * first looks for one of its kind still waiting or ready ([running]) and returns that instead
+ * of calling [begin], so a double tap, or a second screen starting the same kind while the
+ * first start is still on its way to the relay, never registers a second two-hour delay. Each
+ * kind has its own lock: a slow start of Show words does not hold back a Delete. A start waits
+ * at most as long as the relay call in [begin], which the relay client bounds (`callTimeout`).
+ */
+internal class PhoneActionStarts {
+    private val locks = HashMap<String, Mutex>()
+
+    private fun lock(what: String): Mutex = synchronized(locks) { locks.getOrPut(what) { Mutex() } }
+
+    suspend fun <T : Any> start(what: String, running: () -> T?, begin: suspend () -> T?): T? =
+        lock(what).withLock { running() ?: begin() }
+}
+
+/**
+ * Confirmations of the places this install announced (SPEC.md 11.9): `finish` is sent for a
+ * place record only while it is still waiting or released here, and one at a time per record,
+ * so a refresh that overlaps another (the alarm and the app), or one whose list was read before
+ * the confirmation, never asks the relay again after its final answer.
+ */
+internal class PlaceConfirms {
+    private val running = HashSet<String>()
+
+    /** Whether [d] still needs `finish`: a place record that has not ended. */
+    fun due(d: DelayedAction?): Boolean = d != null && d.what == Texts.PLACE && (d.state == "waiting" || d.state == "released")
+
+    /**
+     * Runs [confirm] for [id] when the record [stored] reads is [due] and no confirmation of it
+     * runs already. Returns whether it ran.
+     */
+    suspend fun confirm(id: String, stored: () -> DelayedAction?, confirm: suspend () -> Unit): Boolean {
+        if (!due(stored())) return false
+        synchronized(running) { if (!running.add(id)) return false }
+        try {
+            // Read again under the claim: one that just ended is not asked about again.
+            if (!due(stored())) return false
+            confirm()
+            return true
+        } finally {
+            synchronized(running) { running.remove(id) }
+        }
     }
 }

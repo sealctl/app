@@ -257,6 +257,8 @@ public enum Texts {
         switch what {
         case "words": return "Your words can be shown at \(time(at))."
         case "delete": return "Your relay data is deleted at \(time(at))."
+        case "leave": return "This phone leaves sealctl at \(time(at))."
+        case place: return "\(name) skips the two-hour wait from \(time(at)), unless one of your computers cancels it."
         case otherDevice: return "\(otherDeviceNote) goes ahead at \(time(at))."
         default: return handsBackAt(name, at: at)
         }
@@ -278,6 +280,7 @@ public enum Texts {
         case "words": return "Showing your words"
         case "delete": return "Deleting your relay data"
         case "leave": return "Leaving sealctl"
+        case place: return "Trusting \(name ?? "a place")"
         case otherDevice: return otherDeviceTitle
         default: return leaving(name ?? "this computer")
         }
@@ -297,6 +300,7 @@ public enum Texts {
     public static func delayOver(_ what: String?) -> String {
         switch what {
         case "unseal_all": return "The hour is over. The computer goes ahead."
+        case place: return "Nobody cancelled it. The place now skips the two-hour wait."
         case otherDevice: return "The wait is over. The phone or tablet that started it can go ahead."
         default: return "The hour is over."
         }
@@ -308,6 +312,90 @@ public enum Texts {
             ? "This is no longer waiting: the phone or tablet that started it finished it, or it expired."
             : "This waited too long. Start again."
     }
+
+    // MARK: an action on the phone, by where its delay stands (11.23)
+
+    /// The kind of the delayed record that announces trusting a place (11.9).
+    public static let place = "place"
+
+    /// Why an action on the phone waits two hours, from the reason kept when it started (or,
+    /// with `started` false, the one that applies if it starts now). `place` and `until`: the
+    /// trusted place the phone is in that doesn't lift the wait yet, and when it will.
+    public static func waitReason(_ reason: String, place: String?, until: Int64, started: Bool = true) -> String {
+        switch reason {
+        case "away":
+            return started ? "You started this away from your trusted places, so it waits two hours."
+                : "You're away from your trusted places, so this waits two hours."
+        case "unsettled":
+            return "You're at \(place ?? "a place"), which was trusted less than two hours ago, so this "
+                + (started ? "still waits" : "waits") + " two hours."
+                + (until > 0 ? " \(place ?? "It") skips the wait from \(time(until))." : "")
+        case "no_always":
+            return "Location isn't set to \"Always\" for sealctl, so it can't tell when you're at a trusted place. This waits two hours."
+        case "places_off": return "You have no trusted places, so this waits two hours."
+        default: return "You approved this away from your trusted places, so it waits two hours."
+        }
+    }
+
+    /// What the person does at the end of the wait, by kind.
+    static func goal(_ what: String?) -> String {
+        switch what {
+        case "words": return "see your words"
+        case "delete": return "delete your relay data"
+        default: return "finish leaving"
+        }
+    }
+
+    /// What happens next while it waits: the note at `at`, confirming, and until when (`until`, 0 unknown).
+    public static func waitNext(_ what: String?, at: Int64, until: Int64, biometry: String = "Face ID") -> String {
+        "At \(time(at)) sealctl will notify you. Open it then and confirm with \(biometry) to \(goal(what))."
+            + (until > 0 ? " You'll have until \(time(until))." : "")
+    }
+    public static let waitTold = "Every paired computer has been told, and can cancel it."
+    public static let waitCancel = "Cancel stops it: nothing happens, and your computers are told."
+
+    /// The start screen, before confirming: the wait, why, and what comes after (11.23).
+    public static func beforeStart(_ what: String?, reason: String, place: String?, until: Int64, at: Int64,
+                                   biometry: String = "Face ID") -> String {
+        waitReason(reason, place: place, until: until, started: false)
+            + " If you confirm now, sealctl will notify you at \(time(at)). Open it then and confirm with \(biometry) to \(goal(what))."
+            + " Every paired computer is told, and can cancel it until then."
+    }
+
+    /// A trusted place's row (11.9): when it starts to skip the wait, or why it doesn't.
+    public static func placeSettles(_ at: Int64) -> String {
+        "Skips the two-hour wait from \(time(at)), unless one of your computers cancels it."
+    }
+    public static let placeWaiting = "Every paired computer has been told, and can cancel it with sealctl cancel. Cancel here and the place is not trusted."
+    public static let placeUnconfirmed = "Not confirmed with the relay yet, so it doesn't skip the two-hour wait."
+    public static let placeConfirmAgain = "Confirm again"
+    public static let placeStaleClock = "Skips the two-hour wait two hours after your phone next reaches sealctl."
+    public static func trustHere(_ at: Int64) -> String {
+        "Showing your words and leaving sealctl skip the two-hour wait here from \(time(at)), two hours from now. "
+            + "Every paired computer is told and can cancel it until then, so someone holding your unlocked phone can't trust a place unseen."
+    }
+
+    /// Under the title while it waits: when it was started (unknown for an old record) and when it goes ahead.
+    public static func goesAheadAt(started: Int64, at: Int64) -> String {
+        started > 0 ? "Started at \(time(started)) · goes ahead at \(time(at))" : "Goes ahead at \(time(at))"
+    }
+    public static func minutesLeft(_ at: Int64, now: Int64) -> String { "\((max(0, at - now) + 59_999) / 60_000) min left" }
+    public static func readyUntil(_ expires: Int64) -> String { "Ready until \(time(expires))" }
+    public static let readyBody = "The wait is over. Finish before then, or this has to start again."
+    public static func readyButton(_ what: String?) -> String { what == "words" ? "Show my words" : "Finish" }
+    /// The Machines banner once it is ready.
+    public static func readyBanner(_ what: String?, expires: Int64) -> String {
+        "\(delayScreenTitle(what, name: nil)): ready until \(time(expires))."
+    }
+    public static let startAgain = "Start again"
+    /// Another install's action is running when this one is about to start.
+    public static func otherDeviceRunning(_ at: Int64) -> String {
+        "\(otherDeviceNote) goes ahead at \(time(at)). If that was you, finish it there; starting here waits two hours of its own."
+    }
+    public static let tooManyDelayed = "The relay is holding as many protected actions as it can for these words. Try again when one of them has ended."
+    /// The "Ready" notification's body: the window to finish.
+    public static func readyNote(_ expires: Int64) -> String { "Open it by \(time(expires)), or it has to start again." }
+
     public static func handedBack(_ name: String, done: Int, failed: Int) -> String { "\(name) handed back \(done) objects. \(failed) failed." }
 
     // MARK: pairing and errors (11.5, 11.20)

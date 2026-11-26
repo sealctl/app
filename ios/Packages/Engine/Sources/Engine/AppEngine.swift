@@ -57,6 +57,11 @@ public final class AppEngine {
     /// Delayed ids this install is registering with the relay: the relay's list may show one
     /// before it is recorded here, and it is not another install's (11.23).
     @ObservationIgnored var startingDelayed: Set<String> = []
+    /// The last start of each kind of action on the phone; the next one of that kind waits for
+    /// it, another kind does not (11.23).
+    @ObservationIgnored var phoneStarts: [String: Task<DelayedAction?, Error>] = [:]
+    /// Places this install announced whose `finish` is on its way: each is confirmed once (11.9).
+    @ObservationIgnored var confirmingPlaces: Set<String> = []
     @ObservationIgnored let approvals = SerialQueue()
     @ObservationIgnored var socket: PhoneSocket?
     @ObservationIgnored var uploadTask: Task<Void, Never>?
@@ -301,6 +306,7 @@ public final class AppEngine {
                 d.cancelledBy = o["by"].string
                 await applyLocal(.putDelayed(action: d))
                 await notifier.remove(ids: ["ready-\(id)"])
+                await untrustCancelled(id)
             }
             if var p = local.plans.first(where: { $0.delayId == id }) {
                 p.state = "cancelled"

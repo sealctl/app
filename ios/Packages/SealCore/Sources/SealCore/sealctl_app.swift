@@ -756,7 +756,7 @@ public protocol StoreProtocol: AnyObject, Sendable {
     /**
      * Whether a trusted place lifts the level 3 delay now ([`crate::decide::place_settled`]
      * on the corrected clock). A place added by hand never does while the clock is stale:
-     * its 24 hours can't be counted on a clock the person may have set.
+     * its two hours can't be counted on a clock the person may have set.
      */
     func placeSettledNow(place: TrustedPlace) throws  -> Bool
     
@@ -1126,7 +1126,7 @@ open func placeSample(sample: LocationSample, utcOffsetSecs: Int32)throws  -> Pl
     /**
      * Whether a trusted place lifts the level 3 delay now ([`crate::decide::place_settled`]
      * on the corrected clock). A place added by hand never does while the clock is stale:
-     * its 24 hours can't be counted on a clock the person may have set.
+     * its two hours can't be counted on a clock the person may have set.
      */
 open func placeSettledNow(place: TrustedPlace)throws  -> Bool  {
     return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeAppError_lift) {
@@ -2007,13 +2007,31 @@ public struct DelayedAction: Equatable, Hashable {
      */
     public var expires: UInt64
     /**
-     * `waiting`, `released`, `cancelled`, `finished`.
+     * `waiting`, `released`, `cancelled`, `finished`, `gone`, `expired` ([`crate::delays::delay_phase`]).
      */
     public var state: String
     /**
      * Who cancelled: `phone` or a machine key.
      */
     public var cancelledBy: String?
+    /**
+     * When it was started, Unix ms; 0 for a record kept before this was recorded.
+     */
+    public var started: UInt64
+    /**
+     * Why an action on the phone waits, recorded when it starts so its screen gives the real
+     * reason ([`crate::decide::DelayReason`]): `away`, `unsettled`, `no_always`, `places_off`,
+     * or "" when not recorded. `place` marks the announcement of a newly trusted place.
+     */
+    public var reason: String
+    /**
+     * For `unsettled`: the trusted place the phone was inside.
+     */
+    public var reasonPlace: String?
+    /**
+     * For `unsettled`: when that place starts to lift the wait, Unix ms; 0 when not known.
+     */
+    public var reasonUntil: UInt64
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -2034,11 +2052,25 @@ public struct DelayedAction: Equatable, Hashable {
          * Unix ms.
          */expires: UInt64, 
         /**
-         * `waiting`, `released`, `cancelled`, `finished`.
+         * `waiting`, `released`, `cancelled`, `finished`, `gone`, `expired` ([`crate::delays::delay_phase`]).
          */state: String, 
         /**
          * Who cancelled: `phone` or a machine key.
-         */cancelledBy: String?) {
+         */cancelledBy: String?, 
+        /**
+         * When it was started, Unix ms; 0 for a record kept before this was recorded.
+         */started: UInt64 = UInt64(0), 
+        /**
+         * Why an action on the phone waits, recorded when it starts so its screen gives the real
+         * reason ([`crate::decide::DelayReason`]): `away`, `unsettled`, `no_always`, `places_off`,
+         * or "" when not recorded. `place` marks the announcement of a newly trusted place.
+         */reason: String = "", 
+        /**
+         * For `unsettled`: the trusted place the phone was inside.
+         */reasonPlace: String? = nil, 
+        /**
+         * For `unsettled`: when that place starts to lift the wait, Unix ms; 0 when not known.
+         */reasonUntil: UInt64 = UInt64(0)) {
         self.id = id
         self.what = what
         self.machine = machine
@@ -2046,6 +2078,10 @@ public struct DelayedAction: Equatable, Hashable {
         self.expires = expires
         self.state = state
         self.cancelledBy = cancelledBy
+        self.started = started
+        self.reason = reason
+        self.reasonPlace = reasonPlace
+        self.reasonUntil = reasonUntil
     }
 
     
@@ -2070,7 +2106,11 @@ public struct FfiConverterTypeDelayedAction: FfiConverterRustBuffer {
                 releaseAt: FfiConverterUInt64.read(from: &buf), 
                 expires: FfiConverterUInt64.read(from: &buf), 
                 state: FfiConverterString.read(from: &buf), 
-                cancelledBy: FfiConverterOptionString.read(from: &buf)
+                cancelledBy: FfiConverterOptionString.read(from: &buf), 
+                started: FfiConverterUInt64.read(from: &buf), 
+                reason: FfiConverterString.read(from: &buf), 
+                reasonPlace: FfiConverterOptionString.read(from: &buf), 
+                reasonUntil: FfiConverterUInt64.read(from: &buf)
         )
     }
 
@@ -2082,6 +2122,10 @@ public struct FfiConverterTypeDelayedAction: FfiConverterRustBuffer {
         FfiConverterUInt64.write(value.expires, into: &buf)
         FfiConverterString.write(value.state, into: &buf)
         FfiConverterOptionString.write(value.cancelledBy, into: &buf)
+        FfiConverterUInt64.write(value.started, into: &buf)
+        FfiConverterString.write(value.reason, into: &buf)
+        FfiConverterOptionString.write(value.reasonPlace, into: &buf)
+        FfiConverterUInt64.write(value.reasonUntil, into: &buf)
     }
 }
 
@@ -4956,10 +5000,26 @@ public struct TrustedPlace: Equatable, Hashable {
      */
     public var deleted: Bool
     /**
-     * Added by hand ("Trust where I am now") rather than learned over three mornings: it counts
-     * for the level 3 delay only 24 hours after `created` (SPEC.md 9.6).
+     * Added by hand ("Trust where I am now") rather than learned over three mornings. Without a
+     * `trust_id` (a place trusted before trusting was announced) it counts for the level 3 delay
+     * only two hours after `created` (SPEC.md 9.6).
      */
     public var manual: Bool
+    /**
+     * The relay's delayed record that announced trusting this place to every paired computer
+     * and install, which any of them can cancel for two hours (SPEC.md 11.9). With one, the
+     * place lifts the level 3 delay only once the relay confirmed it (`trusted_at`).
+     */
+    public var trustId: String?
+    /**
+     * When that record's two hours end (its `releaseAt`), Unix ms; 0 when not known.
+     */
+    public var trustFrom: UInt64
+    /**
+     * When the relay confirmed that record (`finish` answered `200`: nobody cancelled it),
+     * Unix ms; 0 until then.
+     */
+    public var trustedAt: UInt64
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -4989,9 +5049,22 @@ public struct TrustedPlace: Equatable, Hashable {
          * Tombstone.
          */deleted: Bool, 
         /**
-         * Added by hand ("Trust where I am now") rather than learned over three mornings: it counts
-         * for the level 3 delay only 24 hours after `created` (SPEC.md 9.6).
-         */manual: Bool) {
+         * Added by hand ("Trust where I am now") rather than learned over three mornings. Without a
+         * `trust_id` (a place trusted before trusting was announced) it counts for the level 3 delay
+         * only two hours after `created` (SPEC.md 9.6).
+         */manual: Bool, 
+        /**
+         * The relay's delayed record that announced trusting this place to every paired computer
+         * and install, which any of them can cancel for two hours (SPEC.md 11.9). With one, the
+         * place lifts the level 3 delay only once the relay confirmed it (`trusted_at`).
+         */trustId: String? = nil, 
+        /**
+         * When that record's two hours end (its `releaseAt`), Unix ms; 0 when not known.
+         */trustFrom: UInt64 = UInt64(0), 
+        /**
+         * When the relay confirmed that record (`finish` answered `200`: nobody cancelled it),
+         * Unix ms; 0 until then.
+         */trustedAt: UInt64 = UInt64(0)) {
         self.id = id
         self.name = name
         self.lat = lat
@@ -5001,6 +5074,9 @@ public struct TrustedPlace: Equatable, Hashable {
         self.updated = updated
         self.deleted = deleted
         self.manual = manual
+        self.trustId = trustId
+        self.trustFrom = trustFrom
+        self.trustedAt = trustedAt
     }
 
     
@@ -5027,7 +5103,10 @@ public struct FfiConverterTypeTrustedPlace: FfiConverterRustBuffer {
                 created: FfiConverterUInt64.read(from: &buf), 
                 updated: FfiConverterUInt64.read(from: &buf), 
                 deleted: FfiConverterBool.read(from: &buf), 
-                manual: FfiConverterBool.read(from: &buf)
+                manual: FfiConverterBool.read(from: &buf), 
+                trustId: FfiConverterOptionString.read(from: &buf), 
+                trustFrom: FfiConverterUInt64.read(from: &buf), 
+                trustedAt: FfiConverterUInt64.read(from: &buf)
         )
     }
 
@@ -5041,6 +5120,9 @@ public struct FfiConverterTypeTrustedPlace: FfiConverterRustBuffer {
         FfiConverterUInt64.write(value.updated, into: &buf)
         FfiConverterBool.write(value.deleted, into: &buf)
         FfiConverterBool.write(value.manual, into: &buf)
+        FfiConverterOptionString.write(value.trustId, into: &buf)
+        FfiConverterUInt64.write(value.trustFrom, into: &buf)
+        FfiConverterUInt64.write(value.trustedAt, into: &buf)
     }
 }
 
@@ -6001,6 +6083,219 @@ public func FfiConverterTypeBiometrics_lower(_ value: Biometrics) -> RustBuffer 
 
 
 /**
+ * Where a delayed action stands (SPEC.md 11.23 Delay).
+ */
+
+public enum DelayPhase: Equatable, Hashable {
+    
+    /**
+     * Counting down to `release_at`.
+     */
+    case waiting
+    /**
+     * Past `release_at` and before `expires`: an action on the phone can be finished.
+     */
+    case ready
+    /**
+     * Past `expires`, or the relay no longer has it: it can only be started again.
+     */
+    case expired
+    /**
+     * Cancelled, here or elsewhere.
+     */
+    case cancelled
+    /**
+     * Finished on the phone, or, for a machine's `unseal --all`, its wait is over.
+     */
+    case finished
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension DelayPhase: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDelayPhase: FfiConverterRustBuffer {
+    typealias SwiftType = DelayPhase
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DelayPhase {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .waiting
+        
+        case 2: return .ready
+        
+        case 3: return .expired
+        
+        case 4: return .cancelled
+        
+        case 5: return .finished
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: DelayPhase, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .waiting:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .ready:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .expired:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .cancelled:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .finished:
+            writeInt(&buf, Int32(5))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDelayPhase_lift(_ buf: RustBuffer) throws -> DelayPhase {
+    return try FfiConverterTypeDelayPhase.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDelayPhase_lower(_ value: DelayPhase) -> RustBuffer {
+    return FfiConverterTypeDelayPhase.lower(value)
+}
+
+
+
+/**
+ * Why a level 3 action on the phone waits two hours (SPEC.md 11.23), recorded when it starts
+ * so its delay screen gives the real reason.
+ */
+
+public enum DelayReason: Equatable, Hashable {
+    
+    /**
+     * No wait: at a trusted place that lifts it.
+     */
+    case none
+    /**
+     * Location is Always, and the phone is not inside a trusted place.
+     */
+    case away
+    /**
+     * Inside a trusted place that does not lift the wait yet (trusted under two hours ago, not
+     * yet confirmed, or the clock can't be checked).
+     */
+    case unsettled
+    /**
+     * Trusted places exist, but location is not "Allow all the time" (or not given), so they
+     * count for nothing.
+     */
+    case noAlways
+    /**
+     * No trusted places at all.
+     */
+    case placesOff
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension DelayReason: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDelayReason: FfiConverterRustBuffer {
+    typealias SwiftType = DelayReason
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DelayReason {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .none
+        
+        case 2: return .away
+        
+        case 3: return .unsettled
+        
+        case 4: return .noAlways
+        
+        case 5: return .placesOff
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: DelayReason, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .none:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .away:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .unsettled:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .noAlways:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .placesOff:
+            writeInt(&buf, Int32(5))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDelayReason_lift(_ buf: RustBuffer) throws -> DelayReason {
+    return try FfiConverterTypeDelayReason.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDelayReason_lower(_ value: DelayReason) -> RustBuffer {
+    return FfiConverterTypeDelayReason.lower(value)
+}
+
+
+
+/**
  * A change to the relay state.
  */
 
@@ -6816,6 +7111,30 @@ fileprivate struct FfiConverterOptionTypeDayRecord: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeDayRecord.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeDelayedAction: FfiConverterRustBuffer {
+    typealias SwiftType = DelayedAction?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeDelayedAction.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeDelayedAction.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -7854,8 +8173,9 @@ public func wordEntry(prefix: String) -> WordEntry  {
 }
 /**
  * Whether a trusted place lifts the level 3 delay at `now` ([`crate::decide::place_settled`]
- * on the corrected clock). A place added by hand never does while the clock is stale: its 24
- * hours can't be counted on a clock the person may have set.
+ * on the corrected clock). A place added by hand without an announcement never does while the
+ * clock is stale: its two hours can't be counted on a clock the person may have set. An
+ * announced place needs no clock: the relay confirmed its two hours.
  */
 public func placeSettledAt(place: TrustedPlace, now: ClockNow) -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
@@ -7963,6 +8283,33 @@ public func decide(request: Request, ctx: DecideContext) -> Verdict  {
 })
 }
 /**
+ * The reason for a level 3 wait from where the phone is: `location` access, the trusted place it
+ * is inside (`here`, if any), whether that place lifts the wait now (`settled`), and whether any
+ * trusted place exists.
+ */
+public func delayReason(location: LocationAccess, here: TrustedPlace?, settled: Bool, anyPlaces: Bool) -> DelayReason  {
+    return try!  FfiConverterTypeDelayReason_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_func_delay_reason(
+        FfiConverterTypeLocationAccess_lower(location),
+        FfiConverterOptionTypeTrustedPlace.lower(here),
+        FfiConverterBool.lower(settled),
+        FfiConverterBool.lower(anyPlaces),uniffiCallStatus
+    )
+})
+}
+/**
+ * The code of a [`DelayReason`], as kept with a delayed action.
+ */
+public func delayReasonCode(reason: DelayReason) -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_func_delay_reason_code(
+        FfiConverterTypeDelayReason_lower(reason),uniffiCallStatus
+    )
+})
+}
+/**
  * The place kind for a reply (SPEC.md 9.4). A phone that cannot notice leaving a place does not
  * know where it is: without location access Always the kind is `none`, as without location at
  * all, never `other` (a 10-minute allowance for being somewhere unknown) and never `trusted`
@@ -7978,16 +8325,59 @@ public func placeKind(location: LocationAccess, currentPlace: String?) -> Place 
 })
 }
 /**
- * Whether a trusted place also lifts the level 3 delay at `now`: a learned place at once, a place
- * added by hand 24 hours after it was added. Every other comfort of a place starts at once. A
- * place added by hand with `created` 0 was added while the clock was stale and its 24 hours
- * have not started (the store stamps it once the clock is fresh, SPEC.md 8.1).
+ * Whether a trusted place also lifts the level 3 delay at `now`. A place whose trusting was
+ * announced (`trust_id`) does once the relay confirmed nobody cancelled it (`trusted_at`), which
+ * it can only do two hours after the announcement. A place trusted before announcements: a
+ * learned one at once, one added by hand two hours after it was added. Every other comfort of a
+ * place starts at once. A place added by hand with `created` 0 was added while the clock was
+ * stale and its two hours have not started (the store stamps it once the clock is fresh, 8.1).
  */
 public func placeSettled(place: TrustedPlace, now: UInt64) -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
         uniffiCallStatus in
     uniffi_sealctl_app_fn_func_place_settled(
         FfiConverterTypeTrustedPlace_lower(place),
+        FfiConverterUInt64.lower(now),uniffiCallStatus
+    )
+})
+}
+/**
+ * When a trusted place starts to lift the level 3 delay, Unix ms, for its row and the delay
+ * screen: the end of its announcement's two hours, or two hours after a hand-added place was
+ * added. 0 when it already does, or when the time is not known yet.
+ */
+public func placeSettlesAt(place: TrustedPlace) -> UInt64  {
+    return try!  FfiConverterUInt64.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_func_place_settles_at(
+        FfiConverterTypeTrustedPlace_lower(place),uniffiCallStatus
+    )
+})
+}
+/**
+ * Where `action` stands at `now` (Unix ms). A machine's record (`unseal --all`) needs nothing
+ * from the phone when its wait ends, so it is `Finished` from `release_at` on.
+ */
+public func delayPhase(action: DelayedAction, now: UInt64) -> DelayPhase  {
+    return try!  FfiConverterTypeDelayPhase_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_func_delay_phase(
+        FfiConverterTypeDelayedAction_lower(action),
+        FfiConverterUInt64.lower(now),uniffiCallStatus
+    )
+})
+}
+/**
+ * The phone-only action of kind `what` that is still waiting or ready at `now`, the newest
+ * when there are several. A start button of that kind shows it instead of starting another,
+ * and with `what` = [`OTHER_DEVICE`] it finds one another install started (SPEC.md 11.23).
+ */
+public func runningPhoneAction(delayed: [DelayedAction], what: String, now: UInt64) -> DelayedAction?  {
+    return try!  FfiConverterOptionTypeDelayedAction.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_func_running_phone_action(
+        FfiConverterSequenceTypeDelayedAction.lower(delayed),
+        FfiConverterString.lower(what),
         FfiConverterUInt64.lower(now),uniffiCallStatus
     )
 })
@@ -8179,7 +8569,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sealctl_app_checksum_func_word_entry() != 42711) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_sealctl_app_checksum_func_place_settled_at() != 45879) {
+    if (uniffi_sealctl_app_checksum_func_place_settled_at() != 37283) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_func_relay_clock_learned() != 31114) {
@@ -8206,10 +8596,25 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sealctl_app_checksum_func_decide() != 1771) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sealctl_app_checksum_func_delay_reason() != 42833) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sealctl_app_checksum_func_delay_reason_code() != 40482) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sealctl_app_checksum_func_place_kind() != 5228) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_sealctl_app_checksum_func_place_settled() != 45654) {
+    if (uniffi_sealctl_app_checksum_func_place_settled() != 36926) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sealctl_app_checksum_func_place_settles_at() != 7674) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sealctl_app_checksum_func_delay_phase() != 65285) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sealctl_app_checksum_func_running_phone_action() != 4141) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_func_grants_to_lock() != 8719) {
@@ -8287,7 +8692,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sealctl_app_checksum_method_store_place_sample() != 47269) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_sealctl_app_checksum_method_store_place_settled_now() != 56412) {
+    if (uniffi_sealctl_app_checksum_method_store_place_settled_now() != 11512) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_method_store_prune() != 13406) {

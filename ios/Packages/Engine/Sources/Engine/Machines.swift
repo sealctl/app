@@ -184,12 +184,116 @@ extension AppEngine {
 
     public func trustPlace(_ c: PlaceCandidate, name: String) async {
         let n = name.trimmingCharacters(in: .whitespaces)
-        await apply(.addPlace(place: TrustedPlace(id: c.id, name: n.isEmpty ? "Place 1" : String(n.prefix(40)), lat: c.lat,
-                                                  lon: c.lon, radius: 150, created: UInt64(nowMs()), updated: 0, deleted: false, manual: false)),
-                    upload: true)
         placeOffer = nil
+        // Announced to every paired computer; it skips the wait in two hours (11.9).
+        if await !trustPlace(TrustedPlace(id: c.id, name: n.isEmpty ? "Place 1" : String(n.prefix(40)), lat: c.lat,
+                                          lon: c.lon, radius: 150, created: UInt64(nowMs()), updated: 0, deleted: false,
+                                          manual: false)) {
+            show(Texts.relayDown)
+        }
         await monitorPlaces()
         await askAlways()
+    }
+
+    // MARK: trusting a place (11.9)
+
+    /// Trusts `place` (learned, or "Trust where I am now"). Its comforts start at once; it lifts
+    /// the level 3 delay only after two hours, announced to every paired computer and install
+    /// through a delayed record on the relay that any of them can cancel ("Run: sealctl cancel"),
+    /// and only once the relay confirms nobody did. Returns whether the relay took the
+    /// announcement; when not, the place stays unconfirmed and its row offers to announce it again.
+    @discardableResult
+    public func trustPlace(_ place: TrustedPlace) async -> Bool {
+        var p = place
+        p.trustId = randomId()
+        p.trustFrom = 0
+        p.trustedAt = 0
+        await apply(.addPlace(place: p), upload: true)
+        return await announceTrust(p.id)
+    }
+
+    /// Announces trusting the place `placeId` (again, with a new record when the last one ended).
+    @discardableResult
+    public func announceTrust(_ placeId: String) async -> Bool {
+        guard var place = state.places.first(where: { $0.id == placeId && !$0.deleted }) else { return false }
+        if place.trustedAt != 0 { return true }
+        let id = place.trustId.flatMap { old in local.delayed.contains { $0.id == old } ? nil : old } ?? randomId()
+        if id != place.trustId {
+            place.trustId = id
+            place.trustFrom = 0
+            await apply(.addPlace(place: place), upload: true)
+        }
+        startingDelayed.insert(id)
+        writeSnapshot()
+        defer {
+            startingDelayed.remove(id)
+            writeSnapshot()
+        }
+        do {
+            let started = nowMs()
+            let d = try await relay.addDelayed(id: id, delay: delaySecs(Self.levelThreeDelaySecs))
+            await applyLocal(.putDelayed(action: DelayedAction(
+                id: id, what: Texts.place, machine: nil, releaseAt: UInt64(clamping: d.releaseAt),
+                expires: UInt64(clamping: d.expires), state: "waiting", cancelledBy: nil,
+                started: UInt64(clamping: started), reason: Texts.place, reasonPlace: place.name)))
+            if var p = state.places.first(where: { $0.id == placeId && !$0.deleted }) {
+                p.trustFrom = UInt64(clamping: d.releaseAt)
+                await apply(.addPlace(place: p), upload: true)
+            }
+            return true
+        } catch {
+            relayFailed(error)
+            return false
+        }
+    }
+
+    /// The relay says nobody cancelled trusting the place in two hours: it now lifts the delay.
+    /// Only while its record is waiting or released here and the place is not confirmed yet, one
+    /// at a time: a confirmed one is never asked about again, so a later `404 gone` never
+    /// replaces "finished" (11.9, 11.23).
+    func confirmPlace(_ id: String) async {
+        func due() -> Bool {
+            local.delayed.contains { $0.id == id && $0.what == Texts.place && ($0.state == "waiting" || $0.state == "released") }
+                && !state.places.contains { $0.trustId == id && !$0.deleted && $0.trustedAt != 0 }
+        }
+        guard due(), !confirmingPlaces.contains(id) else { return }
+        confirmingPlaces.insert(id)
+        defer { confirmingPlaces.remove(id) }
+        do {
+            try await relay.finishDelayed(id)
+        } catch let e as RelayError {
+            if e.code == "cancelled" {
+                if var d = local.delayed.first(where: { $0.id == id }) {
+                    d.state = "cancelled"
+                    d.cancelledBy = e.body["by"].string
+                    await applyLocal(.putDelayed(action: d))
+                }
+                await untrustCancelled(id)
+            } else if e.code == "gone" || ((400..<500).contains(e.status) && ![401, 408, 429].contains(e.status)),
+                      var d = local.delayed.first(where: { $0.id == id }) {
+                // Gone, or another answer that will not change: not asked again; the row offers Confirm again.
+                d.state = "gone"
+                await applyLocal(.putDelayed(action: d))
+            }
+            return
+        } catch {
+            return
+        }
+        if var d = local.delayed.first(where: { $0.id == id }) {
+            d.state = "finished"
+            await applyLocal(.putDelayed(action: d))
+        }
+        if var p = state.places.first(where: { $0.trustId == id && !$0.deleted }) {
+            p.trustedAt = UInt64(clamping: clockNow())
+            await apply(.addPlace(place: p), upload: true)
+        }
+    }
+
+    /// Trusting a place was cancelled (here, from a computer or another install): it is not trusted.
+    func untrustCancelled(_ id: String) async {
+        guard let p = state.places.first(where: { $0.trustId == id && !$0.deleted && $0.trustedAt == 0 }) else { return }
+        await apply(.removePlace(id: p.id), upload: true)
+        await monitorPlaces()
     }
 
     public func suppressPlace(_ c: PlaceCandidate) async {
@@ -197,8 +301,14 @@ extension AppEngine {
         placeOffer = nil
     }
 
+    /// Removes a place; trusting it that is still announced is cancelled with it (11.9).
     public func removePlace(_ id: String) async {
+        let place = state.places.first { $0.id == id }
         await apply(.removePlace(id: id), upload: true)
+        if let p = place, p.trustedAt == 0, let t = p.trustId,
+           local.delayed.contains(where: { $0.id == t && ($0.state == "waiting" || $0.state == "released") }) {
+            await cancelDelayed(t)
+        }
         await monitorPlaces()
     }
 

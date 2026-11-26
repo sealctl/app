@@ -14,6 +14,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Changed
 
+- A newly trusted place (learned, or "Trust where I am now") skips the two-hour wait of Show
+  words, Delete my relay data and Leave sealctl two hours after it is trusted, instead of from
+  the same time the next day. Trusting it is announced to every paired computer and your other
+  phones, which can cancel it in those two hours ("Run: sealctl cancel"); a cancel, or removing
+  the place, means it is not trusted. Only once the relay confirms nobody cancelled does the place
+  skip the wait. Its row says from when, or offers [Confirm again] when it could not be confirmed.
+  The place's other comforts start at once, as before.
 - Machines: an Open machine that is being worked on shows "Open · active" instead of a time
   left that read about the full idle allowance while you typed. Once it is idle it shows
   "Open · idle 12 min · locks at 15:42" (the hard stop when that comes first), and "active"
@@ -43,6 +50,35 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Fixed
 
+- Show words, Delete my relay data and Leave sealctl after their two-hour wait: the delay screen
+  now turns into "Ready until 12:37" with [Show my words] or [Finish] by itself at the end of the
+  wait, from Settings, the Machines banner ("Showing your words: ready until 12:37.") or the
+  "Ready" notification, also when the app was closed. Before, the notification and the banner
+  opened a screen that only said "The hour is over." with no way to finish. Once the hour to
+  finish has passed: "This waited too long. Start again." with [Start again].
+- A second tap on Show words (or Delete, or Leave) while the first start was still on its way to
+  the relay no longer starts a second two-hour wait: starts of one kind run one at a time (a slow
+  start of Show words does not hold back Delete), and while one of a kind waits or is ready, its
+  start opens that one. The waiting screen shows when it was started
+  and when it goes ahead. An action another of your devices started is named on the start screen
+  before anything starts.
+- Android: the "Ready" notification comes from an alarm at the end of the wait instead of a
+  WorkManager job, which Android could hold back past the time to finish. It is exact when
+  sealctl may set alarms (Alarms & reminders; the delay screen offers [Allow alarms]), and is set
+  again after a reboot, an update or a force stop.
+- The waiting screen of Show words, Delete my relay data and Leave sealctl gives the real reason
+  for the wait, recorded when it started (away from your trusted places; at a place trusted less
+  than two hours ago, and when it will skip the wait; location not set to "Allow all the time";
+  no trusted places) instead of always "You approved this away from your trusted places". It
+  also says what happens next ("At 12:04 sealctl will notify you. Open it then and confirm with
+  your fingerprint or face to see your words. You'll have until 13:04.") and what Cancel does.
+  The start screens say the same before you confirm.
+- Android: leaving a start screen while the relay was registering the delay could leave a record
+  the phone never stored, which it then showed as started on another device.
+- A record the relay no longer lists after it said "released" is shown as expired instead of
+  offering a Finish that could only fail.
+- The Machines banner of Leave sealctl says "This phone leaves sealctl at 11:00." instead of
+  "This phone hands everything back at 11:00."
 - Leaving a trusted place locks every machine whose session was allowed there, wherever its
   day began. The phone keeps, per machine, the place its latest session was allowed at; a
   machine whose latest session was allowed elsewhere stays Open. A lock the relay did not take

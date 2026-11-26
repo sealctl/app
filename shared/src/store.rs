@@ -931,6 +931,12 @@ impl Store {
                         action.cancelled_by = d.cancelled_by.clone().or(action.cancelled_by);
                     }
                 }
+                // A write that does not know when it started (an older read) keeps the time.
+                if action.started == 0 {
+                    if let Some(d) = l.delayed.iter().find(|d| d.id == action.id) {
+                        action.started = d.started;
+                    }
+                }
                 // Its plan approval is cancelled with it, whichever of the two was stored first.
                 if action.state == "cancelled" {
                     for p in l
@@ -1333,7 +1339,7 @@ impl Store {
         }
         write_doc(&c, CLOCK, &RelayClock::learned(relay_ms, &self.boot()))?;
         let clock = self.clock_in(&c);
-        // places added by hand while the clock was stale start their 24 hours now
+        // places added by hand while the clock was stale start their two hours now
         let mut s: State = read_doc(&c, "state")?;
         if clock.fresh && stamp_hand_added_places(&mut s, clock.now) {
             write_doc(&c, "state", &normalise(s))?;
@@ -1358,7 +1364,7 @@ impl Store {
 
     /// Whether a trusted place lifts the level 3 delay now ([`crate::decide::place_settled`]
     /// on the corrected clock). A place added by hand never does while the clock is stale:
-    /// its 24 hours can't be counted on a clock the person may have set.
+    /// its two hours can't be counted on a clock the person may have set.
     pub fn place_settled_now(&self, place: TrustedPlace) -> Result<bool> {
         Ok(crate::clock::place_settled_at(place, self.clock_now()?))
     }
@@ -1555,7 +1561,7 @@ pub fn open_answered_request(
 }
 
 /// Stamps `created` on the live places added by hand that have none (added while the clock was
-/// stale), so their 24 hours start on a fresh clock (SPEC.md 8.1, 9.6). Returns whether any was.
+/// stale), so their two hours start on a fresh clock (SPEC.md 8.1, 9.6). Returns whether any was.
 fn stamp_hand_added_places(s: &mut State, now: u64) -> bool {
     let mut changed = false;
     for p in s
@@ -1681,7 +1687,7 @@ fn apply_event(s: &mut State, event: Event, clock: ClockNow) -> Result<()> {
                 place.updated,
                 now,
             );
-            // A place added by hand starts its 24 hours only on a fresh clock: a stale one can
+            // A place added by hand starts its two hours only on a fresh clock: a stale one can
             // be days behind, and the place would be settled as soon as the clock is fresh.
             // Until then `created` stays 0 (see stamp_hand_added_places).
             if place.created == 0 && (clock.fresh || !place.manual) {
@@ -2428,6 +2434,7 @@ mod tests {
                 expires: t0 + 2 * H + 15 * MIN,
                 state: state.into(),
                 cancelled_by: by.map(Into::into),
+                ..Default::default()
             },
         };
         let plan = |id: &str, hash: &str| LocalEvent::PutPlan {
@@ -2471,6 +2478,7 @@ mod tests {
                 expires: t0 + 2 * H + 15 * MIN,
                 state: state.into(),
                 cancelled_by: by.map(Into::into),
+                ..Default::default()
             },
         };
         // The relay's list no longer has it (gone), then the cancel note says who cancelled.
@@ -2498,6 +2506,55 @@ mod tests {
     }
 
     #[test]
+    fn a_finished_action_stays_finished() {
+        // A place confirmed with `finish`, then a list read before it (released) and a late
+        // `404 gone`, in either order (SPEC.md 11.9, 11.23).
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        st.set_now(t0);
+        let action = |state: &str| LocalEvent::PutDelayed {
+            action: DelayedAction {
+                id: "p1".into(),
+                what: "place".into(),
+                release_at: t0 + 2 * H,
+                expires: t0 + 3 * H,
+                state: state.into(),
+                ..Default::default()
+            },
+        };
+        st.apply_local(action("released")).unwrap();
+        st.apply_local(action("finished")).unwrap();
+        for state in ["released", "gone", "waiting", "expired", "cancelled"] {
+            let l = st.apply_local(action(state)).unwrap();
+            assert_eq!(l.delayed[0].state, "finished", "after {state}");
+        }
+    }
+
+    #[test]
+    fn a_write_without_a_start_time_keeps_the_stored_one() {
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        st.set_now(t0);
+        let action = |state: &str, started: u64| LocalEvent::PutDelayed {
+            action: DelayedAction {
+                id: "d1".into(),
+                what: "words".into(),
+                release_at: t0 + 2 * H,
+                expires: t0 + 3 * H,
+                state: state.into(),
+                started,
+                ..Default::default()
+            },
+        };
+        st.apply_local(action("waiting", t0)).unwrap();
+        let l = st.apply_local(action("released", 0)).unwrap();
+        assert_eq!(
+            (l.delayed[0].state.as_str(), l.delayed[0].started),
+            ("released", t0)
+        );
+    }
+
+    #[test]
     fn a_cancel_is_not_undone_by_an_older_write() {
         let st = store();
         let t0 = MIDNIGHT + 9 * H;
@@ -2511,6 +2568,7 @@ mod tests {
                 expires: t0 + 2 * H + 15 * MIN,
                 state: state.into(),
                 cancelled_by: by.map(Into::into),
+                ..Default::default()
             },
         };
         st.apply_local(action("waiting", None)).unwrap();
@@ -3507,7 +3565,7 @@ mod tests {
         let place = hand_added(&st);
         assert_eq!(place.created, 0);
         assert!(!st.place_settled_now(place).unwrap());
-        // The relay is reached two days on: the place's 24 hours start then, not before.
+        // The relay is reached two days on: the place's two hours start then, not before.
         reach_relay(&st, t0 + 48 * H);
         let place = st
             .snapshot()

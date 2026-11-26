@@ -48,12 +48,15 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.sealctl.app.Graph
 import com.sealctl.app.MachineView
 import com.sealctl.app.MainActivity
+import com.sealctl.app.Ready
 import com.sealctl.app.Route
 import com.sealctl.app.Texts
 import com.sealctl.app.Ui
 import com.sealctl.app.Waiting
 import com.sealctl.core.app.Asking
+import com.sealctl.core.app.DelayPhase
 import com.sealctl.core.app.DelayedAction
+import com.sealctl.core.app.delayPhase
 import com.sealctl.core.app.LocalState
 import com.sealctl.core.app.Machine
 import com.sealctl.core.app.MachineSession
@@ -101,7 +104,7 @@ fun MainScreen(activity: MainActivity) {
             Route.Erase -> EraseScreen(activity)
             Route.Leave -> LeaveScreen(activity)
             is Route.Report -> ReportScreen(top.id)
-            is Route.Delayed -> DelayedScreen(top.id)
+            is Route.Delayed -> DelayedScreen(activity, top.id)
             is Route.Sensitive -> SensitiveScreen(activity, top.requestId)
             is Route.Activity -> ActivityScreen("Activity", onBack = { Ui.pop() }, top.machine)
             is Route.Inventory -> Page("Inventory") { InventoryList(top.machine) }
@@ -205,16 +208,28 @@ private fun RateLimitedBanner(until: Long, clock: State<Long>) {
     if (until > clock.value) Banner(Texts.rateLimited(until))
 }
 
-/** "Unseal all starts at 14:05 on …" for each delayed approval still counting down (11.23). */
+/**
+ * "Unseal all starts at 14:05 on …" for each delayed approval still counting down, and for an
+ * action this install started on the phone, "… ready until 12:37" once its wait is over, until
+ * it expires (11.23).
+ */
 @Composable
 private fun DelayedBanners(delayed: List<DelayedAction>, clock: State<Long>, onCancel: (String) -> Unit) {
     val engine = Graph.engine
     val now = clock.value
-    for (d in delayed.filter { it.state == "waiting" && it.releaseAt.toLong() > now }) {
-        val name = d.machine?.let { k -> engine.machine(k)?.let { engine.displayName(it) } } ?: "This phone"
-        Banner(Texts.delayedAt(d.what, name, d.releaseAt.toLong()), tone = Sealctl.colors.accentSoft) {
+    for (d in delayed) {
+        val ready = when (delayPhase(d, now.toULong())) {
+            DelayPhase.WAITING -> false
+            DelayPhase.READY -> if (Ready.isOwn(d)) true else continue
+            else -> continue
+        }
+        val name = if (d.what == Texts.PLACE) d.reasonPlace ?: "This place"
+            else d.machine?.let { k -> engine.machine(k)?.let { engine.displayName(it) } } ?: "This phone"
+        val text = if (ready) Texts.readyBanner(d.what, d.expires.toLong()) else Texts.delayedAt(d.what, name, d.releaseAt.toLong())
+        Banner(text, tone = Sealctl.colors.accentSoft) {
             Row {
-                TextButton({ Ui.push(Route.Delayed(d.id)) }) { Text("Show") }
+                if (ready) TextButton({ Ui.push(Route.Delayed(d.id)) }) { Text(Texts.readyButton(d.what), fontWeight = FontWeight.SemiBold) }
+                else TextButton({ Ui.push(Route.Delayed(d.id)) }) { Text("Show") }
                 TextButton({ onCancel(d.id) }) { Text("Cancel") }
             }
         }

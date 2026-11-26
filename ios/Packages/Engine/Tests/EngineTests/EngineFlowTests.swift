@@ -402,6 +402,54 @@ struct EngineUnitTests {
         #expect(notifier.posted.isEmpty)
     }
 
+    /// When In Use only: region monitoring does not wake the app to notice leaving, so a place
+    /// counts for nothing and the reply carries `none` (1 hour), never `other` or `trusted`.
+    @Test func withoutAlwaysAPlaceCountsForNothing() async throws {
+        let places = StubPlaces()
+        places.hasAlways = false
+        let (engine, _, _) = try await makeEngine(places: places)
+        await engine.apply(.addPlace(place: TrustedPlace(id: "p1", name: "Home", lat: 0, lon: 0, radius: 150,
+                                                         created: 1, updated: 0, deleted: false, manual: false)))
+        engine.refreshLocation()
+        #expect(engine.placesNeedAlways)
+        #expect(engine.locationAccess() == .whileInUse)
+        #expect(engine.placeKind() == .noLocation)
+        engine.currentPlace = "p1"
+        #expect(engine.here == nil)
+        #expect(engine.placeKind() == .noLocation)
+        #expect(!engine.delayLifted())
+        // Always given in the settings: the place counts, the banner goes.
+        places.hasAlways = true
+        engine.refreshLocation()
+        #expect(!engine.placesNeedAlways)
+        #expect(engine.placeKind() == .trusted)
+        engine.currentPlace = nil
+        #expect(engine.placeKind() == .other)
+        // No location at all: none.
+        places.hasForeground = false
+        #expect(engine.placeKind() == .noLocation)
+    }
+
+    /// The extension decides from the snapshot: the place counts only with Always, and a
+    /// snapshot written before the field existed reads as not given.
+    @Test func snapshotPlaceCountsOnlyWithAlways() async throws {
+        let (engine, _, _) = try await makeEngine()
+        var snap = ExtensionSnapshot(state: engine.state, local: engine.local, currentPlace: "p1", placesOn: true,
+                                     placesAlways: false, relay: "http://127.0.0.1:8787")
+        #expect(snap.location == .whileInUse)
+        #expect(snap.here == nil)
+        snap.placesAlways = true
+        #expect(snap.location == .always)
+        #expect(snap.here == "p1")
+        var json = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(snap)) as? [String: Any])
+        json.removeValue(forKey: "placesAlways")
+        let old = try JSONDecoder().decode(ExtensionSnapshot.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(old.location == .whileInUse)
+        #expect(old.here == nil)
+        snap.placesOn = false
+        #expect(snap.location == .off)
+    }
+
     @Test func removedPlaceStopsCounting() async throws {
         let (engine, _, _) = try await makeEngine()
         engine.currentPlace = "gone"

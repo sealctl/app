@@ -77,9 +77,9 @@ pub struct DecideContext {
     pub near: bool,
     /// The phone is on Wi-Fi or Ethernet.
     pub on_wifi: bool,
-    /// Location permission given (places on).
-    pub places_on: bool,
-    /// The trusted place the phone is inside.
+    /// The location access the phone has ([`place_kind`]).
+    pub location: LocationAccess,
+    /// The trusted place the phone is inside; it counts only with [`LocationAccess::Always`].
     pub current_place: Option<String>,
     /// That place also lifts the level 3 delay ([`place_settled`]).
     pub current_place_settled: bool,
@@ -174,13 +174,28 @@ impl RequestFacts {
     }
 }
 
-/// The place kind for a reply (SPEC.md 9.4).
+/// The location access the phone has (SPEC.md 9.4, 11.9).
+#[derive(uniffi::Enum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocationAccess {
+    /// Not given, or not asked yet.
+    Off,
+    /// Only while the app is in use (iPhone "While Using the App"; Android without "Allow all
+    /// the time"). The phone cannot notice leaving a place, so places do not count.
+    WhileInUse,
+    /// Always: places are monitored in the background and leaving one is noticed.
+    Always,
+}
+
+/// The place kind for a reply (SPEC.md 9.4). A phone that cannot notice leaving a place does not
+/// know where it is: without location access Always the kind is `none`, as without location at
+/// all, never `other` (a 10-minute allowance for being somewhere unknown) and never `trusted`
+/// from a place it may have left unseen.
 #[uniffi::export]
-pub fn place_kind(places_on: bool, current_place: Option<String>) -> PlaceKind {
-    match (places_on, current_place) {
-        (false, _) => PlaceKind::NoLocation,
-        (true, Some(_)) => PlaceKind::Trusted,
-        (true, None) => PlaceKind::Other,
+pub fn place_kind(location: LocationAccess, current_place: Option<String>) -> PlaceKind {
+    match (location, current_place) {
+        (LocationAccess::Off | LocationAccess::WhileInUse, _) => PlaceKind::NoLocation,
+        (LocationAccess::Always, Some(_)) => PlaceKind::Trusted,
+        (LocationAccess::Always, None) => PlaceKind::Other,
     }
 }
 
@@ -224,7 +239,7 @@ fn uses_answered(
 pub const DAY_CLOCK_BACK_MS: u64 = 5 * 60 * 1000;
 
 /// The day record is current: not ended. It ends at the first of: its recorded end (02:00 by
-/// the UTC offset at the first approval, or 14 hours), and 02:00 by the offset the phone has
+/// the UTC offset at the first approval, or 24 hours), and 02:00 by the offset the phone has
 /// now, so a change of daylight saving time or of time zone never makes the day run past
 /// 02:00 on the phone's clock. A clock that reads earlier than the first approval (set back)
 /// ends it too.
@@ -267,7 +282,12 @@ fn verdict(kind: RequestKind, level: u8, place: PlaceKind) -> Verdict {
 pub fn decide_facts(f: &RequestFacts, ctx: &DecideContext) -> Verdict {
     use ReplyOption::*;
     let kind = f.kind.unwrap_or(RequestKind::Unknown);
-    let place = place_kind(ctx.places_on, ctx.current_place.clone());
+    let place = place_kind(ctx.location, ctx.current_place.clone());
+    // The trusted place the phone is inside, when that counts.
+    let here = ctx
+        .current_place
+        .as_ref()
+        .filter(|_| place == PlaceKind::Trusted);
     let level = f.level.clamp(1, 3);
     let mut v = verdict(kind, level, place);
     let near = ctx.near && ctx.on_wifi;
@@ -313,10 +333,10 @@ pub fn decide_facts(f: &RequestFacts, ctx: &DecideContext) -> Verdict {
                 let day_here = ctx.day.as_ref().is_some_and(|d| {
                     day_active(d, ctx.now, ctx.utc_offset_secs)
                         && d.place_id.is_some()
-                        && d.place_id == ctx.current_place
+                        && d.place_id.as_ref() == here
                 });
                 let auto = day_here && near && ctx.phone_unlocked && answered;
-                v.answers_by_itself_here = ctx.current_place.is_some() && answered;
+                v.answers_by_itself_here = here.is_some() && answered;
                 if auto {
                     v.asking = Asking::Automatic;
                     v.automatic = Some(Decision::Session { place });
@@ -422,7 +442,7 @@ mod tests {
             phone_unlocked: true,
             near: true,
             on_wifi: true,
-            places_on: true,
+            location: LocationAccess::Always,
             current_place: Some("desk".into()),
             current_place_settled: true,
             day: Some(DayRecord {
@@ -467,6 +487,46 @@ mod tests {
             vec![key.into()],
         )];
         f
+    }
+
+    #[test]
+    fn without_location_always_a_place_counts_for_nothing() {
+        // Location only while the app is in use: the phone cannot notice leaving, so a place it
+        // last knew does not answer by itself, and the reply carries `none` (1 hour), never
+        // `other` (10 minutes) and never `trusted`.
+        let f = with_use(facts(RequestKind::Open, 1), "OPENAI_API_KEY");
+        let mut c = ctx();
+        c.location = LocationAccess::WhileInUse;
+        let v = decide_facts(&f, &c);
+        assert_eq!(
+            (v.asking, v.place, v.answers_by_itself_here),
+            (Asking::OneTap, PlaceKind::NoLocation, false)
+        );
+        // The same with no place known: `none`, as with location off.
+        c.current_place = None;
+        assert_eq!(decide_facts(&f, &c).place, PlaceKind::NoLocation);
+        c.location = LocationAccess::Off;
+        assert_eq!(decide_facts(&f, &c).place, PlaceKind::NoLocation);
+        // With Always, away from every place is `other`.
+        c.location = LocationAccess::Always;
+        assert_eq!(decide_facts(&f, &c).place, PlaceKind::Other);
+        // An agent's remembered answer and an Open session still answer by themselves, with
+        // the `none` place kind.
+        let mut c = ctx();
+        c.location = LocationAccess::WhileInUse;
+        let v = decide_facts(
+            &with_use(facts(RequestKind::Agent, 1), "OPENAI_API_KEY"),
+            &c,
+        );
+        assert_eq!(
+            (v.asking, v.automatic),
+            (
+                Asking::Automatic,
+                Some(Decision::Session {
+                    place: PlaceKind::NoLocation
+                })
+            )
+        );
     }
 
     #[test]
@@ -538,10 +598,11 @@ mod tests {
         // First approval at 19:30 in UTC-5; the phone is now in UTC+1, where it is 03:30.
         let day = day_at(MIDNIGHT + 30 * 60_000, -5 * 3600);
         assert!(!day_active(&day, MIDNIGHT + 2 * H + 30 * 60_000, 3600));
-        // Going west only makes the day end sooner by the old zone's 02:00 or 14 hours.
+        // Going west, the day still ends by the old zone's 02:00 (or 24 hours): first approval
+        // at 10:00 UTC+1 ends at 02:00 UTC+1, 01:00 UTC, though it is only 20:00 in UTC-5.
         let day = day_at(MIDNIGHT + 9 * H, 3600);
-        assert!(day_active(&day, MIDNIGHT + 20 * H, -5 * 3600));
-        assert!(!day_active(&day, MIDNIGHT + 23 * H, -5 * 3600));
+        assert!(day_active(&day, MIDNIGHT + 25 * H - 1, -5 * 3600));
+        assert!(!day_active(&day, MIDNIGHT + 25 * H, -5 * 3600));
     }
 
     #[test]
@@ -554,7 +615,7 @@ mod tests {
         let mut c = ctx();
         c.day = Some(DayRecord {
             first_approval: NOW + 2 * H,
-            ends: NOW + 14 * H,
+            ends: NOW + 24 * H,
             ..c.day.unwrap()
         });
         assert_eq!(decide_facts(&f, &c).asking, Asking::OneTap);
@@ -657,9 +718,18 @@ mod tests {
             (v.asking, v.level, v.options.clone()),
             (Asking::InApp, 3, vec![ReplyOption::Deny])
         );
-        assert_eq!(place_kind(false, Some("x".into())), PlaceKind::NoLocation);
-        assert_eq!(place_kind(true, None), PlaceKind::Other);
-        assert_eq!(place_kind(true, Some("x".into())), PlaceKind::Trusted);
+        use LocationAccess::*;
+        assert_eq!(place_kind(Off, Some("x".into())), PlaceKind::NoLocation);
+        assert_eq!(place_kind(Off, None), PlaceKind::NoLocation);
+        assert_eq!(place_kind(Always, None), PlaceKind::Other);
+        assert_eq!(place_kind(Always, Some("x".into())), PlaceKind::Trusted);
+        // Location only while the app is in use: leaving a place goes unnoticed, so the phone
+        // does not know where it is. Neither trusted (a place it may have left) nor other.
+        assert_eq!(place_kind(WhileInUse, None), PlaceKind::NoLocation);
+        assert_eq!(
+            place_kind(WhileInUse, Some("x".into())),
+            PlaceKind::NoLocation
+        );
     }
 
     #[test]
@@ -730,7 +800,12 @@ mod tests {
         let mut c = ctx();
         c.current_place = None;
         assert_eq!(decide_facts(&f, &c).delay_secs, DELAY_SECS);
-        c.places_on = false;
+        c.location = LocationAccess::Off;
+        let v = decide_facts(&f, &c);
+        assert_eq!((v.delay_secs, v.place), (DELAY_SECS, PlaceKind::NoLocation));
+        // Inside the place but location only while in use: the delay stays.
+        let mut c = ctx();
+        c.location = LocationAccess::WhileInUse;
         let v = decide_facts(&f, &c);
         assert_eq!((v.delay_secs, v.place), (DELAY_SECS, PlaceKind::NoLocation));
         // a trusted place that has not settled yet (added by hand under 24 hours ago): the place

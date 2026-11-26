@@ -347,17 +347,7 @@ private fun PlacesStep(onAlways: () -> Unit, onDone: () -> Unit) {
 }
 
 @Composable
-private fun PlacesAlways(onDone: () -> Unit) {
-    val context = ctx()
-    Page(null, onBack = null, bottom = {
-        PrimaryButton("Open settings", { openAppSettings(context); onDone() })
-        PlainButton("Not now", onDone)
-    }) {
-        Spacer(Modifier.height(32.dp))
-        Title("Allow location all the time")
-        Body("sealctl needs it to notice when you leave a trusted place and lock your machines. It checks only when you cross the edge of a place. Locations stay on this phone.")
-    }
-}
+private fun PlacesAlways(onDone: () -> Unit) = PlacesAlwaysScreen(onDone)
 
 @Composable
 private fun PairFirst(onScan: () -> Unit, onLater: () -> Unit) {

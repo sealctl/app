@@ -239,7 +239,7 @@ Defined once in `sealctl-app`. "Relay" means the record is part of the encrypted
 | Answer | agent, key name, repository id, repository name, created, last used | Relay; until removed; dropped after 90 days unused |
 | Place | id, name, centre, radius (150 m), created | Relay; until removed |
 | Place candidate | samples (centre, accuracy, day), suppressed flag | Local; samples older than 30 days dropped |
-| Day | machine, first approval time, place id or none | Local; ends at the next 02:00 local time or 14 h after the first approval, whichever is first |
+| Day | machine, first approval time, place id or none | Local; ends at the next 02:00 local time or 24 h after the first approval, whichever is first |
 | Inventory item | purpose, id, words fingerprint, key check, machine, path or URL, size, first use, last use, stale | Relay; kept; stale after a year unseen |
 | Usage entry | time, machine, key or object, agent or "you", repository, command, outcome | Local; 90 days, at most 50,000 entries. "This machine was lost or stolen" (11.17) reads these 90 days |
 | Daily count | local day (`YYYY-MM-DD`), keys used, requests declined | Local; 400 days (the Activity heatmap's 53 weeks and a margin) |
@@ -485,8 +485,8 @@ An unknown kind is shown in the app as "dev@mbp.example.com sent a request this 
 In the app means: a notification with no actions that opens the screen, because levels 2 and 3 need biometrics without the passcode, which a notification action cannot ask for (9.6).
 
 - An `open` request triggered by an agent with no answer for that key and repository is shown as one card. "Allow for this session" also records the answer. That is the only extra tap the design allows, and it is merged into the first one.
-- The first approval of the day is the first `open` allowed for that machine since its day ended (02:00 local or 14 h after the previous first approval). Only an answer the person gave (One tap, Allow once) begins a day: an answer given by itself needed an active day when it was decided, and recorded after that day ended (its reply took a while to post, or the iOS extension's answer is merged later) it begins none.
-- "02:00 local" is counted both by the UTC offset at the first approval and by the phone's offset now, whichever comes first: a change of daylight saving time or a new time zone while travelling ends the day at 02:00 on the phone's clock, never later. A phone clock that reads more than 5 minutes before the day's first approval (set back) ends the day too.
+- The first approval of the day is the first `open` allowed for that machine since its day ended (02:00 local or 24 h after the previous first approval). Only an answer the person gave (One tap, Allow once) begins a day: an answer given by itself needed an active day when it was decided, and recorded after that day ended (its reply took a while to post, or the iOS extension's answer is merged later) it begins none.
+- "02:00 local" is counted both by the UTC offset at the first approval and by the phone's offset now, whichever comes first: a change of daylight saving time or a new time zone while travelling ends the day at 02:00 on the phone's clock, never later. A phone clock that reads more than 5 minutes before the day's first approval (set back) ends the day too. The next 02:00 is never more than 24 hours away, so the 24 hours are a bound for the clock arithmetic, not a second rule a working day meets: a day begun at 09:00 lasts until 02:00, through the evening. The CLI keeps its own hard stop of the same 24 hours (`sealctl/sealctl`).
 - "Near" is the relay's `near` flag on the request, trusted only when the phone is on Wi-Fi or Ethernet at that moment (`NWPathMonitor` `usesInterfaceType(.wifi)` or `.wiredEthernet`; Android `NetworkCapabilities.TRANSPORT_WIFI` or `TRANSPORT_ETHERNET`). On mobile data the flag is ignored: the carrier's shared address could match a stranger's. On a VPN the relay sees the VPN's address and the flag is false. Both fall back to One tap.
 
 ### 9.4 What the reply carries
@@ -495,9 +495,16 @@ Besides the keys, the reply tells the machine the place kind, which sets its all
 
 | Place kind | When | Machine's cap |
 | --- | --- | --- |
-| `trusted` | The phone is inside a trusted place | 4 h |
-| `other` | Places are on, the phone is elsewhere | 10 min |
-| `none` | Location permission not given | 1 h |
+| `trusted` | The phone is inside a trusted place, with location access Always | 4 h |
+| `other` | Location access Always, the phone is elsewhere | 10 min |
+| `none` | Location not given, or given only while the app is in use | 1 h |
+
+The core's `place_kind(location, current_place)` decides it from `LocationAccess` (`Off`, `WhileInUse`, `Always`). Only Always lets the phone notice leaving a place: region monitoring (iPhone) and geofences (Android 10 and later) wake the app in the background only with it. Without it the phone does not know where it is, so the reply carries `none`, as with no location at all:
+
+- not `other`: a phone that may well be at its trusted place would get the 10-minute allowance with no growth and ask all day;
+- not `trusted`: nothing would notice the phone leaving, so no lock would follow (11.9). A place last known, a record from before, or a fix taken while the app is open does not make it `trusted` either: the fix says where the phone is now, not when it leaves.
+
+`none` keeps every other rule of being away: no `open` answers by itself (9.3), and level 3 waits two hours (9.6).
 
 ### 9.5 Replays and forged requests
 
@@ -677,7 +684,7 @@ Actions are the same as on iOS, with the same titles. On Android 12 and later ea
 
 **Background restriction.** If `ActivityManager.isBackgroundRestricted()` is true, Settings and the Machines tab show: "Android is limiting sealctl in the background. Requests may arrive late." [Open settings]
 
-**Boot and update.** `RECEIVE_BOOT_COMPLETED` and `MY_PACKAGE_REPLACED` re-register geofences. The app is not direct-boot aware: before the first unlock after a reboot it does nothing, and requests expire on the machine.
+**Boot and update.** `RECEIVE_BOOT_COMPLETED` and `MY_PACKAGE_REPLACED` re-register geofences; so does every start of the app's process and the first foreground after location "Allow all the time" is given (11.9). The app is not direct-boot aware: before the first unlock after a reboot it does nothing, and requests expire on the machine.
 
 ### 10.3 Battery
 
@@ -827,10 +834,12 @@ iOS asks for `.alert`, `.sound`, `.badge`. Android 13+ asks for `POST_NOTIFICATI
 > [Allow location]
 > [Not now]
 
-iOS: When In Use first, then Always (`requestAlwaysAuthorization`) at the first approval of the day after the user's first trusted place, with its own explanation (11.9). Android: `ACCESS_FINE_LOCATION`, then `ACCESS_BACKGROUND_LOCATION` from a second screen that explains why and sends the user to the system setting (required on Android 11+):
+iOS: When In Use first, then Always (`requestAlwaysAuthorization`) at the first approval of the day after the user's first trusted place, with its own explanation (11.9). Android: `ACCESS_FINE_LOCATION`, then `ACCESS_BACKGROUND_LOCATION` from a second screen that explains why. [Open settings] requests `ACCESS_BACKGROUND_LOCATION`, which on Android 11 and later opens the app's location page in the system settings (the only way to "Allow all the time" there); on Android 10 the system asks in a dialog. When the system shows nothing (the person declined before), the app's settings page opens instead:
 
 > **Allow location all the time**
 > sealctl needs it to notice when you leave a trusted place and lock your machines. It checks only when you cross the edge of a place. Locations stay on this phone.
+> In the settings, choose Permissions, Location, then "Allow all the time".
+> Without it, a session stays open up to 1 hour and reopening always takes a tap.
 > [Open settings]  [Not now]
 
 **Step 10. Pair your first machine.**
@@ -1028,12 +1037,24 @@ Each machine row shows one state, from the machine's last status (`GET .../statu
 > [Trust]
 > [Not this place]
 
-- [Trust] creates a place with a 150 m radius and starts monitoring it. On iOS, if only When In Use was given, it then asks for Always with "To lock your machines when you leave Desk, sealctl needs location access Always. It wakes only when you cross the edge of a place."
+- [Trust] creates a place with a 150 m radius and starts monitoring it. On iOS, if only When In Use was given, it then asks for Always with "To lock your machines when you leave Desk, sealctl needs location access Always. It wakes only when you cross the edge of a place." The system shows that prompt once; later the banner below sends the person to the settings. On Android, if location is not allowed all the time, the "Allow location all the time" screen of 11.3 step 9 follows. "Trust where I am now" does the same.
 - [Not this place] marks the spot so the app never asks about it again.
 - There is no map. Places are named by the user, never by an address lookup.
 - At most 10 places.
 
-**Monitoring.** iOS: one `CLMonitor` named `places`, one `CLMonitor.CircularGeographicCondition` per place. Android: one geofence per place with `GEOFENCE_TRANSITION_ENTER | GEOFENCE_TRANSITION_EXIT`, `NEVER_EXPIRE`. The current inside or outside state is stored and copied to the extension snapshot.
+**Monitoring.** iOS: one `CLMonitor` named `places`, one `CLMonitor.CircularGeographicCondition` per place, added assuming unsatisfied. Android: one geofence per place with `GEOFENCE_TRANSITION_ENTER | GEOFENCE_TRANSITION_EXIT`, `NEVER_EXPIRE`, registered with `INITIAL_TRIGGER_ENTER`, so a phone already inside gets its enter as soon as the geofences are registered. The current inside or outside state is stored and copied to the extension snapshot, with whether location access is Always.
+
+**The current place after a restart.** The system ends the app's process for memory and starts it again for a push; the place the phone is inside must not be lost, nor kept after the phone left.
+
+- iOS: at launch the monitor sends only what changed while the app was not running, so the app first reads each condition's record (`CLMonitor.record(for:)`, last event satisfied), as `requestState(for:)` did for region monitoring. With Always only: with When In Use the system watches the edges only while the app is in use.
+- Android: the place the phone entered is kept on the phone (its id and the boot count, never a location) and comes back at a start of the process only while every exit from it would have been seen: location all the time, the same boot, the geofences still registered (their `PendingIntent` still exists: a reboot, a force stop or an update cancels it) and the place still trusted. Otherwise no place counts until the geofences' initial enter. The geofences are then registered again, and an exit clears the kept place.
+- Location turned off (`GEOFENCE_NOT_AVAILABLE` on Android; an unknown state on iOS): the place stops counting, which is not an exit, so nothing is locked. On Android the geofences are registered again at the next foreground.
+
+**Without location access Always.** Places count for nothing (9.4: `none`). While a trusted place exists and location is not allowed all the time, the Machines tab, Settings and the Places screen show a banner, with [Open settings] (Android: the request of 11.3 step 9; iOS: the app's settings):
+
+> Places need location set to "Allow all the time". Until then, a session stays open up to 1 hour and reopening always takes a tap.
+
+iOS says "Places need location access Always." The permission is read again each time the app comes back to the foreground, as from the settings.
 
 **Leaving.** On exit from a place, the app sends a lock message to every machine whose day began at that place and that is Open or was Open at its last report. The lock uses the phone keys only, so it works on a locked phone. Then it posts "You left Desk. Locked dev@mbp.example.com." (passive). The machine keeps the day's credit; that is the machine's job. An allow decided at the place that is still on its way when the phone leaves is followed, once posted, by a lock to its machine, so the lock never reaches the machine before that answer; its day is not recorded as begun at the place. The app checks for an exit again once that answer's day record is in place: an exit from then on finds the day and locks the machine itself, and one before it is covered by the answer's own lock.
 
@@ -1505,7 +1526,7 @@ The screens for levels 2 and 3 (9.6). They are full-screen, never a sheet, and n
 > [Confirm with Face ID]
 > Deny
 
-- Away from a trusted place the line reads: "Away from your trusted places: this starts two hours after you confirm. Your phone and your computers can cancel it until then." Without location permission it says the same without "trusted places": "This starts two hours after you confirm…"
+- Away from a trusted place the line reads: "Away from your trusted places: this starts two hours after you confirm. Your phone and your computers can cancel it until then." Without location access Always (place kind `none`) it says the same without "trusted places": "This starts two hours after you confirm…"
 - Level 2 titles: "Hand back volume safe from dev@mbp.example.com?", "Let sealctl seal take over volume safe on dev@mbp.example.com?", "Move dev@mbp.example.com to seed 4kPz?" (rewrap: "12 objects. Each takes seconds."). Level 2 has no delay line.
 - Item names come from the machine and are shown in monospace, one per line, never joined into a sentence.
 - [Confirm with Face ID] reads "Confirm with Touch ID" or, on Android, "Confirm with fingerprint or face". It runs the prompt of 9.6.
@@ -1753,7 +1774,7 @@ New personal developer accounts must run a closed test with at least 12 testers 
 
 ### 16.1 Rust
 
-- `sealctl-app`: unit tests for `decide` covering every row of 9.3 and 9.6 (a machine's `lvl` raises and never lowers; unknown kinds are level 3; proximity by `near` on Wi-Fi only, by number, by camera; holds; delay by place kind), day boundaries (02:00 local, 14 h, time zones, daylight saving), place clustering, pruning, merge with tombstones, summaries; the daily counts (a resent log counted once, an entry reported after 90 days counted nowhere, the one backfill, usage entries kept 90 days and counts 400, a use near local midnight on the right day).
+- `sealctl-app`: unit tests for `decide` covering every row of 9.3 and 9.6 (a machine's `lvl` raises and never lowers; unknown kinds are level 3; proximity by `near` on Wi-Fi only, by number, by camera; holds; delay by place kind), day boundaries (02:00 local, 24 h, time zones, daylight saving), place clustering, pruning, merge with tombstones, summaries; the daily counts (a resent log counted once, an entry reported after 90 days counted nowhere, the one backfill, usage entries kept 90 days and counts 400, a use near local midnight on the right day).
 - The corrected clock (8.1), with a fake system clock and since-boot clock: a clock set forward ends no hold, no hand-added place's 24 hours and no level 3 wait early; a clock set back shortens none of them; after a reboot, after 24 hours, or after a signed call that disagrees, the clock is stale and a hand-added place does not lift the delay; a place added by hand on a stale clock set back starts its 24 hours only once the relay's time is learned.
 - Property tests for `merge_state`: the result does not depend on the merge order; deleted records stay deleted.
 - The protocol's test vectors, run through the generated Swift and Kotlin bindings on simulator and emulator, so the bindings and both platforms give the same bytes.

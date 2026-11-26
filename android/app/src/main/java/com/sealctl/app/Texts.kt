@@ -282,6 +282,11 @@ object Texts {
     const val CLOCK = "This phone's clock is more than 5 minutes off. Turn on automatic date and time."
     const val SIGNATURE = "The relay refused this phone's signature. Update the app."
     const val BACKGROUND_RESTRICTED = "Android is limiting sealctl in the background. Requests may arrive late."
+    /** Places exist, but location isn't allowed all the time (SPEC.md 11.9): they count for nothing. */
+    const val PLACES_ALWAYS = "Places need location set to “Allow all the time”. Until then, a session stays open up to 1 hour and reopening always takes a tap."
+    const val PLACES_ALWAYS_TITLE = "Allow location all the time"
+    const val PLACES_ALWAYS_BODY = "sealctl needs it to notice when you leave a trusted place and lock your machines. It checks only when you cross the edge of a place. Locations stay on this phone."
+    const val PLACES_ALWAYS_HOW = "In the settings, choose Permissions, Location, then “Allow all the time”."
 
     // ---------- pushes and notices (10.1, 10.4) ----------
 

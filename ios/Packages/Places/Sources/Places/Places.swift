@@ -64,12 +64,22 @@ public final class Places: NSObject, CLLocationManagerDelegate {
         }
     }
 
-    /// Always, after the first trusted place (11.9).
+    /// Always, after the first trusted place (11.9). The system shows its prompt for Always
+    /// once; asked again, it shows nothing and the status does not change, so this returns at
+    /// once instead of waiting for an answer that never comes.
     public func requestAlways() async {
         guard status != .authorizedAlways else { return }
+        let asked = "places.askedAlways"
+        guard !UserDefaults.standard.bool(forKey: asked) else { return }
+        UserDefaults.standard.set(true, forKey: asked)
         await withCheckedContinuation { c in
             authWaiters.append(c)
             manager.requestAlwaysAuthorization()
+            // "Keep Only While Using" may change nothing: stop waiting after a minute.
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(60))
+                self?.resumeWaiters()
+            }
         }
     }
 
@@ -77,22 +87,37 @@ public final class Places: NSObject, CLLocationManagerDelegate {
         let s = manager.authorizationStatus
         Task { @MainActor in
             self.status = s
-            if s != .notDetermined {
-                let w = self.authWaiters
-                self.authWaiters = []
-                w.forEach { $0.resume() }
-            }
+            if s != .notDetermined { self.resumeWaiters() }
         }
+    }
+
+    private func resumeWaiters() {
+        let w = authWaiters
+        authWaiters = []
+        w.forEach { $0.resume() }
     }
 
     /// Replaces the monitored places. `onTransition(ids, entered)` runs for every crossing;
     /// `entered` is nil when the state is unknown or unmonitored, which is not an exit.
+    ///
+    /// At launch the monitor sends only what changed while the app was not running, so the
+    /// places the phone is already inside come from the monitor's records first (the state the
+    /// system keeps, as `requestState(for:)` gave it for region monitoring). The records count
+    /// only with Always: with When In Use the system watches the edges only while the app is in
+    /// use, and a record could be from before the phone left.
     public func monitor(_ fences: [Fence], onTransition: @escaping @Sendable ([String], Bool?) async -> Void) async {
         guard hasForeground else { return }
         let m: CLMonitor
         if let monitor { m = monitor } else {
             m = await CLMonitor("places")
             monitor = m
+            if hasAlways {
+                for id in await m.identifiers {
+                    guard let r = await m.record(for: id), r.lastEvent.state == .satisfied else { continue }
+                    inside.insert(id)
+                    await onTransition([id], true)
+                }
+            }
             events = Task { @MainActor [weak self] in
                 do {
                     for try await e in await m.events {

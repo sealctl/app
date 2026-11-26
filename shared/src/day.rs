@@ -3,11 +3,13 @@
 const MINUTE: i64 = 60_000;
 const HOUR: i64 = 60 * MINUTE;
 const DAY: i64 = 24 * HOUR;
-/// A day ends at the latest 14 hours after its first approval.
-pub const DAY_MAX_MS: u64 = 14 * HOUR as u64;
+/// A day ends at the latest 24 hours after its first approval.
+pub const DAY_MAX_MS: u64 = 24 * HOUR as u64;
 
 /// The end of a machine's day that began at `first_approval`: the next 02:00 local time or
-/// 14 hours later, whichever is first.
+/// 24 hours later, whichever is first. The next 02:00 is never more than 24 hours away, so the
+/// 24 hours decide only when the clock's 02:00 does not come (a day begun at exactly 02:00 ends
+/// at the next one, 24 hours later).
 #[uniffi::export]
 pub fn day_end(first_approval: u64, utc_offset_secs: i32) -> u64 {
     let off = i64::from(utc_offset_secs) * 1000;
@@ -95,23 +97,36 @@ mod tests {
     }
 
     #[test]
-    fn day_ends_at_two_or_fourteen_hours() {
-        // 09:02 UTC, offset 0: 14 h later (23:02) comes before 02:00.
-        assert_eq!(day_end(T, 0), T + DAY_MAX_MS);
+    fn day_ends_at_two_or_twenty_four_hours() {
+        let h = 3_600_000;
+        // 09:02 UTC, offset 0: the next 02:00 (16 h 58 min later) comes before 24 h. With the
+        // old 14 hours the day ended at 23:02, in the middle of a working evening.
+        let end = day_end(T, 0);
+        assert_eq!(end, T + 17 * h - 2 * 60_000);
+        assert!(end < T + DAY_MAX_MS);
+        assert_eq!(local_date(end, 0), "2026-11-22");
         // 15:00 local: 02:00 next day (11 h) comes first.
-        let t15 = T + 6 * 3_600_000 - 2 * 60_000;
+        let t15 = T + 6 * h - 2 * 60_000;
         let end = day_end(t15, 0);
         assert_eq!(local_date(end, 0), "2026-11-22");
         assert_eq!((end / 1000) % 86_400, 2 * 3600);
         // 01:00 local: the day ends at 02:00 the same night.
-        let t1 = T - 8 * 3_600_000 - 2 * 60_000;
-        assert_eq!(day_end(t1, 0) - t1, 3_600_000);
-        // At UTC+2, 01:30 UTC is 03:30 local: next 02:00 local is 22.5 h away, so 14 h wins.
-        let t = T - 7 * 3_600_000 - 32 * 60_000; // 01:30 UTC
-        assert_eq!(day_end(t, 7200), t + DAY_MAX_MS);
+        let t1 = T - 8 * h - 2 * 60_000;
+        assert_eq!(day_end(t1, 0) - t1, h);
+        // At UTC+2, 01:30 UTC is 03:30 local: the next 02:00 local is 22.5 h away, within 24 h.
+        let t = T - 7 * h - 32 * 60_000; // 01:30 UTC
+        assert_eq!(day_end(t, 7200), t + 22 * h + 30 * 60_000);
         // At UTC-5, 05:00 UTC is 00:00 local: ends at 02:00 local.
-        let t = T - 4 * 3_600_000 - 2 * 60_000; // 05:00 UTC
-        assert_eq!(day_end(t, -5 * 3600) - t, 2 * 3_600_000);
+        let t = T - 4 * h - 2 * 60_000; // 05:00 UTC
+        assert_eq!(day_end(t, -5 * 3600) - t, 2 * h);
+        // Never longer than 24 hours, at any offset and minute.
+        for off in [-12 * 3600, -5 * 3600, 0, 3600, 5 * 3600 + 1800, 14 * 3600] {
+            for m in (0..24 * 60).step_by(7) {
+                let t = T + m * 60_000;
+                let d = day_end(t, off) - t;
+                assert!(d > 0 && d <= DAY_MAX_MS, "offset {off} minute {m}: {d}");
+            }
+        }
     }
 
     #[test]
@@ -131,6 +146,7 @@ mod tests {
 
     #[test]
     fn exactly_two_oclock_starts_a_new_day() {
+        // A day begun at 02:00 ends at the next 02:00: the 24 hours.
         let two = T - 7 * 3_600_000 - 2 * 60_000; // 02:00 UTC
         assert_eq!(day_end(two, 0), two + DAY_MAX_MS);
     }

@@ -44,6 +44,7 @@ import com.sealctl.app.Ui
 import com.sealctl.core.Place as PlaceKind
 import com.sealctl.core.app.Event
 import com.sealctl.core.app.LocalEvent
+import com.sealctl.core.app.LocationAccess
 import com.sealctl.core.app.answerDaysLeft
 import com.sealctl.core.app.appRulesVersion
 import com.sealctl.core.coreVersion
@@ -81,6 +82,7 @@ fun SettingsTab() {
     var backupMessage by remember { mutableStateOf<String?>(null) }
     val words = state.words
     Page("Settings", onBack = null) {
+        PlacesAlwaysBanner()
         SectionLabel("Words")
         if (words != null) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -260,6 +262,7 @@ fun PlacesScreen(activity: MainActivity) {
         return
     }
     Page("Places") {
+        if (engine.places.hasForeground()) PlacesAlwaysBanner()
         val o = offer
         if (o != null) SurfaceCard {
             Title("Trust this place?")
@@ -270,6 +273,8 @@ fun PlacesScreen(activity: MainActivity) {
                 engine.apply(Event.AddPlace(com.sealctl.core.app.TrustedPlace(o.id, name, o.lat, o.lon, 150.0, 0u, 0u, false, false)), upload = true)
                 engine.placeOffer.value = null
                 scope.launch { engine.monitorPlaces() }
+                // Leaving the place is noticed only with location all the time: explain, then ask.
+                if (engine.location() != LocationAccess.ALWAYS) Ui.push(Route.PlacesAlways)
             })
             PlainButton("Not this place", { engine.applyLocal(com.sealctl.core.app.LocalEvent.SuppressCandidate(o.id)); engine.placeOffer.value = null })
         }
@@ -318,6 +323,7 @@ private fun TrustHere(activity: MainActivity, onCard: (GateResult, suspend () ->
                 engine.monitorPlaces()
                 fix = null
                 Ui.toast("Trusted ${place.name}.")
+                if (engine.location() != LocationAccess.ALWAYS) Ui.push(Route.PlacesAlways)
             }
             GateResult.Cancelled -> {}
             GateResult.NoBiometrics -> error = Texts.NO_BIOMETRICS

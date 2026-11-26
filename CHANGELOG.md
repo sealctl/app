@@ -24,6 +24,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - iPhone: the lifetimes (and the usage log's trim) now apply when the app comes to the
   foreground, at most once a day.
 - Android: Activity shows the previous months behind a chevron, as on iPhone.
+- A machine's day ends at the next 02:00 local time or 24 hours after its first approval,
+  whichever is first (it was 14 hours, which ended a day begun in the morning in the middle of
+  the evening). The CLI's own hard stop changes to 24 hours in `sealctl/sealctl`.
+- Without location access Always ("Allow all the time" on Android), approvals carry the place
+  kind `none` (sessions up to 1 hour, growing), as without location: the phone can't notice
+  leaving a place then. They carried `other` (10 minutes, no growth), so a phone at its trusted
+  place asked all day. The Machines tab, Settings and Places show a banner with [Open settings]
+  while a trusted place exists without it.
+- Android: after the first trusted place, and from onboarding, "Allow location all the time"
+  explains first and then opens the system's location page for sealctl.
 
 ### Fixed
 
@@ -46,6 +56,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
   offering a Finish that could only fail.
 - The Machines banner of Leave sealctl says "This phone leaves sealctl at 11:00." instead of
   "This phone hands everything back at 11:00."
+- The place the phone is inside is no longer lost when the system restarts the app: on Android
+  it comes back while the geofences that would have reported leaving are still registered (same
+  boot, no force stop or update since), and the geofences are registered again at every start;
+  on iPhone it is read from the place monitor's own records at launch. Leaving still locks the
+  machines opened there.
+- Location turned off on Android: the place stops counting until the geofences are registered
+  again, instead of staying current.
+- iPhone: asking for location access Always a second time no longer waits for an answer the
+  system never gives.
 
 - Month names in Activity use the standalone form, capitalised ("Listopad", not "listopada" in
   Polish; also Ukrainian, Russian and other languages that inflect them).

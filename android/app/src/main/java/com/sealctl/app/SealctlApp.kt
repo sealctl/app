@@ -66,4 +66,6 @@ class SealctlApp : Application(), NotifyHost, PlacesHost {
         OpenActivity.intent(context, requestId, screen)
 
     override fun onPlaceTransition(placeIds: List<String>, entered: Boolean) = Graph.engine.onPlaceTransition(placeIds, entered)
+
+    override fun onPlacesUnavailable() = Graph.engine.onPlacesUnavailable()
 }

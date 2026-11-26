@@ -470,7 +470,7 @@ fn session_state(args: &StatusArgs) -> Option<SessionState> {
     args.state.as_ref().map(|s| SessionState {
         session: s.clone(),
         left: args.left,
-        stop: (s == "open").then(|| now_ms() + 14 * 3_600_000),
+        stop: (s == "open").then(|| now_ms() + 24 * 3_600_000),
         place: None,
         busy: Vec::new(),
     })

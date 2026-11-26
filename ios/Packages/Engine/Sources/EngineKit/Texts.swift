@@ -352,6 +352,8 @@ public enum Texts {
     public static func paired(_ name: String) -> String { "Paired. \(name) can now ask this phone for keys." }
     public static let offline = "Offline. Requests reach this phone when it is back online."
     public static let notificationsOff = "Notifications are off. Requests can't reach you while sealctl is closed."
+    /// Places exist, but location access isn't Always (SPEC.md 11.9): they count for nothing.
+    public static let placesAlways = "Places need location access Always. Until then, a session stays open up to 1 hour and reopening always takes a tap."
     public static func rateLimited(_ until: Int64) -> String { "This phone has used its relay limit for today. It resets at \(time(until))." }
     public static let clock = "This phone's clock is more than 5 minutes off. Turn on automatic date and time."
     public static let signature = "The relay refused this phone's signature. Update the app."

@@ -288,7 +288,7 @@ impl State {
 
 // ---------- local records ----------
 
-/// A machine's day (SPEC.md 9.3): ends at the next 02:00 local or 14 h after the first
+/// A machine's day (SPEC.md 9.3): ends at the next 02:00 local or 24 h after the first
 /// approval, whichever is first.
 #[derive(uniffi::Record, Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

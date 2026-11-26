@@ -935,7 +935,7 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_decide(`request`: Long,`ctx`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    external fun uniffi_sealctl_app_fn_func_place_kind(`placesOn`: Byte,`currentPlace`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_sealctl_app_fn_func_place_kind(`location`: RustBuffer.ByValue,`currentPlace`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBufferPlace.ByValue
     external fun uniffi_sealctl_app_fn_func_place_settled(`place`: RustBuffer.ByValue,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
@@ -1127,7 +1127,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_sealctl_app_checksum_func_add_days() and 0xFFFF) != 23047) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_sealctl_app_checksum_func_day_end() and 0xFFFF) != 7975) {
+    if ((lib.uniffi_sealctl_app_checksum_func_day_end() and 0xFFFF) != 55379) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_func_local_date() and 0xFFFF) != 35650) {
@@ -1136,7 +1136,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_sealctl_app_checksum_func_decide() and 0xFFFF) != 1771) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_sealctl_app_checksum_func_place_kind() and 0xFFFF) != 46517) {
+    if ((lib.uniffi_sealctl_app_checksum_func_place_kind() and 0xFFFF) != 5228) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_func_place_settled() and 0xFFFF) != 45654) {
@@ -2813,7 +2813,7 @@ public object FfiConverterTypeDailyCount: FfiConverterRustBuffer<DailyCount> {
 
 
 /**
- * A machine's day (SPEC.md 9.3): ends at the next 02:00 local or 14 h after the first
+ * A machine's day (SPEC.md 9.3): ends at the next 02:00 local or 24 h after the first
  * approval, whichever is first.
  */
 data class DayRecord (
@@ -2906,12 +2906,12 @@ data class DecideContext (
     var `onWifi`: kotlin.Boolean
     , 
     /**
-     * Location permission given (places on).
+     * The location access the phone has ([`place_kind`]).
      */
-    var `placesOn`: kotlin.Boolean
+    var `location`: LocationAccess
     , 
     /**
-     * The trusted place the phone is inside.
+     * The trusted place the phone is inside; it counts only with [`LocationAccess::Always`].
      */
     var `currentPlace`: kotlin.String?
     , 
@@ -2970,7 +2970,7 @@ public object FfiConverterTypeDecideContext: FfiConverterRustBuffer<DecideContex
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
-            FfiConverterBoolean.read(buf),
+            FfiConverterTypeLocationAccess.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterOptionalTypeDayRecord.read(buf),
@@ -2988,7 +2988,7 @@ public object FfiConverterTypeDecideContext: FfiConverterRustBuffer<DecideContex
             FfiConverterBoolean.allocationSize(value.`phoneUnlocked`) +
             FfiConverterBoolean.allocationSize(value.`near`) +
             FfiConverterBoolean.allocationSize(value.`onWifi`) +
-            FfiConverterBoolean.allocationSize(value.`placesOn`) +
+            FfiConverterTypeLocationAccess.allocationSize(value.`location`) +
             FfiConverterOptionalString.allocationSize(value.`currentPlace`) +
             FfiConverterBoolean.allocationSize(value.`currentPlaceSettled`) +
             FfiConverterOptionalTypeDayRecord.allocationSize(value.`day`) +
@@ -3005,7 +3005,7 @@ public object FfiConverterTypeDecideContext: FfiConverterRustBuffer<DecideContex
             FfiConverterBoolean.write(value.`phoneUnlocked`, buf)
             FfiConverterBoolean.write(value.`near`, buf)
             FfiConverterBoolean.write(value.`onWifi`, buf)
-            FfiConverterBoolean.write(value.`placesOn`, buf)
+            FfiConverterTypeLocationAccess.write(value.`location`, buf)
             FfiConverterOptionalString.write(value.`currentPlace`, buf)
             FfiConverterBoolean.write(value.`currentPlaceSettled`, buf)
             FfiConverterOptionalTypeDayRecord.write(value.`day`, buf)
@@ -6699,6 +6699,54 @@ public object FfiConverterTypeLocalEvent : FfiConverterRustBuffer<LocalEvent>{
 
 
 /**
+ * The location access the phone has (SPEC.md 9.4, 11.9).
+ */
+
+enum class LocationAccess {
+    
+    /**
+     * Not given, or not asked yet.
+     */
+    OFF,
+    /**
+     * Only while the app is in use (iPhone "While Using the App"; Android without "Allow all
+     * the time"). The phone cannot notice leaving a place, so places do not count.
+     */
+    WHILE_IN_USE,
+    /**
+     * Always: places are monitored in the background and leaving one is noticed.
+     */
+    ALWAYS;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeLocationAccess: FfiConverterRustBuffer<LocationAccess> {
+    override fun read(buf: ByteBuffer) = try {
+        LocationAccess.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: LocationAccess) = 4UL
+
+    override fun write(value: LocationAccess, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+/**
  * The buttons the card and the notification offer, in order.
  */
 
@@ -8194,7 +8242,9 @@ object CoreExceptionExternalErrorHandler : UniffiRustCallStatusErrorHandler<Core
 
         /**
          * The end of a machine's day that began at `first_approval`: the next 02:00 local time or
-         * 14 hours later, whichever is first.
+         * 24 hours later, whichever is first. The next 02:00 is never more than 24 hours away, so the
+         * 24 hours decide only when the clock's 02:00 does not come (a day begun at exactly 02:00 ends
+         * at the next one, 24 hours later).
          */ fun `dayEnd`(`firstApproval`: kotlin.ULong, `utcOffsetSecs`: kotlin.Int): kotlin.ULong {
             return FfiConverterULong.lift(
     uniffiRustCall() { _status ->
@@ -8239,14 +8289,17 @@ object CoreExceptionExternalErrorHandler : UniffiRustCallStatusErrorHandler<Core
     
 
         /**
-         * The place kind for a reply (SPEC.md 9.4).
-         */ fun `placeKind`(`placesOn`: kotlin.Boolean, `currentPlace`: kotlin.String?): Place {
+         * The place kind for a reply (SPEC.md 9.4). A phone that cannot notice leaving a place does not
+         * know where it is: without location access Always the kind is `none`, as without location at
+         * all, never `other` (a 10-minute allowance for being somewhere unknown) and never `trusted`
+         * from a place it may have left unseen.
+         */ fun `placeKind`(`location`: LocationAccess, `currentPlace`: kotlin.String?): Place {
             return FfiConverterTypePlace.lift(
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_sealctl_app_fn_func_place_kind(
     
         
-        FfiConverterBoolean.lower(`placesOn`),
+        FfiConverterTypeLocationAccess.lower(`location`),
         FfiConverterOptionalString.lower(`currentPlace`),_status)
 }
     )

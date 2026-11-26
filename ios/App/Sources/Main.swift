@@ -143,6 +143,9 @@ struct MachinesTab: View {
         if !e.notificationsAllowed {
             Banner(Texts.notificationsOff) { TextButton("Open settings") { Links.notificationSettings() } }
         }
+        if e.placesNeedAlways {
+            Banner(Texts.placesAlways) { TextButton("Open settings") { Links.settings() } }
+        }
         // Each delay still counting down, and an action this install started on the phone once
         // its wait is over, until it expires (11.23).
         let change = e.local.delayed.filter {

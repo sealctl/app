@@ -94,6 +94,7 @@ fun MainScreen(activity: MainActivity) {
             is Route.Pair -> PairingScreen(activity, top)
             Route.Answers -> AnswersScreen()
             Route.Places -> PlacesScreen(activity)
+            Route.PlacesAlways -> PlacesAlwaysScreen(onDone = { Ui.pop() })
             Route.Devices -> DevicesScreen()
             Route.About -> AboutScreen()
             Route.Licences -> LicencesScreen()
@@ -173,6 +174,7 @@ private fun MachinesTab() {
         if (banners.signatureRefused) Banner(Texts.SIGNATURE)
         if (notificationsOff) Banner(Texts.NOTIFICATIONS_OFF) { TextButton({ openAppSettings(context) }) { Text("Open settings") } }
         if (backgroundRestricted) Banner(Texts.BACKGROUND_RESTRICTED) { TextButton({ openAppSettings(context) }) { Text("Open settings") } }
+        PlacesAlwaysBanner()
         DelayedBanners(local.delayed, clock) { id -> scope.launch { engine.cancelDelayed(id) } }
         val waitingCount = waiting.count { !it.expired }
         if (waitingCount > 0) Banner("$waitingCount waiting on this phone", tone = Sealctl.colors.accentSoft) {

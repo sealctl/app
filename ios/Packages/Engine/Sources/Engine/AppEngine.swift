@@ -31,8 +31,11 @@ public final class AppEngine {
     public internal(set) var foreground = false
     /// When the lifetimes were last applied (Unix ms, the corrected clock).
     var lastPrune: Int64 = 0
-    /// The trusted place the phone is inside, from region monitoring.
+    /// The trusted place the phone is inside, from region monitoring. It counts for decisions
+    /// only through `here` (location access Always).
     public var currentPlace: String?
+    /// The location access, as the screens show it; `refreshLocation` reads it again.
+    public internal(set) var location: LocationAccess = .off
     /// A place candidate to offer ("Trust this place?").
     public var placeOffer: PlaceCandidate?
     /// Machines the relay lists as paired, for Leave sealctl (11.22 step 2).
@@ -146,7 +149,8 @@ public final class AppEngine {
         if let c = currentPlace, !state.places.contains(where: { $0.id == c && !$0.deleted }) { currentPlace = nil }
         guard phase == .ready || { if case .onboarding = phase { return true }; return false }() else { return }
         files.writeSnapshot(ExtensionSnapshot(state: state, local: local, currentPlace: currentPlace,
-                                              placesOn: places?.hasForeground ?? false, relay: config.relayURL,
+                                              placesOn: places?.hasForeground ?? false,
+                                              placesAlways: places?.hasAlways ?? false, relay: config.relayURL,
                                               clock: db.relayClock(), starting: startingDelayed))
     }
 
@@ -230,6 +234,7 @@ public final class AppEngine {
 
     public func onForeground() async {
         foreground = true
+        refreshLocation()
         notificationsAllowed = await notifier.allowed()
         biometryName = await vault.biometryName()
         await pruneIfDue()

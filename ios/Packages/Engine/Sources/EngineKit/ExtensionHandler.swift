@@ -87,14 +87,14 @@ public struct ExtensionHandler: Sendable {
         let ctx = DecideContext(
             now: clock.now, utcOffsetSecs: Int32(TimeZone.current.secondsFromGMT()),
             phoneUnlocked: await vault.canReadRoot(), near: r.near, onWifi: await onWifiNow(),
-            placesOn: snap.placesOn, currentPlace: snap.currentPlace,
-            currentPlaceSettled: snap.currentPlace.flatMap { id in state.places.first { $0.id == id && !$0.deleted } }
+            location: snap.location, currentPlace: snap.here,
+            currentPlaceSettled: snap.here.flatMap { id in state.places.first { $0.id == id && !$0.deleted } }
                 .map { placeSettledAt(place: $0, now: clock) } ?? false,
             day: snap.day(r.machine),
             answers: state.answers.filter { !$0.deleted }, sessionOpen: open, hold: snap.hold(r.machine),
             biometrics: await vault.biometrics(), plan: snap.plan(r.machine))
         let verdict = decide(request: req, ctx: ctx)
-        let placeName = snap.currentPlace.flatMap { id in state.places.first { $0.id == id && !$0.deleted }?.name }
+        let placeName = snap.here.flatMap { id in state.places.first { $0.id == id && !$0.deleted }?.name }
         // Answered on another install, or expired, between the list and this reply (8.7).
         let stopped = Notes.passive(Texts.stoppedWaiting(name), userInfo: ["answered": r.id])
 
@@ -105,7 +105,7 @@ public struct ExtensionHandler: Sendable {
             guard let posted = await post(relay, r.id, sealed) else { return stopped }
             guard posted else { break }
             files.writeInbox(InboxItem(id: r.id, machine: r.machine, sealed: r.sealed, outcome: "automatic", allowed: true,
-                                       placeId: snap.currentPlace, time: clockMs))
+                                       placeId: snap.here, time: clockMs))
             return Notes.passive(Texts.answeredByItself(name, place: placeName), userInfo: ["answered": r.id])
         case .planKeys:
             guard let plan = snap.plan(r.machine), let root = await vault.readRoot() else { break }
@@ -121,7 +121,7 @@ public struct ExtensionHandler: Sendable {
             guard let posted = await post(relay, r.id, sealed) else { return stopped }
             guard posted else { break }
             files.writeInbox(InboxItem(id: r.id, machine: r.machine, sealed: r.sealed, outcome: "in_session", allowed: true,
-                                       placeId: snap.currentPlace, time: clockMs))
+                                       placeId: snap.here, time: clockMs))
             return Notes.passive(Texts.answeredByItself(name, place: placeName), userInfo: ["answered": r.id])
         case .refused:
             let err = verdict.refuse ?? .unsupported

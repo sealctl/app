@@ -50,7 +50,7 @@ fn ctx() -> DecideContext {
         phone_unlocked: true,
         near: false,
         on_wifi: false,
-        places_on: false,
+        location: sealctl_app::decide::LocationAccess::Off,
         current_place: None,
         current_place_settled: false,
         day: None,

@@ -67,12 +67,12 @@ final class PairingTests: SealctlTestCase {
     func testNicknameLockAndUnpair() {
         restoreVectorWords()
         pairFakeMachine("m1")
-        // The machine reports Open: the row and the detail follow.
-        XCTAssertEqual(Harness.machine("m1", ["status", "--state", "open", "--left", "7200"]).wait(20).0, 0)
+        // The machine reports Open while it works: the row says active, and the detail follows.
+        XCTAssertEqual(Harness.machine("m1", ["status", "--state", "open", "--left", "7200", "--idle", "0", "--allow", "7200"]).wait(20).0, 0)
         app.terminate()
         app.launchArguments = []
         app.launch()
-        see("Open · ", 30)
+        see("Open · active", 30)
         tap("machine dev@mbp.example.com")
         see("Lock now")
         let listen = Harness.machine("m1", ["listen", "--secs", "20", "--count", "1"])

@@ -4130,6 +4130,14 @@ public struct SessionState: Equatable, Hashable {
      */
     public var left: UInt64?
     /**
+     * Seconds since the last work moment, at the status's time. Absent from older machines.
+     */
+    public var idle: UInt64?
+    /**
+     * The idle allowance now, seconds. Absent from older machines.
+     */
+    public var allow: UInt64?
+    /**
      * Hard stop time, Unix ms.
      */
     public var stop: UInt64?
@@ -4152,6 +4160,12 @@ public struct SessionState: Equatable, Hashable {
          * Idle seconds left.
          */left: UInt64?, 
         /**
+         * Seconds since the last work moment, at the status's time. Absent from older machines.
+         */idle: UInt64?, 
+        /**
+         * The idle allowance now, seconds. Absent from older machines.
+         */allow: UInt64?, 
+        /**
          * Hard stop time, Unix ms.
          */stop: UInt64?, 
         /**
@@ -4162,6 +4176,8 @@ public struct SessionState: Equatable, Hashable {
          */busy: [BusyVolume]) {
         self.session = session
         self.left = left
+        self.idle = idle
+        self.allow = allow
         self.stop = stop
         self.place = place
         self.busy = busy
@@ -4185,6 +4201,8 @@ public struct FfiConverterTypeSessionState: FfiConverterRustBuffer {
             try SessionState(
                 session: FfiConverterString.read(from: &buf), 
                 left: FfiConverterOptionUInt64.read(from: &buf), 
+                idle: FfiConverterOptionUInt64.read(from: &buf), 
+                allow: FfiConverterOptionUInt64.read(from: &buf), 
                 stop: FfiConverterOptionUInt64.read(from: &buf), 
                 place: FfiConverterOptionString.read(from: &buf), 
                 busy: FfiConverterSequenceTypeBusyVolume.read(from: &buf)
@@ -4194,6 +4212,8 @@ public struct FfiConverterTypeSessionState: FfiConverterRustBuffer {
     public static func write(_ value: SessionState, into buf: inout [UInt8]) {
         FfiConverterString.write(value.session, into: &buf)
         FfiConverterOptionUInt64.write(value.left, into: &buf)
+        FfiConverterOptionUInt64.write(value.idle, into: &buf)
+        FfiConverterOptionUInt64.write(value.allow, into: &buf)
         FfiConverterOptionUInt64.write(value.stop, into: &buf)
         FfiConverterOptionString.write(value.place, into: &buf)
         FfiConverterSequenceTypeBusyVolume.write(value.busy, into: &buf)

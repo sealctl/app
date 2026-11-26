@@ -160,6 +160,12 @@ struct StatusArgs {
     state: Option<String>,
     #[arg(long)]
     left: Option<u64>,
+    /// Seconds since the last work moment (`state.idle`); left out like an older CLI.
+    #[arg(long)]
+    idle: Option<u64>,
+    /// The idle allowance in seconds (`state.allow`); left out like an older CLI.
+    #[arg(long)]
+    allow: Option<u64>,
     /// Log entry `command:NAME1+NAME2[:agent[:repo]]`.
     #[arg(long = "log")]
     log: Vec<String>,
@@ -470,6 +476,8 @@ fn session_state(args: &StatusArgs) -> Option<SessionState> {
     args.state.as_ref().map(|s| SessionState {
         session: s.clone(),
         left: args.left,
+        idle: args.idle,
+        allow: args.allow,
         stop: (s == "open").then(|| now_ms() + 24 * 3_600_000),
         place: None,
         busy: Vec::new(),

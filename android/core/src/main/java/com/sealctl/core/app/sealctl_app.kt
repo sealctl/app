@@ -758,6 +758,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_sealctl_app_checksum_func_answer_days_left(
     ): Int
+    external fun uniffi_sealctl_app_checksum_func_machine_session(
+    ): Int
     external fun uniffi_sealctl_app_checksum_func_machine_display_name(
     ): Int
     external fun uniffi_sealctl_app_checksum_func_open_answered_request(
@@ -945,6 +947,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_answer_days_left(`lastUsed`: Long,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
+    external fun uniffi_sealctl_app_fn_func_machine_session(`status`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_machine_display_name(`machine`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_open_answered_request(`keys`: Long,`relayMachineKey`: RustBuffer.ByValue,`id`: RustBuffer.ByValue,`sealed`: RustBuffer.ByValue,`answeredAt`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -1147,6 +1151,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_func_answer_days_left() and 0xFFFF) != 27739) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_sealctl_app_checksum_func_machine_session() and 0xFFFF) != 29983) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_func_machine_display_name() and 0xFFFF) != 42303) {
@@ -3963,6 +3970,87 @@ public object FfiConverterTypeMachineSeen: FfiConverterRustBuffer<MachineSeen> {
 
 
 /**
+ * An Open machine's session as the Machines list shows it, from its last status. At a time
+ * `now` (Unix ms) the machine is:
+ *
+ * - not Open any more when `now >= locks_at` ("Locked · last report 3 h ago");
+ * - active while `now < active_until` ("Open · active");
+ * - else idle for `now - last_work` ("Open · idle 12 min · locks at 15:42");
+ * - and, without `last_work` (a CLI that sends no idle time), Open with `locks_at - now` left
+ * ("Open · 2 h 10 min left").
+ */
+data class MachineSession (
+    /**
+     * The last status said Open.
+     */
+    var `open`: kotlin.Boolean
+    , 
+    /**
+     * When it locks unless more work comes, Unix ms: the report time plus `left`, capped by
+     * the hard stop.
+     */
+    var `locksAt`: kotlin.ULong
+    , 
+    /**
+     * Its last work moment, Unix ms (the report time minus `idle`); `None` when its CLI does
+     * not send the idle time.
+     */
+    var `lastWork`: kotlin.ULong?
+    , 
+    /**
+     * Until when it is shown active, Unix ms; `None` when the last status said idle (or had
+     * no idle time).
+     */
+    var `activeUntil`: kotlin.ULong?
+    , 
+    /**
+     * Its idle allowance, seconds, when its CLI sends it.
+     */
+    var `allowanceSecs`: kotlin.ULong?
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeMachineSession: FfiConverterRustBuffer<MachineSession> {
+    override fun read(buf: ByteBuffer): MachineSession {
+        return MachineSession(
+            FfiConverterBoolean.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: MachineSession) = (
+            FfiConverterBoolean.allocationSize(value.`open`) +
+            FfiConverterULong.allocationSize(value.`locksAt`) +
+            FfiConverterOptionalULong.allocationSize(value.`lastWork`) +
+            FfiConverterOptionalULong.allocationSize(value.`activeUntil`) +
+            FfiConverterOptionalULong.allocationSize(value.`allowanceSecs`)
+    )
+
+    override fun write(value: MachineSession, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`open`, buf)
+            FfiConverterULong.write(value.`locksAt`, buf)
+            FfiConverterOptionalULong.write(value.`lastWork`, buf)
+            FfiConverterOptionalULong.write(value.`activeUntil`, buf)
+            FfiConverterOptionalULong.write(value.`allowanceSecs`, buf)
+    }
+}
+
+
+
+/**
  * Monthly figures (SPEC.md 11.12).
  */
 data class MonthSummary (
@@ -4735,6 +4823,18 @@ data class SessionStatus (
     var `left`: kotlin.ULong?
     , 
     /**
+     * Seconds since the machine's last work moment when reported; `None` from a CLI that does
+     * not send it.
+     */
+    var `idle`: kotlin.ULong?
+    , 
+    /**
+     * The machine's idle allowance when reported, seconds; `None` from a CLI that does not
+     * send it.
+     */
+    var `allow`: kotlin.ULong?
+    , 
+    /**
      * Hard stop, Unix ms.
      */
     var `stop`: kotlin.ULong?
@@ -4772,6 +4872,8 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
             FfiConverterString.read(buf),
             FfiConverterOptionalULong.read(buf),
             FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalULong.read(buf),
+            FfiConverterOptionalULong.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterULong.read(buf),
             FfiConverterULong.read(buf),
@@ -4781,6 +4883,8 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
     override fun allocationSize(value: SessionStatus) = (
             FfiConverterString.allocationSize(value.`session`) +
             FfiConverterOptionalULong.allocationSize(value.`left`) +
+            FfiConverterOptionalULong.allocationSize(value.`idle`) +
+            FfiConverterOptionalULong.allocationSize(value.`allow`) +
             FfiConverterOptionalULong.allocationSize(value.`stop`) +
             FfiConverterOptionalString.allocationSize(value.`place`) +
             FfiConverterULong.allocationSize(value.`reportedAt`) +
@@ -4790,6 +4894,8 @@ public object FfiConverterTypeSessionStatus: FfiConverterRustBuffer<SessionStatu
     override fun write(value: SessionStatus, buf: ByteBuffer) {
             FfiConverterString.write(value.`session`, buf)
             FfiConverterOptionalULong.write(value.`left`, buf)
+            FfiConverterOptionalULong.write(value.`idle`, buf)
+            FfiConverterOptionalULong.write(value.`allow`, buf)
             FfiConverterOptionalULong.write(value.`stop`, buf)
             FfiConverterOptionalString.write(value.`place`, buf)
             FfiConverterULong.write(value.`reportedAt`, buf)
@@ -8289,6 +8395,20 @@ object CoreExceptionExternalErrorHandler : UniffiRustCallStatusErrorHandler<Core
         
         FfiConverterULong.lower(`lastUsed`),
         FfiConverterULong.lower(`now`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The session of a machine whose last status is `status`.
+         */ fun `machineSession`(`status`: SessionStatus): MachineSession {
+            return FfiConverterTypeMachineSession.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_func_machine_session(
+    
+        
+        FfiConverterTypeSessionStatus.lower(`status`),_status)
 }
     )
     }

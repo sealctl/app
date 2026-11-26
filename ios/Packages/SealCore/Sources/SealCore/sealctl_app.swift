@@ -3258,6 +3258,118 @@ public func FfiConverterTypeMachineSeen_lower(_ value: MachineSeen) -> RustBuffe
 
 
 /**
+ * An Open machine's session as the Machines list shows it, from its last status. At a time
+ * `now` (Unix ms) the machine is:
+ *
+ * - not Open any more when `now >= locks_at` ("Locked · last report 3 h ago");
+ * - active while `now < active_until` ("Open · active");
+ * - else idle for `now - last_work` ("Open · idle 12 min · locks at 15:42");
+ * - and, without `last_work` (a CLI that sends no idle time), Open with `locks_at - now` left
+ * ("Open · 2 h 10 min left").
+ */
+public struct MachineSession: Equatable, Hashable {
+    /**
+     * The last status said Open.
+     */
+    public var `open`: Bool
+    /**
+     * When it locks unless more work comes, Unix ms: the report time plus `left`, capped by
+     * the hard stop.
+     */
+    public var locksAt: UInt64
+    /**
+     * Its last work moment, Unix ms (the report time minus `idle`); `None` when its CLI does
+     * not send the idle time.
+     */
+    public var lastWork: UInt64?
+    /**
+     * Until when it is shown active, Unix ms; `None` when the last status said idle (or had
+     * no idle time).
+     */
+    public var activeUntil: UInt64?
+    /**
+     * Its idle allowance, seconds, when its CLI sends it.
+     */
+    public var allowanceSecs: UInt64?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * The last status said Open.
+         */`open`: Bool, 
+        /**
+         * When it locks unless more work comes, Unix ms: the report time plus `left`, capped by
+         * the hard stop.
+         */locksAt: UInt64, 
+        /**
+         * Its last work moment, Unix ms (the report time minus `idle`); `None` when its CLI does
+         * not send the idle time.
+         */lastWork: UInt64?, 
+        /**
+         * Until when it is shown active, Unix ms; `None` when the last status said idle (or had
+         * no idle time).
+         */activeUntil: UInt64?, 
+        /**
+         * Its idle allowance, seconds, when its CLI sends it.
+         */allowanceSecs: UInt64?) {
+        self.`open` = `open`
+        self.locksAt = locksAt
+        self.lastWork = lastWork
+        self.activeUntil = activeUntil
+        self.allowanceSecs = allowanceSecs
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension MachineSession: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMachineSession: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MachineSession {
+        return
+            try MachineSession(
+                open: FfiConverterBool.read(from: &buf), 
+                locksAt: FfiConverterUInt64.read(from: &buf), 
+                lastWork: FfiConverterOptionUInt64.read(from: &buf), 
+                activeUntil: FfiConverterOptionUInt64.read(from: &buf), 
+                allowanceSecs: FfiConverterOptionUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: MachineSession, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.`open`, into: &buf)
+        FfiConverterUInt64.write(value.locksAt, into: &buf)
+        FfiConverterOptionUInt64.write(value.lastWork, into: &buf)
+        FfiConverterOptionUInt64.write(value.activeUntil, into: &buf)
+        FfiConverterOptionUInt64.write(value.allowanceSecs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMachineSession_lift(_ buf: RustBuffer) throws -> MachineSession {
+    return try FfiConverterTypeMachineSession.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMachineSession_lower(_ value: MachineSession) -> RustBuffer {
+    return FfiConverterTypeMachineSession.lower(value)
+}
+
+
+/**
  * Monthly figures (SPEC.md 11.12).
  */
 public struct MonthSummary: Equatable, Hashable {
@@ -4330,6 +4442,16 @@ public struct SessionStatus: Equatable, Hashable {
      */
     public var left: UInt64?
     /**
+     * Seconds since the machine's last work moment when reported; `None` from a CLI that does
+     * not send it.
+     */
+    public var idle: UInt64?
+    /**
+     * The machine's idle allowance when reported, seconds; `None` from a CLI that does not
+     * send it.
+     */
+    public var allow: UInt64?
+    /**
      * Hard stop, Unix ms.
      */
     public var stop: UInt64?
@@ -4356,6 +4478,14 @@ public struct SessionStatus: Equatable, Hashable {
          * Idle seconds left when reported.
          */left: UInt64?, 
         /**
+         * Seconds since the machine's last work moment when reported; `None` from a CLI that does
+         * not send it.
+         */idle: UInt64?, 
+        /**
+         * The machine's idle allowance when reported, seconds; `None` from a CLI that does not
+         * send it.
+         */allow: UInt64?, 
+        /**
          * Hard stop, Unix ms.
          */stop: UInt64?, 
         /**
@@ -4369,6 +4499,8 @@ public struct SessionStatus: Equatable, Hashable {
          */seq: UInt64) {
         self.session = session
         self.left = left
+        self.idle = idle
+        self.allow = allow
         self.stop = stop
         self.place = place
         self.reportedAt = reportedAt
@@ -4393,6 +4525,8 @@ public struct FfiConverterTypeSessionStatus: FfiConverterRustBuffer {
             try SessionStatus(
                 session: FfiConverterString.read(from: &buf), 
                 left: FfiConverterOptionUInt64.read(from: &buf), 
+                idle: FfiConverterOptionUInt64.read(from: &buf), 
+                allow: FfiConverterOptionUInt64.read(from: &buf), 
                 stop: FfiConverterOptionUInt64.read(from: &buf), 
                 place: FfiConverterOptionString.read(from: &buf), 
                 reportedAt: FfiConverterUInt64.read(from: &buf), 
@@ -4403,6 +4537,8 @@ public struct FfiConverterTypeSessionStatus: FfiConverterRustBuffer {
     public static func write(_ value: SessionStatus, into buf: inout [UInt8]) {
         FfiConverterString.write(value.session, into: &buf)
         FfiConverterOptionUInt64.write(value.left, into: &buf)
+        FfiConverterOptionUInt64.write(value.idle, into: &buf)
+        FfiConverterOptionUInt64.write(value.allow, into: &buf)
         FfiConverterOptionUInt64.write(value.stop, into: &buf)
         FfiConverterOptionString.write(value.place, into: &buf)
         FfiConverterUInt64.write(value.reportedAt, into: &buf)
@@ -7731,6 +7867,17 @@ public func answerDaysLeft(lastUsed: UInt64, now: UInt64) -> Int64  {
 })
 }
 /**
+ * The session of a machine whose last status is `status`.
+ */
+public func machineSession(status: SessionStatus) -> MachineSession  {
+    return try!  FfiConverterTypeMachineSession_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_func_machine_session(
+        FfiConverterTypeSessionStatus_lower(status),uniffiCallStatus
+    )
+})
+}
+/**
  * [`display_name`] for the apps.
  */
 public func machineDisplayName(machine: Machine) -> String  {
@@ -7856,6 +8003,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_func_answer_days_left() != 27739) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sealctl_app_checksum_func_machine_session() != 29983) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_func_machine_display_name() != 42303) {

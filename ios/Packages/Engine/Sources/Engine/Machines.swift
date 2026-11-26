@@ -252,6 +252,8 @@ public struct MachineView: Sendable, Identifiable {
     public let row: String
     public let detail: String
     public let leftSecs: Int64?
+    /// Spoken in words when Open: "Open, active", "Open, idle 12 minutes, locks at 15:42".
+    public var spokenOpen: String? = nil
     public var id: String { machine.key }
 
     /// The model as the list names it ("Mac mini" for `Mac16,10`), or nil when none was reported.
@@ -287,23 +289,56 @@ public struct MachineView: Sendable, Identifiable {
         }
         let reported = Int64(st.reportedAt)
         if st.session == "open" {
-            let left = Int64(st.left ?? 0) - (now - reported) / 1000
-            if left > 0 {
+            let s = machineSession(status: st)
+            if let row = openRow(s, now: now) {
                 let place = engine.state.places.first { $0.id == st.place }?.name
                 let opened = engine.local.days.first { $0.machine == m.key }.map { Int64($0.firstApproval) }
                 var detail = ""
                 if let opened { detail += "Opened at \(Texts.time(opened))" }
                 if let place { detail += " at \(place)" }
                 if opened != nil { detail += ". " }
+                if isActive(s, now: now), let allow = s.allowanceSecs { detail += "Locks after \(Texts.duration(Int64(allow))) idle. " }
                 if let stop = st.stop { detail += "Hard stop at \(Texts.time(Int64(stop)))." }
-                return MachineView(machine: m, name: name, state: .open, row: "Open · \(Texts.duration(left)) left",
-                                   detail: detail.trimmingCharacters(in: .whitespaces), leftSecs: left)
+                let left = (Int64(s.locksAt) - now + 999) / 1000
+                return MachineView(machine: m, name: name, state: .open, row: row,
+                                   detail: detail.trimmingCharacters(in: .whitespaces), leftSecs: left,
+                                   spokenOpen: spokenOpenRow(s, now: now))
             }
             return MachineView(machine: m, name: name, state: .locked, row: "Locked · last report \(Texts.ago(reported, now: now))",
                                detail: "No keys in memory. Volumes unmounted.", leftSecs: nil)
         }
         return MachineView(machine: m, name: name, state: .locked, row: "Locked", detail: "No keys in memory. Volumes unmounted.",
                            leftSecs: nil)
+    }
+
+    /// Whether `s` shows the machine as active at `now`: it works, so there is no countdown.
+    public static func isActive(_ s: MachineSession, now: Int64) -> Bool {
+        s.activeUntil.map { now < Int64($0) } ?? false
+    }
+
+    /// The Open row at `now` (SPEC.md 11.8): "Open · active" while the machine works, "Open · idle
+    /// 12 min · locks at 15:42" once it is idle, "Open · 2 h 10 min left" from a CLI that sends no
+    /// idle time; nil once the time it locks has passed.
+    public static func openRow(_ s: MachineSession, now: Int64) -> String? {
+        let locksAt = Int64(s.locksAt)
+        guard s.open, now < locksAt else { return nil }
+        if isActive(s, now: now) { return "Open · active" }
+        if let work = s.lastWork {
+            return "Open · idle \(Texts.duration(max(now - Int64(work), 0) / 1000)) · locks at \(Texts.time(locksAt))"
+        }
+        return "Open · \(Texts.duration((locksAt - now + 999) / 1000)) left"
+    }
+
+    /// `openRow` in words for VoiceOver: "Open, active", "Open, idle 12 minutes, locks at 15:42",
+    /// "Open, 2 hours 10 minutes left".
+    public static func spokenOpenRow(_ s: MachineSession, now: Int64) -> String? {
+        let locksAt = Int64(s.locksAt)
+        guard s.open, now < locksAt else { return nil }
+        if isActive(s, now: now) { return "Open, active" }
+        if let work = s.lastWork {
+            return "Open, idle \(Texts.spokenDuration(max(now - Int64(work), 0) / 1000)), locks at \(Texts.time(locksAt))"
+        }
+        return "Open, \(Texts.spokenDuration((locksAt - now + 999) / 1000)) left"
     }
 
     /// Waiting, then Open, then Locked, then by last seen (11.17).
@@ -317,10 +352,10 @@ public struct MachineView: Sendable, Identifiable {
         }
     }
 
-    /// Spoken as words: "Open, 2 hours 10 minutes left."
+    /// Spoken as words: "Open, active", "Open, idle 12 minutes, locks at 15:42".
     public var spoken: String {
         switch state {
-        case .open: return "Open, \(Texts.spokenDuration(leftSecs ?? 0)) left"
+        case .open: return spokenOpen ?? "Open, \(Texts.spokenDuration(leftSecs ?? 0)) left"
         default: return row
         }
     }

@@ -556,6 +556,8 @@ impl Store {
             m.last_status = Some(SessionStatus {
                 session: st.session.clone(),
                 left: st.left,
+                idle: st.idle,
+                allow: st.allow,
                 stop: st.stop,
                 place: st.place.clone(),
                 reported_at: at,
@@ -2338,6 +2340,44 @@ mod tests {
         .unwrap();
         assert_eq!(st.summary("2026-11".into()).unwrap().keys_used, 3);
         assert_eq!(st.summary("2026-12".into()).unwrap().keys_used, 0);
+    }
+
+    #[test]
+    fn a_status_keeps_the_idle_time_and_the_allowance() {
+        use sealctl_core::wire::{MachineStatus, SessionState};
+        let st = store();
+        let m = paired(&st);
+        let t = 1_796_099_400_000;
+        st.set_now(t);
+        let status = |seq: u64, idle: Option<u64>, allow: Option<u64>| MachineStatus {
+            seq,
+            state: Some(SessionState {
+                session: "open".into(),
+                left: Some(13_680),
+                idle,
+                allow,
+                ..SessionState::default()
+            }),
+            ..MachineStatus::default()
+        };
+        st.apply_status(m.id(), status(1, Some(720), Some(14_400)), 0)
+            .unwrap();
+        let last = |st: &Store| {
+            st.snapshot()
+                .unwrap()
+                .machine(&m.id())
+                .and_then(|m| m.last_status.clone())
+                .unwrap()
+        };
+        let s = last(&st);
+        assert_eq!(
+            (s.left, s.idle, s.allow, s.reported_at),
+            (Some(13_680), Some(720), Some(14_400), t)
+        );
+        // a CLI that sends neither
+        st.apply_status(m.id(), status(2, None, None), 0).unwrap();
+        let s = last(&st);
+        assert_eq!((s.left, s.idle, s.allow), (Some(13_680), None, None));
     }
 
     #[test]

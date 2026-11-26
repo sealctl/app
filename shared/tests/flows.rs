@@ -127,7 +127,7 @@ fn open_from_agent_then_remembered() {
     assert_eq!(v.options[0], ReplyOption::AllowSession);
 
     let r = store
-        .answered(req.clone(), "one_tap".into(), true, true, None, 0)
+        .answered(req.clone(), "one_tap".into(), true, true, None, false, 0)
         .unwrap();
     assert!(r.first_of_day);
     assert!(!store
@@ -153,7 +153,7 @@ fn open_from_agent_then_remembered() {
     let req = send(&m, &keys, b);
     assert!(
         !store
-            .answered(req, "one_tap".into(), true, false, None, 0)
+            .answered(req, "one_tap".into(), true, false, None, false, 0)
             .unwrap()
             .first_of_day
     );

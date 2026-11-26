@@ -192,6 +192,8 @@ extension AppEngine {
         _ = await post(r, sealed, delay: nil, userTapped: false)
         _ = try? await db.run { try $0.closeRequest(id: r.id, outcome: "answered") }
         if let h = result?.handback { reportArrived(h) }
+        // An Open machine reports while it stays Open: a moment to notice an exit the monitor missed.
+        Task { await self.checkPlaceByFix(minGap: Self.backgroundFixGapMs) }
     }
 
     func reportArrived(_ report: HandbackReport) {
@@ -216,7 +218,8 @@ extension AppEngine {
         guard let sealed = await withRoot({ try sealPlanKeysReply(root: $0, keys: keys, request: req, approval: approval) }) else { return }
         if await post(r, sealed, delay: nil, userTapped: false) == .posted {
             _ = try? await db.run {
-                try $0.answered(request: req, outcome: "in_session", allowed: true, remember: false, placeId: nil, utcOffsetSecs: utcOffset())
+                try $0.answered(request: req, outcome: "in_session", allowed: true, remember: false, placeId: nil, leftPlace: false,
+                                utcOffsetSecs: utcOffset())
             }
             await refreshState()
         }
@@ -241,7 +244,7 @@ extension AppEngine {
         _ = try? await db.run { try $0.closeRequest(id: id, outcome: "expired") }
         _ = try? await db.run {
             try $0.answered(request: w.request, outcome: "expired", allowed: false, remember: false, placeId: nil,
-                            utcOffsetSecs: utcOffset())
+                            leftPlace: false, utcOffsetSecs: utcOffset())
         }
         await refreshState()
         await updateBadge()
@@ -362,13 +365,18 @@ extension AppEngine {
         }
     }
 
-    /// Where the phone was when a decision was made, and how many place exits it had seen.
+    /// Where the phone was when a decision was made, and how many exits from that place it had seen.
     struct PlaceMark {
         let place: String?
         let exits: Int
     }
 
-    func placeMark() -> PlaceMark { PlaceMark(place: here, exits: placeExits) }
+    func placeMark() -> PlaceMark {
+        let p = here
+        return PlaceMark(place: p, exits: exitsFrom(p))
+    }
+
+    func exitsFrom(_ place: String?) -> Int { place.flatMap { placeExits[$0] } ?? 0 }
 
     /// What became of one reply.
     enum Sent: Equatable {
@@ -437,27 +445,37 @@ extension AppEngine {
         waiting[i] = waiting[i].reopened(again)
     }
 
-    /// Records an answer the relay took (or may have taken): usage, the day and its place.
+    /// Records an answer the relay took (or may have taken): usage, the day, and the place the
+    /// machine's allowance came from.
     func record(_ req: Request, _ r: RelayRequest, outcome: String, allowed: Bool, remember: Bool, mark: PlaceMark,
                 posted: Bool) async {
         answeredIds.insert(r.id)
-        // A place left while this was on its way: the day did not begin there after all.
-        let leftBefore = mark.place != nil && placeExits != mark.exits
-        let place = leftBefore ? here : mark.place
+        // A place left while this was on its way: the day did not begin there after all, but the
+        // reply carried `trusted`, so the allowance still came from there.
+        let leftBefore = mark.place != nil && exitsFrom(mark.place) != mark.exits
         if let h = hooks.beforeRecord { await h(r.id) }
         let result = try? await db.run {
-            try $0.answered(request: req, outcome: outcome, allowed: allowed, remember: remember, placeId: place,
-                            utcOffsetSecs: utcOffset())
+            try $0.answered(request: req, outcome: outcome, allowed: allowed, remember: remember, placeId: mark.place,
+                            leftPlace: leftBefore, utcOffsetSecs: utcOffset())
         }
         if posted { _ = try? await db.run { try $0.closeRequest(id: r.id, outcome: "answered") } }
         if result?.firstOfDay == true { Task { await self.firstApprovalOfDay() } }
         await refreshState()
         scheduleUpload(after: 10)
-        // Checked once the day is in `local`: an exit from here on finds the day and locks the
+        // Checked once the allowance is in `local`: an exit from here on finds it and locks the
         // machine itself. An exit before it could not, and a lock it sent may have reached the
         // machine before this answer did (SPEC.md 11.9).
-        if allowed, mark.place != nil, placeExits != mark.exits, let m = machine(r.machine) {
-            await lock(m, reason: "place")
+        if allowed, let p = mark.place, exitsFrom(p) != mark.exits {
+            let grants = await grantsLeft([p])
+            _ = await lockGrants(grants)
+            // Its own lock only when it set no allowance there ("Allow once"): an allowance's lock
+            // that did not go is sent again at the next exit, fix or launch, not at once.
+            if !grants.contains(where: { $0.machine == r.machine }), let m = machine(r.machine) {
+                await lock(m, reason: "place")
+            }
+        } else if allowed, mark.place != nil {
+            // The monitor may have missed leaving the place this was decided at.
+            Task { await self.checkPlaceByFix(minGap: Self.backgroundFixGapMs) }
         }
     }
 

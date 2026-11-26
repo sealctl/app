@@ -301,6 +301,7 @@ object Texts {
     const val CANCELLED_BODY = "A pending sensitive action was cancelled."
     const val PLACE_LEARNED = "Trust this place? You opened your machines here on 3 mornings."
     fun leftPlace(place: String, names: String) = "You left $place. Locked $names."
+    fun placesUnwatched(names: String) = "sealctl can no longer notice you leaving a place. Locked $names."
     fun ready(what: String) = "Ready: open sealctl to finish " + when (what) {
         "words" -> "showing your words."
         "delete" -> "deleting your relay data."

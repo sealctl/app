@@ -241,6 +241,7 @@ Defined once in `sealctl-app`. "Relay" means the record is part of the encrypted
 | Place | id, name, centre, radius (150 m), created | Relay; until removed |
 | Place candidate | samples (centre, accuracy, day), suppressed flag | Local; samples older than 30 days dropped |
 | Day | machine, first approval time, place id or none | Local; ends at the next 02:00 local time or 24 h after the first approval, whichever is first |
+| Allowance | machine, the trusted place its latest `open` was allowed for the session at (or none), when, locked flag | Local; one per machine, replaced by the next session allowed; until the end of the day it was allowed in. Leaving that place locks the machine (11.9) |
 | Inventory item | purpose, id, words fingerprint, key check, machine, path or URL, size, first use, last use, stale | Relay; kept; stale after a year unseen |
 | Usage entry | time, machine, key or object, agent or "you", repository, command, outcome | Local; 90 days, at most 50,000 entries. "This machine was lost or stolen" (11.17) reads these 90 days |
 | Daily count | local day (`YYYY-MM-DD`), keys used, requests declined | Local; 400 days (the Activity heatmap's 53 weeks and a margin) |
@@ -282,7 +283,7 @@ No secret is ever stored in the database. Places sit there protected by the OS f
 sealctl 0.9 (Teams and Enterprise) puts a separate work identity, with its own 24 words and its own relay (the employer's server), next to the personal one on the same phone. Until then the app holds one identity and one relay, but the data model must not assume it:
 
 - **The relay and the identity are properties of each pairing.** Every `Machine` records the relay origin it was paired through (it already has `relay`) and the identity it belongs to (by words fingerprint or an identity id), even while only one of each exists. Nothing reads "the" relay or "the" phone key from a global when handling a machine, a request, a status or a message: it takes them from the pairing.
-- **Per-identity records stay separable.** Local records keyed by machine (days, pending, holds, plans, delayed actions, message counters) and the push registration are keyed so that a second identity can be added without a migration that rewrites them. The state blob stays per identity, sealed with that identity's own state key.
+- **Per-identity records stay separable.** Local records keyed by machine (days, allowances, pending, holds, plans, delayed actions, message counters) and the push registration are keyed so that a second identity can be added without a migration that rewrites them. The state blob stays per identity, sealed with that identity's own state key.
 - **`decide()` takes everything from its context.** No asking rule reads app-wide settings directly; 0.9 adds an organisation's effective policy to `DecideContext` for work identities only, and a personal identity must keep behaving exactly as specified here.
 
 The 0.9 design, including the multi-identity data model, enrolment and the policy rules for `decide()`, is in the `sealctl/enterprise` repository's `SPEC.md` (sections 4, 6.6 and 24.3).
@@ -451,7 +452,7 @@ For every request, from the socket, a push or a list:
 4. Build the context: is the phone unlocked (the root item can be read), the relay's `near` flag and the phone's network type, the current trusted place from region monitoring, the machine's day record, answers, whether a change of words is running.
 5. Call `decide(request, context)`. It returns Automatic, One tap or In the app, plus the reply options.
 6. Automatic: seal the reply with the root and post it, record the use, show nothing or a quiet note (10.1, 10.2). When the relay does not take that reply (anything but `404 gone`) or the root can't be read, the request goes to the person as One tap instead of waiting unseen. One tap: show the notification or, in the foreground, the approval card. In the app: show a notification that opens the right screen.
-7. After the answer, record usage, update inventory from the request's items, update the day record, take a place sample when this was the first approval of the day, and schedule a state upload.
+7. After the answer, record usage, update inventory from the request's items, update the day record and, for an `open` allowed for the session, the place the machine's allowance came from (11.9), take a place sample when this was the first approval of the day, and schedule a state upload.
 
 ### 9.2 Request kinds
 
@@ -487,6 +488,7 @@ In the app means: a notification with no actions that opens the screen, because 
 
 - An `open` request triggered by an agent with no answer for that key and repository is shown as one card. "Allow for this session" also records the answer. That is the only extra tap the design allows, and it is merged into the first one.
 - The first approval of the day is the first `open` allowed for that machine since its day ended (02:00 local or 24 h after the previous first approval). Only an answer the person gave (One tap, Allow once) begins a day: an answer given by itself needed an active day when it was decided, and recorded after that day ended (its reply took a while to post, or the iOS extension's answer is merged later) it begins none.
+- The day's place decides only whether an `open` answers by itself. Leaving a place locks by where each machine's allowance came from: its latest `open` allowed for the session, wherever its day began (11.9). A day begun with no place and an `open` allowed later at a trusted place gives that machine the trusted allowance, and leaving the place locks it.
 - "02:00 local" is counted both by the UTC offset at the first approval and by the phone's offset now, whichever comes first: a change of daylight saving time or a new time zone while travelling ends the day at 02:00 on the phone's clock, never later. A phone clock that reads more than 5 minutes before the day's first approval (set back) ends the day too. The next 02:00 is never more than 24 hours away, so the 24 hours are a bound for the clock arithmetic, not a second rule a working day meets: a day begun at 09:00 lasts until 02:00, through the evening. The CLI keeps its own hard stop of the same 24 hours (`sealctl/sealctl`).
 - "Near" is the relay's `near` flag on the request, trusted only when the phone is on Wi-Fi or Ethernet at that moment (`NWPathMonitor` `usesInterfaceType(.wifi)` or `.wiredEthernet`; Android `NetworkCapabilities.TRANSPORT_WIFI` or `TRANSPORT_ETHERNET`). On mobile data the flag is ignored: the carrier's shared address could match a stranger's. On a VPN the relay sees the VPN's address and the flag is false. Both fall back to One tap.
 
@@ -506,6 +508,8 @@ The core's `place_kind(location, current_place)` decides it from `LocationAccess
 - not `trusted`: nothing would notice the phone leaving, so no lock would follow (11.9). A place last known, a record from before, or a fix taken while the app is open does not make it `trusted` either: the fix says where the phone is now, not when it leaves.
 
 `none` keeps every other rule of being away: no `open` answers by itself (9.3), and level 3 waits two hours (9.6).
+
+The machine sets its allowance from the place of the `open` it was allowed for the session; "Allow once" opens no session and leaves it as it was. The phone keeps that place per machine (6.4), and a `trusted` allowance lasts only while the phone is known to be inside its place: leaving it, or the phone no longer being able to notice leaving, locks the machine (11.9). The protocol has no message that lowers an allowance, so a lock is how the phone takes it back.
 
 ### 9.5 Replays and forged requests
 
@@ -637,6 +641,7 @@ Nothing about the machine, the agent, the key or the sealed request goes through
 | Event | Text | Level |
 | --- | --- | --- |
 | Left a place | "You left Desk. Locked dev@mbp.example.com." | `.passive` |
+| Location can no longer notice leaving | "sealctl can no longer notice you leaving a place. Locked dev@mbp.example.com." | `.passive` |
 | Place learned | "Trust this place? You opened your machines here on 3 mornings." | `.active` |
 | Yearly check due | "Time for the yearly card check. Have your card nearby; it takes a minute." | `.active`, 10:00 local, repeated weekly until done |
 | Words 2 years old | "Your words are 2 years old. Changing them takes about 10 minutes and a new blank card." | `.active`, repeated monthly until done |
@@ -685,7 +690,7 @@ Actions are the same as on iOS, with the same titles. On Android 12 and later ea
 
 **Background restriction.** If `ActivityManager.isBackgroundRestricted()` is true, Settings and the Machines tab show: "Android is limiting sealctl in the background. Requests may arrive late." [Open settings]
 
-**Boot and update.** `RECEIVE_BOOT_COMPLETED` and `MY_PACKAGE_REPLACED` re-register geofences; so does every start of the app's process and the first foreground after location "Allow all the time" is given (11.9). The app is not direct-boot aware: before the first unlock after a reboot it does nothing, and requests expire on the machine.
+**Boot and update.** `RECEIVE_BOOT_COMPLETED` and `MY_PACKAGE_REPLACED` re-register geofences; so does every start of the app's process and the first foreground after location "Allow all the time" is given (11.9). Each registration sends an enter for the place the phone is inside and an exit for each place it is outside (`INITIAL_TRIGGER_ENTER | INITIAL_TRIGGER_EXIT`), so an exit missed while the process was not running locks its machines then. Revoking a location permission ends the process; the next start finds the geofences can't be registered and locks the machines allowed at a trusted place (11.9). The app is not direct-boot aware: before the first unlock after a reboot it does nothing, and requests expire on the machine.
 
 ### 10.3 Battery
 
@@ -694,7 +699,7 @@ Actions are the same as on iOS, with the same titles. On Android 12 and later ea
 | Waiting for requests | None: alert pushes only | None: high-priority FCM only |
 | WebSocket | Foreground only | Foreground only |
 | Places | `CLMonitor` circular conditions (system region monitoring) | Geofences with `setNotificationResponsiveness(120000)` |
-| Location samples | One fix at the first approval of the day, at most 10 seconds | Same, `getCurrentLocation` with balanced power first, high accuracy if accuracy is above 100 m |
+| Location samples | One fix at the first approval of the day, at most 10 seconds. To catch a missed exit, only while a place is current or a machine's allowance came from one: one fix at foreground (at most once a minute), and after an allow at a place or a machine's report (at most once in 10 minutes) | Same, `getCurrentLocation` with balanced power first, high accuracy if accuracy is above 100 m |
 | Periodic work | None; reminders are scheduled local notifications. `prune` runs when the app comes to the foreground, at most once a day | One daily `WorkManager` job: prune, sync if due, refresh the FCM token |
 
 ### 10.4 Notification check
@@ -1044,13 +1049,13 @@ While the machine works (its last status said it was active: `idle` under 120 se
 - There is no map. Places are named by the user, never by an address lookup.
 - At most 10 places.
 
-**Monitoring.** iOS: one `CLMonitor` named `places`, one `CLMonitor.CircularGeographicCondition` per place, added assuming unsatisfied. Android: one geofence per place with `GEOFENCE_TRANSITION_ENTER | GEOFENCE_TRANSITION_EXIT`, `NEVER_EXPIRE`, registered with `INITIAL_TRIGGER_ENTER`, so a phone already inside gets its enter as soon as the geofences are registered. The current inside or outside state is stored and copied to the extension snapshot, with whether location access is Always.
+**Monitoring.** iOS: one `CLMonitor` named `places`, one `CLMonitor.CircularGeographicCondition` per place, added assuming unsatisfied. Android: one geofence per place with `GEOFENCE_TRANSITION_ENTER | GEOFENCE_TRANSITION_EXIT`, `NEVER_EXPIRE`, registered with `INITIAL_TRIGGER_ENTER | INITIAL_TRIGGER_EXIT`, so a phone already inside gets its enter as soon as the geofences are registered, and a phone outside a place gets its exit. The current inside or outside state is stored and copied to the extension snapshot, with whether location access is Always.
 
 **The current place after a restart.** The system ends the app's process for memory and starts it again for a push; the place the phone is inside must not be lost, nor kept after the phone left.
 
-- iOS: at launch the monitor sends only what changed while the app was not running, so the app first reads each condition's record (`CLMonitor.record(for:)`, last event satisfied), as `requestState(for:)` did for region monitoring. With Always only: with When In Use the system watches the edges only while the app is in use.
+- iOS: at launch the monitor sends only what changed while the app was not running, so the app first reads each condition's record (`CLMonitor.record(for:)`), as `requestState(for:)` did for region monitoring: satisfied is an enter, unsatisfied an exit (one missed while the app was not running locks its machines now). With Always only: with When In Use the system watches the edges only while the app is in use.
 - Android: the place the phone entered is kept on the phone (its id and the boot count, never a location) and comes back at a start of the process only while every exit from it would have been seen: location all the time, the same boot, the geofences still registered (their `PendingIntent` still exists: a reboot, a force stop or an update cancels it) and the place still trusted. Otherwise no place counts until the geofences' initial enter. The geofences are then registered again, and an exit clears the kept place.
-- Location turned off (`GEOFENCE_NOT_AVAILABLE` on Android; an unknown state on iOS): the place stops counting, which is not an exit, so nothing is locked. On Android the geofences are registered again at the next foreground.
+- Location turned off (`GEOFENCE_NOT_AVAILABLE` on Android; an unknown state on iOS): the place stops counting. It is not an exit, so no place counts as left; but on Android, where the system says location is off, nothing would notice leaving any more, so the machines allowed at a trusted place are locked, as when Always is taken away (Leaving, below). An unknown state on iOS locks nothing by itself; location services turned off read as Always taken away at the next foreground. On Android the geofences are registered again at the next foreground.
 
 **Without location access Always.** Places count for nothing (9.4: `none`). While a trusted place exists and location is not allowed all the time, the Machines tab, Settings and the Places screen show a banner, with [Open settings] (Android: the request of 11.3 step 9; iOS: the app's settings):
 
@@ -1058,7 +1063,15 @@ While the machine works (its last status said it was active: `idle` under 120 se
 
 iOS says "Places need location access Always." The permission is read again each time the app comes back to the foreground, as from the settings.
 
-**Leaving.** On exit from a place, the app sends a lock message to every machine whose day began at that place and that is Open or was Open at its last report. The lock uses the phone keys only, so it works on a locked phone. Then it posts "You left Desk. Locked dev@mbp.example.com." (passive). The machine keeps the day's credit; that is the machine's job. An allow decided at the place that is still on its way when the phone leaves is followed, once posted, by a lock to its machine, so the lock never reaches the machine before that answer; its day is not recorded as begun at the place. The app checks for an exit again once that answer's day record is in place: an exit from then on finds the day and locks the machine itself, and one before it is covered by the answer's own lock.
+**Leaving.** On exit from a place, the app sends a lock message to every machine whose allowance came from that place: its latest `open` allowed for the session was allowed there (6.4, 9.4), wherever and whenever its day began. A machine whose latest session was allowed elsewhere, or with no place, is not locked; nor is one whose allowance has ended (the end of the day it was allowed in). A machine allowed before the app kept allowances is found by its day, as before: a day still running that began at the place. Once the relay took a lock, that allowance is marked locked, so leaving again (or the next registration's initial exit) sends none; a lock the relay did not take is sent again at the next exit, fix or start. The lock uses the phone keys only, so it works on a locked phone. Then it posts "You left Desk. Locked dev@mbp.example.com." (passive). The machine keeps the day's credit; that is the machine's job. An allow decided at the place that is still on its way when the phone leaves is followed, once posted, by a lock to its machine, so the lock never reaches the machine before that answer; its day is not recorded as begun at the place, but its allowance is recorded as from the place, since its reply carried `trusted`. Exits are counted by place, so an exit from another place (a registration's initial exits) says nothing about the answer's place. The app checks for an exit again once that answer's allowance is recorded: an exit from then on finds it and locks the machine itself, and one before it is covered by the answer's own lock.
+
+**A missed exit.** Exit events can arrive late or not at all (Android Doze and makers' battery limits; the app not running). The phone also takes as leaving a place:
+
+- the geofences' initial exit at a registration (Android), or an unsatisfied record at launch (iOS), above;
+- a fresh fix clearly outside it (`places_left_by_fix`: taken within the last 2 minutes, farther from the centre than the radius plus the fix's accuracy, so a rough fix never says the phone left). The app takes one, only while a place is current or a machine's allowance came from one (10.3): when it comes to the foreground, after an allow decided at a place, when a machine reports, and at the first approval of the day (the place-learning sample). The place stops counting, so the next reply carries `other`; on Android the geofences are registered again, which brings their state back in line;
+- on iOS, an answer the extension gave at a place the phone is no longer in when the app merges it.
+
+Each locks the machines allowed at the place, as an exit does. When the phone can no longer notice leaving at all (location "Allow all the time" or Always taken away, location turned off on Android, the geofences not registered), every machine allowed at a trusted place is locked, and the app posts "sealctl can no longer notice you leaving a place. Locked dev@mbp.example.com." (passive). That is not an exit: no place counts as left. The app checks at every start of the process and every foreground. Locking is the only way back: the protocol has no message that lowers a machine's allowance to `other`, and a lock is what the machine already does when the phone leaves.
 
 **Places screen** (Settings, Places):
 
@@ -1069,6 +1082,8 @@ iOS says "Places need location access Always." The permission is read again each
 > Places are learned: after three mornings of approving at the same spot, sealctl asks whether to trust it.
 
 Remove: "Remove Desk? Machines opened here stay Open until their allowance ends." [Remove] [Cancel]
+
+A removed place locks nothing: no exit comes for it, and a fix outside it or location no longer watching the edges skip it. Its machines' allowances run out by themselves.
 
 Without permission:
 

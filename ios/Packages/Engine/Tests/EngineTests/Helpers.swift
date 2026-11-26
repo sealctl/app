@@ -40,16 +40,18 @@ func tempDir() -> URL {
     return u
 }
 
-/// Places with location allowed and no monitoring: tests set `currentPlace` themselves.
+/// Places with location allowed and no monitoring: tests set `currentPlace` themselves, and
+/// the fix `sample()` gives.
 @MainActor
 final class StubPlaces: PlacesProvider {
     var hasForeground = true
     var hasAlways = true
     var undetermined = false
+    var fix: Fix?
     func requestWhenInUse() async {}
     func requestAlways() async {}
     func monitor(_ fences: [Fence], onTransition: @escaping @Sendable ([String], Bool?) async -> Void) async {}
-    func sample() async -> Fix? { nil }
+    func sample() async -> Fix? { fix }
 }
 
 @MainActor

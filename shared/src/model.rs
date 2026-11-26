@@ -303,10 +303,31 @@ pub struct DayRecord {
     pub machine: String,
     /// First approval, Unix ms.
     pub first_approval: u64,
-    /// TrustedPlace the day began at.
+    /// TrustedPlace the day began at: an `open` answers by itself only there (SPEC.md 9.3).
+    /// Leaving a place locks by [`GrantRecord`], not by this.
     pub place_id: Option<String>,
     /// End of the day, Unix ms.
     pub ends: u64,
+}
+
+/// Where a machine's allowance came from (SPEC.md 11.9): its latest `open` allowed for a
+/// session, which sets the machine's cap from the reply's place. Leaving that place locks the
+/// machine, wherever its day began.
+#[derive(uniffi::Record, Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GrantRecord {
+    /// Machine key.
+    pub machine: String,
+    /// The trusted place the session was allowed at: set when the reply carried `trusted`,
+    /// `None` when it carried `other` or `none`.
+    pub place_id: Option<String>,
+    /// When it was allowed, Unix ms.
+    pub at: u64,
+    /// The allowance ends by then at the latest: the end of the day it was allowed in, the
+    /// machine's hard stop.
+    pub ends: u64,
+    /// A lock for this allowance was sent; leaving again sends none.
+    pub locked: bool,
 }
 
 /// One use in the usage log.
@@ -548,6 +569,8 @@ pub struct LocalState {
     pub leave_step: u32,
     /// Machines skipped while leaving.
     pub leave_skipped: Vec<String>,
+    /// Where each machine's allowance came from, one per machine.
+    pub grants: Vec<GrantRecord>,
 }
 
 /// A per-machine counter.

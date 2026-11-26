@@ -18,6 +18,9 @@ public struct Fix: Sendable, Equatable {
     public let lon: Double
     public let accuracy: Double
     public let time: Int64
+    public init(lat: Double, lon: Double, accuracy: Double, time: Int64) {
+        self.lat = lat; self.lon = lon; self.accuracy = accuracy; self.time = time
+    }
 }
 
 /// Places on the iPhone (SPEC.md 10.3, 11.9): one `CLMonitor` named `places` with one circular
@@ -102,9 +105,10 @@ public final class Places: NSObject, CLLocationManagerDelegate {
     ///
     /// At launch the monitor sends only what changed while the app was not running, so the
     /// places the phone is already inside come from the monitor's records first (the state the
-    /// system keeps, as `requestState(for:)` gave it for region monitoring). The records count
-    /// only with Always: with When In Use the system watches the edges only while the app is in
-    /// use, and a record could be from before the phone left.
+    /// system keeps, as `requestState(for:)` gave it for region monitoring), and so do the
+    /// places it is outside: an exit missed while the app was not running counts as one now.
+    /// The records count only with Always: with When In Use the system watches the edges only
+    /// while the app is in use, and a record could be from before the phone left.
     public func monitor(_ fences: [Fence], onTransition: @escaping @Sendable ([String], Bool?) async -> Void) async {
         guard hasForeground else { return }
         let m: CLMonitor
@@ -113,9 +117,16 @@ public final class Places: NSObject, CLLocationManagerDelegate {
             monitor = m
             if hasAlways {
                 for id in await m.identifiers {
-                    guard let r = await m.record(for: id), r.lastEvent.state == .satisfied else { continue }
-                    inside.insert(id)
-                    await onTransition([id], true)
+                    guard let r = await m.record(for: id) else { continue }
+                    switch r.lastEvent.state {
+                    case .satisfied:
+                        inside.insert(id)
+                        await onTransition([id], true)
+                    case .unsatisfied:
+                        await onTransition([id], false)
+                    default:
+                        break
+                    }
                 }
             }
             events = Task { @MainActor [weak self] in

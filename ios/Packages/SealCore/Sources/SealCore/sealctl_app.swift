@@ -656,10 +656,13 @@ public protocol StoreProtocol: AnyObject, Sendable {
     
     /**
      * Records an answer (SPEC.md 9.1 step 7): usage, summary, remembered answers, inventory,
-     * the day record. `outcome` is `one_tap`, `automatic`, `once`, `denied`, `confirmed`,
-     * `expired`; `allowed` says whether keys were handed out.
+     * the day record and where the machine's allowance came from. `outcome` is `one_tap`,
+     * `automatic`, `once`, `denied`, `confirmed`, `expired`; `allowed` says whether keys were
+     * handed out. `place_id` is the trusted place the reply was decided at (it carried
+     * `trusted`); `left_place` says the phone left it while the reply was on its way, so the
+     * day does not begin there, though the allowance still came from there.
      */
-    func answered(request: Request, outcome: String, allowed: Bool, remember: Bool, placeId: String?, utcOffsetSecs: Int32) throws  -> AnsweredResult
+    func answered(request: Request, outcome: String, allowed: Bool, remember: Bool, placeId: String?, leftPlace: Bool, utcOffsetSecs: Int32) throws  -> AnsweredResult
     
     /**
      * [`Store::answered`] for an answer given earlier, at `answered_at` (Unix ms): what the
@@ -725,6 +728,14 @@ public protocol StoreProtocol: AnyObject, Sendable {
      * Erases everything (Erase sealctl from this phone).
      */
     func erase() throws 
+    
+    /**
+     * The allowances to lock now that the phone is not inside the places `left` (SPEC.md
+     * 11.9): every machine whose latest session was allowed at one of them, wherever its day
+     * began, not locked yet and not ended. Places no longer trusted lock nothing. Send each a
+     * lock, then [`LocalEvent::GrantLocked`].
+     */
+    func grantsLeft(left: [String], utcOffsetSecs: Int32) throws  -> [GrantRecord]
     
     /**
      * The local records.
@@ -879,10 +890,13 @@ public static func `open`(path: String)throws  -> Store  {
     
     /**
      * Records an answer (SPEC.md 9.1 step 7): usage, summary, remembered answers, inventory,
-     * the day record. `outcome` is `one_tap`, `automatic`, `once`, `denied`, `confirmed`,
-     * `expired`; `allowed` says whether keys were handed out.
+     * the day record and where the machine's allowance came from. `outcome` is `one_tap`,
+     * `automatic`, `once`, `denied`, `confirmed`, `expired`; `allowed` says whether keys were
+     * handed out. `place_id` is the trusted place the reply was decided at (it carried
+     * `trusted`); `left_place` says the phone left it while the reply was on its way, so the
+     * day does not begin there, though the allowance still came from there.
      */
-open func answered(request: Request, outcome: String, allowed: Bool, remember: Bool, placeId: String?, utcOffsetSecs: Int32)throws  -> AnsweredResult  {
+open func answered(request: Request, outcome: String, allowed: Bool, remember: Bool, placeId: String?, leftPlace: Bool, utcOffsetSecs: Int32)throws  -> AnsweredResult  {
     return try  FfiConverterTypeAnsweredResult_lift(try rustCallWithError(FfiConverterTypeAppError_lift) {
         uniffiCallStatus in
     uniffi_sealctl_app_fn_method_store_answered(
@@ -892,6 +906,7 @@ open func answered(request: Request, outcome: String, allowed: Bool, remember: B
         FfiConverterBool.lower(allowed),
         FfiConverterBool.lower(remember),
         FfiConverterOptionString.lower(placeId),
+        FfiConverterBool.lower(leftPlace),
         FfiConverterInt32.lower(utcOffsetSecs),uniffiCallStatus
     )
 })
@@ -1049,6 +1064,23 @@ open func erase()throws   {try rustCallWithError(FfiConverterTypeAppError_lift) 
             self.uniffiCloneHandle(),uniffiCallStatus
     )
 }
+}
+    
+    /**
+     * The allowances to lock now that the phone is not inside the places `left` (SPEC.md
+     * 11.9): every machine whose latest session was allowed at one of them, wherever its day
+     * began, not locked yet and not ended. Places no longer trusted lock nothing. Send each a
+     * lock, then [`LocalEvent::GrantLocked`].
+     */
+open func grantsLeft(left: [String], utcOffsetSecs: Int32)throws  -> [GrantRecord]  {
+    return try  FfiConverterSequenceTypeGrantRecord.lift(try rustCallWithError(FfiConverterTypeAppError_lift) {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_method_store_grants_left(
+            self.uniffiCloneHandle(),
+        FfiConverterSequenceString.lower(left),
+        FfiConverterInt32.lower(utcOffsetSecs),uniffiCallStatus
+    )
+})
 }
     
     /**
@@ -1683,7 +1715,8 @@ public struct DayRecord: Equatable, Hashable {
      */
     public var firstApproval: UInt64
     /**
-     * TrustedPlace the day began at.
+     * TrustedPlace the day began at: an `open` answers by itself only there (SPEC.md 9.3).
+     * Leaving a place locks by [`GrantRecord`], not by this.
      */
     public var placeId: String?
     /**
@@ -1701,7 +1734,8 @@ public struct DayRecord: Equatable, Hashable {
          * First approval, Unix ms.
          */firstApproval: UInt64, 
         /**
-         * TrustedPlace the day began at.
+         * TrustedPlace the day began at: an `open` answers by itself only there (SPEC.md 9.3).
+         * Leaving a place locks by [`GrantRecord`], not by this.
          */placeId: String?, 
         /**
          * End of the day, Unix ms.
@@ -2163,6 +2197,111 @@ public func FfiConverterTypeDeviceInfo_lift(_ buf: RustBuffer) throws -> DeviceI
 #endif
 public func FfiConverterTypeDeviceInfo_lower(_ value: DeviceInfo) -> RustBuffer {
     return FfiConverterTypeDeviceInfo.lower(value)
+}
+
+
+/**
+ * Where a machine's allowance came from (SPEC.md 11.9): its latest `open` allowed for a
+ * session, which sets the machine's cap from the reply's place. Leaving that place locks the
+ * machine, wherever its day began.
+ */
+public struct GrantRecord: Equatable, Hashable {
+    /**
+     * Machine key.
+     */
+    public var machine: String
+    /**
+     * The trusted place the session was allowed at: set when the reply carried `trusted`,
+     * `None` when it carried `other` or `none`.
+     */
+    public var placeId: String?
+    /**
+     * When it was allowed, Unix ms.
+     */
+    public var at: UInt64
+    /**
+     * The allowance ends by then at the latest: the end of the day it was allowed in, the
+     * machine's hard stop.
+     */
+    public var ends: UInt64
+    /**
+     * A lock for this allowance was sent; leaving again sends none.
+     */
+    public var locked: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Machine key.
+         */machine: String, 
+        /**
+         * The trusted place the session was allowed at: set when the reply carried `trusted`,
+         * `None` when it carried `other` or `none`.
+         */placeId: String?, 
+        /**
+         * When it was allowed, Unix ms.
+         */at: UInt64, 
+        /**
+         * The allowance ends by then at the latest: the end of the day it was allowed in, the
+         * machine's hard stop.
+         */ends: UInt64, 
+        /**
+         * A lock for this allowance was sent; leaving again sends none.
+         */locked: Bool) {
+        self.machine = machine
+        self.placeId = placeId
+        self.at = at
+        self.ends = ends
+        self.locked = locked
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension GrantRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeGrantRecord: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> GrantRecord {
+        return
+            try GrantRecord(
+                machine: FfiConverterString.read(from: &buf), 
+                placeId: FfiConverterOptionString.read(from: &buf), 
+                at: FfiConverterUInt64.read(from: &buf), 
+                ends: FfiConverterUInt64.read(from: &buf), 
+                locked: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: GrantRecord, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.machine, into: &buf)
+        FfiConverterOptionString.write(value.placeId, into: &buf)
+        FfiConverterUInt64.write(value.at, into: &buf)
+        FfiConverterUInt64.write(value.ends, into: &buf)
+        FfiConverterBool.write(value.locked, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGrantRecord_lift(_ buf: RustBuffer) throws -> GrantRecord {
+    return try FfiConverterTypeGrantRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGrantRecord_lower(_ value: GrantRecord) -> RustBuffer {
+    return FfiConverterTypeGrantRecord.lower(value)
 }
 
 
@@ -2684,6 +2823,10 @@ public struct LocalState: Equatable, Hashable {
      * Machines skipped while leaving.
      */
     public var leaveSkipped: [String]
+    /**
+     * Where each machine's allowance came from, one per machine.
+     */
+    public var grants: [GrantRecord]
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -2738,7 +2881,10 @@ public struct LocalState: Equatable, Hashable {
          */leaveStep: UInt32, 
         /**
          * Machines skipped while leaving.
-         */leaveSkipped: [String]) {
+         */leaveSkipped: [String], 
+        /**
+         * Where each machine's allowance came from, one per machine.
+         */grants: [GrantRecord]) {
         self.days = days
         self.pending = pending
         self.holds = holds
@@ -2756,6 +2902,7 @@ public struct LocalState: Equatable, Hashable {
         self.backupShortened = backupShortened
         self.leaveStep = leaveStep
         self.leaveSkipped = leaveSkipped
+        self.grants = grants
     }
 
     
@@ -2790,7 +2937,8 @@ public struct FfiConverterTypeLocalState: FfiConverterRustBuffer {
                 messageSeq: FfiConverterSequenceTypeMachineCounter.read(from: &buf), 
                 backupShortened: FfiConverterBool.read(from: &buf), 
                 leaveStep: FfiConverterUInt32.read(from: &buf), 
-                leaveSkipped: FfiConverterSequenceString.read(from: &buf)
+                leaveSkipped: FfiConverterSequenceString.read(from: &buf), 
+                grants: FfiConverterSequenceTypeGrantRecord.read(from: &buf)
         )
     }
 
@@ -2812,6 +2960,7 @@ public struct FfiConverterTypeLocalState: FfiConverterRustBuffer {
         FfiConverterBool.write(value.backupShortened, into: &buf)
         FfiConverterUInt32.write(value.leaveStep, into: &buf)
         FfiConverterSequenceString.write(value.leaveSkipped, into: &buf)
+        FfiConverterSequenceTypeGrantRecord.write(value.grants, into: &buf)
     }
 }
 
@@ -6239,6 +6388,14 @@ public enum LocalEvent: Equatable, Hashable {
          */skipped: [String]
     )
     /**
+     * A lock was sent for this allowance because the phone left its place (SPEC.md 11.9).
+     */
+    case grantLocked(
+        /**
+         * The allowance, as [`Store::grants_left`] gave it.
+         */grant: GrantRecord
+    )
+    /**
      * Sync bookkeeping.
      */
     case synced(
@@ -6302,7 +6459,10 @@ public struct FfiConverterTypeLocalEvent: FfiConverterRustBuffer {
         case 11: return .setLeave(step: try FfiConverterUInt32.read(from: &buf), skipped: try FfiConverterSequenceString.read(from: &buf)
         )
         
-        case 12: return .synced(rev: try FfiConverterUInt64.read(from: &buf), uploaded: try FfiConverterBool.read(from: &buf)
+        case 12: return .grantLocked(grant: try FfiConverterTypeGrantRecord.read(from: &buf)
+        )
+        
+        case 13: return .synced(rev: try FfiConverterUInt64.read(from: &buf), uploaded: try FfiConverterBool.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -6368,8 +6528,13 @@ public struct FfiConverterTypeLocalEvent: FfiConverterRustBuffer {
             FfiConverterSequenceString.write(skipped, into: &buf)
             
         
-        case let .synced(rev,uploaded):
+        case let .grantLocked(grant):
             writeInt(&buf, Int32(12))
+            FfiConverterTypeGrantRecord.write(grant, into: &buf)
+            
+        
+        case let .synced(rev,uploaded):
+            writeInt(&buf, Int32(13))
             FfiConverterUInt64.write(rev, into: &buf)
             FfiConverterBool.write(uploaded, into: &buf)
             
@@ -7041,6 +7206,31 @@ fileprivate struct FfiConverterSequenceTypeDelayedAction: FfiConverterRustBuffer
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeDelayedAction.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeGrantRecord: FfiConverterRustBuffer {
+    typealias SwiftType = [GrantRecord]
+
+    public static func write(_ value: [GrantRecord], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeGrantRecord.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [GrantRecord] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [GrantRecord]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeGrantRecord.read(from: &buf))
         }
         return seq
     }
@@ -7803,6 +7993,38 @@ public func placeSettled(place: TrustedPlace, now: UInt64) -> Bool  {
 })
 }
 /**
+ * [`grants_left`] on the phone's local records: the allowances to lock now that the phone is
+ * not inside the places `left`. [`crate::store::Store::grants_left`] reads the same from the
+ * database.
+ */
+public func grantsToLock(local: LocalState, places: [TrustedPlace], left: [String], now: UInt64, utcOffsetSecs: Int32) -> [GrantRecord]  {
+    return try!  FfiConverterSequenceTypeGrantRecord.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_func_grants_to_lock(
+        FfiConverterTypeLocalState_lower(local),
+        FfiConverterSequenceTypeTrustedPlace.lower(places),
+        FfiConverterSequenceString.lower(left),
+        FfiConverterUInt64.lower(now),
+        FfiConverterInt32.lower(utcOffsetSecs),uniffiCallStatus
+    )
+})
+}
+/**
+ * The trusted places a fix shows the phone is outside: farther from the centre than the
+ * radius plus the fix's accuracy, so a rough fix never says the phone left. Only a fresh fix
+ * counts, dated within [`FIX_FRESH_MS`] before `now` (Unix ms, the phone's clock).
+ */
+public func placesLeftByFix(places: [TrustedPlace], fix: LocationSample, now: UInt64) -> [String]  {
+    return try!  FfiConverterSequenceString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_func_places_left_by_fix(
+        FfiConverterSequenceTypeTrustedPlace.lower(places),
+        FfiConverterTypeLocationSample_lower(fix),
+        FfiConverterUInt64.lower(now),uniffiCallStatus
+    )
+})
+}
+/**
  * The model as the Machines list shows it: `Mac16,10` → `Mac mini`, `MacBookPro18,3` →
  * `MacBook Pro`; any other value as reported, made safe to show (SPEC.md 11.7) and at most
  * 60 characters. Empty when the machine reported nothing.
@@ -7990,6 +8212,12 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sealctl_app_checksum_func_place_settled() != 45654) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sealctl_app_checksum_func_grants_to_lock() != 8719) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sealctl_app_checksum_func_places_left_by_fix() != 3562) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sealctl_app_checksum_func_machine_model_name() != 64728) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -8014,7 +8242,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sealctl_app_checksum_func_open_answered_request() != 53363) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_sealctl_app_checksum_method_store_answered() != 64176) {
+    if (uniffi_sealctl_app_checksum_method_store_answered() != 34913) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_method_store_answered_at() != 28273) {
@@ -8045,6 +8273,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_method_store_erase() != 22683) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sealctl_app_checksum_method_store_grants_left() != 61670) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_method_store_local() != 60227) {

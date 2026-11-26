@@ -11,6 +11,7 @@ pub mod clock;
 pub mod codec;
 pub mod day;
 pub mod decide;
+pub mod delays;
 pub mod error;
 pub mod machine_model;
 pub mod merge;

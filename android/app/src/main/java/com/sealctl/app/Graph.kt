@@ -23,6 +23,7 @@ object Graph {
         blockStore = BlockStore(app)
         engine = Engine(app, vault, store, relayUrl(app), Places(app))
         words = WordsFlow(app, engine)
+        Ready.alarms = SystemReadyAlarms(app)
     }
 
     /**

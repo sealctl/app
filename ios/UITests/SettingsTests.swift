@@ -12,10 +12,15 @@ final class SettingsTests: SealctlTestCase {
         tap("Confirm with Face ID")
         // The first level 3 action on this phone: two card words first (9.6).
         gate(then: "Showing your words")
-        see("Starts at")
-        // The shortened hour ends; confirm again to finish.
-        see("The hour is over. Confirm again to finish.", TimeInterval(Env.delay + 30))
-        tap("Finish")
+        see("goes ahead at")
+        // Show words again while it waits: the same delay, not a second start (11.23).
+        tap("Back")
+        tap("Show words")
+        see("goes ahead at")
+        XCTAssertFalse(app.buttons["Confirm with Face ID"].exists)
+        // The shortened wait ends with the screen open: ready by itself, no notification needed.
+        see("Ready until", TimeInterval(Env.delay + 30))
+        tap("Show my words")
         faceID(then: "Your words", 30)
         // Face ID or the passcode for the words themselves.
         let first = element("word-1")
@@ -39,7 +44,7 @@ final class SettingsTests: SealctlTestCase {
         see("This unpairs your 1 machines")
         tap("Delete")
         faceID(then: "Deleting your relay data")
-        see("The hour is over. Confirm again to finish.", TimeInterval(Env.delay + 30))
+        see("Ready until", TimeInterval(Env.delay + 30))
         tap("Finish")
         faceID(then: "Deleted. The relay has nothing for these words.", 30)
         tap("Done")
@@ -52,7 +57,7 @@ final class SettingsTests: SealctlTestCase {
         tab("Settings")
         tap("Show words")
         tap("Confirm with Face ID")
-        gate(then: "Starts at")
+        gate(then: "goes ahead at")
         tap("Cancel")
         see("Cancelled. Nothing happened.", 20)
     }

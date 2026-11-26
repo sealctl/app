@@ -257,6 +257,7 @@ public enum Texts {
         switch what {
         case "words": return "Your words can be shown at \(time(at))."
         case "delete": return "Your relay data is deleted at \(time(at))."
+        case "leave": return "This phone leaves sealctl at \(time(at))."
         case otherDevice: return "\(otherDeviceNote) goes ahead at \(time(at))."
         default: return handsBackAt(name, at: at)
         }
@@ -308,6 +309,30 @@ public enum Texts {
             ? "This is no longer waiting: the phone or tablet that started it finished it, or it expired."
             : "This waited too long. Start again."
     }
+
+    // MARK: an action on the phone, by where its delay stands (11.23)
+
+    /// Under the title while it waits: when it was started (unknown for an old record) and when it goes ahead.
+    public static func goesAheadAt(started: Int64, at: Int64) -> String {
+        started > 0 ? "Started at \(time(started)) · goes ahead at \(time(at))" : "Goes ahead at \(time(at))"
+    }
+    public static func minutesLeft(_ at: Int64, now: Int64) -> String { "\((max(0, at - now) + 59_999) / 60_000) min left" }
+    public static func readyUntil(_ expires: Int64) -> String { "Ready until \(time(expires))" }
+    public static let readyBody = "The wait is over. Finish before then, or this has to start again."
+    public static func readyButton(_ what: String?) -> String { what == "words" ? "Show my words" : "Finish" }
+    /// The Machines banner once it is ready.
+    public static func readyBanner(_ what: String?, expires: Int64) -> String {
+        "\(delayScreenTitle(what, name: nil)): ready until \(time(expires))."
+    }
+    public static let startAgain = "Start again"
+    /// Another install's action is running when this one is about to start.
+    public static func otherDeviceRunning(_ at: Int64) -> String {
+        "\(otherDeviceNote) goes ahead at \(time(at)). If that was you, finish it there; starting here waits two hours of its own."
+    }
+    public static let tooManyDelayed = "The relay is holding as many protected actions as it can for these words. Try again when one of them has ended."
+    /// The "Ready" notification's body: the window to finish.
+    public static func readyNote(_ expires: Int64) -> String { "Open it by \(time(expires)), or it has to start again." }
+
     public static func handedBack(_ name: String, done: Int, failed: Int) -> String { "\(name) handed back \(done) objects. \(failed) failed." }
 
     // MARK: pairing and errors (11.5, 11.20)

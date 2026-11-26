@@ -563,7 +563,7 @@ extension AppEngine {
             if delay > 0 {
                 await applyLocal(.putDelayed(action: DelayedAction(
                     id: w.relay.id, what: "unseal_all", machine: w.machine.key, releaseAt: UInt64(notBefore),
-                    expires: UInt64(notBefore + 900_000), state: "waiting", cancelledBy: nil)))
+                    expires: UInt64(notBefore + 900_000), state: "waiting", cancelledBy: nil, started: UInt64(nowMs()))))
                 Task { await self.sendNotice(what: "unseal_all", state: "pending", machine: w.machine.key, delayId: w.relay.id, at: notBefore) }
             }
             drop(w.relay.id)
@@ -593,7 +593,7 @@ extension AppEngine {
     nonisolated static func fromRelay(_ d: RelayDelayed) -> DelayedAction {
         DelayedAction(id: d.id, what: d.machine != nil ? "unseal_all" : Texts.otherDevice, machine: d.machine,
                       releaseAt: UInt64(clamping: d.releaseAt), expires: UInt64(clamping: d.expires), state: d.state,
-                      cancelledBy: d.state == "cancelled" ? d.by : nil)
+                      cancelledBy: d.state == "cancelled" ? d.by : nil, started: UInt64(clamping: d.created))
     }
 
     /// Brings the delayed records up to the relay's list. False when the relay could not be asked.
@@ -623,12 +623,19 @@ extension AppEngine {
         await cancelPlansOfCancelledDelays()
         // Records the relay no longer has: fetched by the machine, finished or expired.
         let ids = Set(list.map(\.id))
-        for d in local.delayed where !ids.contains(d.id) && d.state == "waiting" && nowMs() > Int64(d.releaseAt) {
+        for d in local.delayed where !ids.contains(d.id) && nowMs() > Int64(d.releaseAt) {
             var m = d
             // A machine's record leaves when the machine fetches it; a phone-only one leaves
-            // only when this phone finishes it or it expires, so a missing one is gone.
-            m.state = d.machine == nil ? "gone" : "released"
-            await applyLocal(.putDelayed(action: m))
+            // only when this phone finishes it or it expires, so a missing one is gone, also
+            // after the list said `released`.
+            if d.machine == nil && (d.state == "waiting" || d.state == "released") {
+                m.state = "gone"
+                await applyLocal(.putDelayed(action: m))
+                await notifier.remove(ids: [Self.readyId(d.id)])
+            } else if d.machine != nil && d.state == "waiting" {
+                m.state = "released"
+                await applyLocal(.putDelayed(action: m))
+            }
         }
         delayedTick = nowMs()
         return true
@@ -677,9 +684,32 @@ extension AppEngine {
         return took
     }
 
+    /// The "Ready" notification of an action on the phone, which a cancel removes.
+    nonisolated static func readyId(_ id: String) -> String { "ready-\(id)" }
+
+    /// The action on the phone of kind `what` still waiting or ready on this install (or, with
+    /// `Texts.otherDevice`, one another install started): its screen is shown instead of a start.
+    public func runningAction(_ what: String, now: Int64? = nil) -> DelayedAction? {
+        runningPhoneAction(delayed: local.delayed, what: what, now: UInt64(clamping: now ?? nowMs()))
+    }
+
     /// Starts a level 3 action on the phone: nil (go ahead now) at a trusted place, else the
-    /// delayed record the relay keeps for the hour.
+    /// delayed record the relay keeps. One of the same kind still waiting or ready is returned
+    /// instead of starting another, and starts run one after another, so a second tap, or a
+    /// second screen, never registers a second delay (11.23).
     public func startPhoneAction(_ what: String) async throws -> DelayedAction? {
+        let previous = phoneStart
+        let start = Task { @MainActor [weak self] () throws -> DelayedAction? in
+            _ = try? await previous?.value
+            guard let self else { return nil }
+            if let running = self.runningAction(what) { return running }
+            return try await self.beginPhoneAction(what)
+        }
+        phoneStart = start
+        return try await start.value
+    }
+
+    private func beginPhoneAction(_ what: String) async throws -> DelayedAction? {
         await freshClockAtHandAddedPlace()
         if delayLifted() { return nil }
         let delay = delaySecs(Self.levelThreeDelaySecs)
@@ -691,13 +721,16 @@ extension AppEngine {
             startingDelayed.remove(id)
             writeSnapshot()
         }
+        let started = nowMs()
         let d = try await relay.addDelayed(id: id, delay: delay)
         let action = DelayedAction(id: id, what: what, machine: nil, releaseAt: UInt64(clamping: d.releaseAt),
                                    expires: UInt64(clamping: d.expires),
-                                   state: "waiting", cancelledBy: nil)
+                                   state: "waiting", cancelledBy: nil, started: UInt64(clamping: started))
         await applyLocal(.putDelayed(action: action))
-        await notifier.post(id: "ready-\(id)", content: Notes.active(Texts.ready(what), level: .timeSensitive,
-                                                                     userInfo: ["screen": "delayed:\(id)"]),
+        // A time-interval trigger: iOS delivers it at releaseAt (10.1); a cancel removes it.
+        await notifier.post(id: Self.readyId(id), content: Notes.active(Texts.ready(what), body: Texts.readyNote(d.expires),
+                                                                       level: .timeSensitive,
+                                                                       userInfo: ["screen": "delayed:\(id)"]),
                             at: Date(timeIntervalSince1970: Double(d.releaseAt) / 1000))
         Task { await self.sendNotice(what: what, state: "pending", machine: nil, delayId: id, at: d.releaseAt) }
         return action
@@ -712,6 +745,7 @@ extension AppEngine {
                 d.state = "finished"
                 await applyLocal(.putDelayed(action: d))
             }
+            await notifier.remove(ids: [Self.readyId(id)])
             return nil
         } catch let e as RelayError {
             switch e.code {
@@ -732,6 +766,7 @@ extension AppEngine {
                     d.state = "gone"
                     await applyLocal(.putDelayed(action: d))
                 }
+                await notifier.remove(ids: [Self.readyId(id)])
                 return "gone"
             default: return "relay"
             }

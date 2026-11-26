@@ -46,6 +46,7 @@ import com.sealctl.core.app.Event
 import com.sealctl.core.app.LocalEvent
 import com.sealctl.core.app.answerDaysLeft
 import com.sealctl.core.app.appRulesVersion
+import com.sealctl.core.app.runningPhoneAction
 import com.sealctl.core.coreVersion
 import com.sealctl.core.protocolVersion
 import com.sealctl.designsystem.Body
@@ -471,10 +472,15 @@ fun LostMachineScreen(key: String) {
 // ---------- level 3 actions on the phone (11.18, 11.19) ----------
 
 /**
- * A level 3 action: biometrics, then at once at a trusted place or after the hour. After a
+ * A level 3 action: biometrics, then at once at a trusted place or after the two hours. After a
  * fingerprint or face was added or removed, two words from the card come first (9.6).
  * `prepare` is the user's own step (a prompt) that must succeed before a delayed record is
  * used up; `abandon` undoes it when the record can't be finished.
+ *
+ * While an action of this kind waits or is ready, the screen shows its delay instead of a start
+ * (SPEC.md 11.23), and the record it shows ([focus], from a notification or a banner, or the
+ * one just started) stays on screen until closed, also after it was cancelled or expired. One
+ * tap runs at a time: the buttons are off while a start or a finish is on its way.
  */
 @Composable
 private fun PhoneAction(
@@ -483,6 +489,7 @@ private fun PhoneAction(
     reason: String,
     intro: @Composable () -> Unit,
     button: String,
+    focus: String? = null,
     prepare: (suspend () -> Boolean)? = null,
     abandon: () -> Unit = {},
     onRun: suspend () -> String?,
@@ -493,36 +500,64 @@ private fun PhoneAction(
     var error by remember { mutableStateOf<String?>(null) }
     var done by remember { mutableStateOf<String?>(null) }
     var cardCheck by remember { mutableStateOf<GateResult?>(null) }
-    val pending = local.delayed.lastOrNull { it.what == what && it.state in setOf("waiting", "released") }
+    // What a passed card check goes on with: the start or the finish it interrupted.
+    var afterCard by remember { mutableStateOf<(suspend () -> Unit)?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var shown by remember { mutableStateOf(focus) }
     val now by rememberNow()
+    val running = runningPhoneAction(local.delayed, what, now.toULong())
+    LaunchedEffect(running?.id) { if (running != null) shown = running.id }
+    val d = (running?.id ?: shown)?.let { id -> local.delayed.firstOrNull { it.id == id } }
+    val other = if (d == null) runningPhoneAction(local.delayed, Texts.OTHER_DEVICE, now.toULong()) else null
+
+    fun once(block: suspend () -> Unit) {
+        if (busy) return
+        busy = true
+        scope.launch { try { block() } finally { busy = false } }
+    }
+    suspend fun gate(then: suspend () -> Unit): Boolean {
+        when (val g = biometricGate(activity, reason)) {
+            GateResult.Passed -> return true
+            GateResult.Cancelled -> {}
+            GateResult.LockedOut -> error = Texts.LOCKED_OUT
+            GateResult.NoBiometrics -> error = Texts.NO_BIOMETRICS
+            // A new gate is made only after the card check.
+            GateResult.Changed, GateResult.NoGate -> { error = null; afterCard = then; cardCheck = g }
+            is GateResult.Failed -> error = g.message
+        }
+        return false
+    }
     suspend fun run() {
         error = null
         done = onRun()
     }
-    suspend fun confirm() {
-        when (val g = biometricGate(activity, reason)) {
-            GateResult.Passed -> {}
-            GateResult.Cancelled -> return
-            GateResult.LockedOut -> { error = Texts.LOCKED_OUT; return }
-            GateResult.NoBiometrics -> { error = Texts.NO_BIOMETRICS; return }
-            // A new gate is made only after the card check.
-            GateResult.Changed, GateResult.NoGate -> { error = null; cardCheck = g; return }
-            is GateResult.Failed -> { error = g.message; return }
-        }
-        if (pending != null) {
-            if (prepare != null && !prepare()) return
-            when (val r = engine.finishPhoneAction(pending.id)) {
-                null -> { run(); return }
-                "too_early" -> error = "Not yet."
-                "gone" -> error = "This waited too long. Start again."
-                "relay" -> error = "The relay isn't answering, and sealctl can't finish until it confirms nothing was cancelled."
-                else -> error = "Cancelled from ${r.removePrefix("cancelled:").let { by -> engine.machine(by)?.let { engine.displayName(it) } ?: "another device" }}. Nothing happened."
-            }
-            abandon()
+    suspend fun start() {
+        error = null
+        if (!gate { start() }) return
+        val started = try {
+            engine.startPhoneAction(what)
+        } catch (e: RelayException) {
+            error = if (e.code == "too_many_delayed") Texts.TOO_MANY_DELAYED else Texts.RELAY_DOWN
+            return
+        } catch (e: Exception) {
+            error = Texts.RELAY_DOWN
             return
         }
-        val delayed = try { engine.startPhoneAction(what) } catch (e: Exception) { error = Texts.RELAY_DOWN; return }
-        if (delayed == null) run()
+        if (started == null) run() else shown = started.id
+    }
+    suspend fun finish(id: String) {
+        error = null
+        if (!gate { finish(id) }) return
+        if (prepare != null && !prepare()) return
+        when (val r = engine.finishPhoneAction(id)) {
+            null -> { run(); return }
+            "too_early" -> error = "Not yet."
+            // The record now reads as expired or cancelled: the screen says so itself.
+            "gone" -> {}
+            "relay" -> error = "The relay isn't answering, and sealctl can't finish until it confirms nothing was cancelled."
+            else -> if (!r.startsWith("cancelled:")) error = Texts.relayError(r)
+        }
+        abandon()
     }
     if (done != null) {
         Page(null, bottom = { PrimaryButton("Done", { Ui.pop() }) }) { Gap(24); Body(done!!) }
@@ -531,28 +566,34 @@ private fun PhoneAction(
     cardCheck?.let { why ->
         GateCardWords(activity, why, onPassed = {
             cardCheck = null
-            scope.launch { confirm() }
-        }, onCancel = { cardCheck = null })
+            afterCard?.let { next -> afterCard = null; once { next() } }
+        }, onCancel = { cardCheck = null; afterCard = null })
         return
     }
-    if (pending != null && pending.releaseAt.toLong() > now) {
-        DelayView(pending.id, Texts.delayScreenTitle(what, null))
+    if (d != null) {
+        DelayView(d.id, Texts.delayScreenTitle(what, null), PhoneActionButtons(what, busy, error,
+            onReady = { once { finish(d.id) } },
+            onStartAgain = { shown = null; once { start() } }))
         return
     }
     Page(null, bottom = {
         ErrorText(error)
-        PrimaryButton(if (pending != null) "Finish" else button, { scope.launch { confirm() } })
+        PrimaryButton(button, { once { start() } }, enabled = !busy)
         PlainButton("Cancel", { Ui.pop() })
     }) {
         Gap(16)
         intro()
-        if (pending == null) Body(if (engine.delayLifted()) "At your trusted place: this happens as soon as you confirm." else "This starts two hours after you confirm. Your phone and your computers can cancel it until then.")
-        else Body("The hour is over. Confirm again to finish.")
+        Body(if (engine.delayLifted()) "At your trusted place: this happens as soon as you confirm." else "This starts two hours after you confirm. Your phone and your computers can cancel it until then.")
+        if (other != null) {
+            // Not started blindly next to another install's action, whose kind is unknown here.
+            Muted(Texts.otherDeviceRunning(other.releaseAt.toLong()))
+            TextButton({ Ui.push(Route.Delayed(other.id)) }) { Text("Show it") }
+        }
     }
 }
 
 @Composable
-fun ShowWordsScreen(activity: MainActivity) {
+fun ShowWordsScreen(activity: MainActivity, focus: String? = null) {
     val shown by Graph.words.shown.collectAsState()
     val scope = rememberCoroutineScope()
     var error by remember { mutableStateOf<String?>(null) }
@@ -581,6 +622,7 @@ fun ShowWordsScreen(activity: MainActivity) {
         Body("Showing the words is a sensitive action. Every paired computer is told.")
         ErrorText(error)
     }, "Confirm with fingerprint or face",
+        focus = focus,
         prepare = { error = null; open() },
         abandon = { Graph.words.release() },
     ) {
@@ -593,14 +635,14 @@ fun ShowWordsScreen(activity: MainActivity) {
 }
 
 @Composable
-fun DeleteRelayScreen(activity: MainActivity) {
+fun DeleteRelayScreen(activity: MainActivity, focus: String? = null) {
     val engine = Graph.engine
     val n = engine.liveMachines().size
     PhoneAction(activity, "delete", "Confirm deleting your relay data.", {
         Title("Delete your data on the relay?")
         Body("This unpairs your $n machines and deletes what the relay keeps for these words: your encrypted phone backup, your machines' records and every phone's notification address. It can't be undone. The privacy policy lists what stays.")
         Body("Your words, what this phone keeps, and your sealed files are not touched. To use a machine again, run `sealctl pair` on it.")
-    }, "Delete") {
+    }, "Delete", focus = focus) {
         deleteRelayData(lockFirst = true)
     }
 }

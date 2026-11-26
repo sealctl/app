@@ -634,7 +634,7 @@ Nothing about the machine, the agent, the key or the sealed request goes through
 | Words 2 years old | "Your words are 2 years old. Changing them takes about 10 minutes and a new blank card." | `.active`, repeated monthly until done |
 | Machine unseen 90 days | "dev@mbp.example.com hasn't been seen for 90 days. Unpair it?" | `.passive` |
 | Old words requested | "dev@mbp.example.com has an object sealed with seed 7Hq3. Open sealctl to move it." | `.active` |
-| Delay over, action on the phone | "Ready: open sealctl to finish leaving." (or "…to show your words.", "…to delete your relay data.") | `.timeSensitive`, at `releaseAt` |
+| Delay over, action on the phone | "Ready: open sealctl to finish leaving." (or "…to finish showing your words.", "…to finish deleting your relay data."), body "Open it by 12:37, or it has to start again." (`expires`) | `.timeSensitive`, at `releaseAt`: a `UNTimeIntervalNotificationTrigger` added at the start, which iOS delivers on time; removed with a cancel, a finish, or a record the relay no longer has (11.23) |
 | Hand-back report | "dev@mbp.example.com handed back 9 objects. 0 failed." | `.active` |
 
 **Entitlements and capabilities:** Push Notifications; Time Sensitive Notifications; App Groups; Keychain Sharing; `com.apple.developer.usernotifications.filtering` (requested from Apple; the app works without it). Background Modes: none needed. Region monitoring wakes the app without the location background mode.
@@ -673,11 +673,13 @@ Actions are the same as on iOS, with the same titles. On Android 12 and later ea
 
 **Action receiver.** `ApprovalActionReceiver` uses `goAsync()` and finishes within 9 seconds. If the reply is not done by then, it hands the reply to an expedited `WorkManager` job.
 
-**Permissions:** `POST_NOTIFICATIONS` (asked in onboarding, Android 13+). No full-screen intent, no exact alarms, no `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`.
+**Permissions:** `POST_NOTIFICATIONS` (asked in onboarding, Android 13+); `SCHEDULE_EXACT_ALARM` for the "Ready" alarm below, which the person grants in Alarms & reminders (never asked for at the start; not `USE_EXACT_ALARM`, which Google Play keeps for alarm and calendar apps). No full-screen intent, no `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`.
+
+**"Ready" at the end of a delay.** The note of 10.1 ("Ready: open sealctl to finish …", in the `sensitive` channel, timing out at `expires`) comes from an `AlarmManager` alarm at `releaseAt`, set when the action starts; a `WorkManager` job is not used, because Doze and app standby can hold one back far past `releaseAt` and the window to finish is an hour. The alarm is `setExactAndAllowWhileIdle` (`RTC_WAKEUP`) when `canScheduleExactAlarms()` is true (always below Android 12), else `setAndAllowWhileIdle`, which needs no permission and still fires in Doze, though Android may deliver it later than asked; `setAlarmClock` and `setWindow` are not used (the first needs the same permission, the second does not fire in Doze). While such an action waits and exact alarms are not allowed, its delay screen says "Android may tell you late when this is ready. To be told on time, allow alarms for sealctl." [Allow alarms], which opens Alarms & reminders for the app. The alarm wakes a receiver that is not exported; it asks the relay's list first (at most 8 seconds; without an answer the note is posted anyway, since `finish` asks the relay again) and posts the note unless the action was cancelled, finished or is gone. A cancel, a finish, or a record the relay no longer has takes back the alarm and the note. Alarms do not survive a reboot or a force stop: they are set again at boot, after an update, when exact alarms are allowed or taken away (`SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED`), and when the app starts; after a reboot the note of an action already ready is posted again. Taking the permission away ends the app (Android does so); its next start sets the alarms again, inexact.
 
 **Background restriction.** If `ActivityManager.isBackgroundRestricted()` is true, Settings and the Machines tab show: "Android is limiting sealctl in the background. Requests may arrive late." [Open settings]
 
-**Boot and update.** `RECEIVE_BOOT_COMPLETED` and `MY_PACKAGE_REPLACED` re-register geofences. The app is not direct-boot aware: before the first unlock after a reboot it does nothing, and requests expire on the machine.
+**Boot and update.** `RECEIVE_BOOT_COMPLETED` and `MY_PACKAGE_REPLACED` re-register geofences and the "Ready" alarms. The app is not direct-boot aware: before the first unlock after a reboot it does nothing, and requests expire on the machine.
 
 ### 10.3 Battery
 
@@ -1517,12 +1519,30 @@ The screens for levels 2 and 3 (9.6). They are full-screen, never a sheet, and n
 > You approved this away from your trusted places, so it waits two hours. Every paired computer has been told. If this wasn't you, cancel it.
 > [Cancel]
 
-- The same screen serves the actions on the phone: "Showing your words", "Deleting your relay data", "Leaving sealctl".
+- The same screen serves the actions on the phone: "Showing your words", "Deleting your relay data", "Leaving sealctl". Under the title, the time left in large type, then "Started at 09:00 · goes ahead at 11:00":
+
+  > **Showing your words**
+  > 59 min left
+  > Started at 09:00 · goes ahead at 11:00
+  > You approved this away from your trusted places, so it waits two hours. Every paired computer has been told. If this wasn't you, cancel it.
+  > [Cancel]
+
+- One action of each kind at a time on an install. While an action on the phone of a kind is waiting or ready (`releaseAt` passed, `expires` not yet), its start (Show words, Delete my relay data, Leave sealctl step 3) opens that delay screen instead of starting another, from Settings, a banner or a notification alike. Starts are taken one at a time, and a start first looks for a running action of its kind, so a double tap, or a second screen starting the same kind while the first start is still on its way to the relay, returns the first one and never registers a second two-hour delay. The start button is off while a start or a finish is on its way. Where an action stands is worked out from its state and the time (`delay_phase` in the shared crate, with `running_phone_action`), so the screens of both apps agree and a record whose window closed while the app was away reads as expired before the relay's list is fetched again.
+- An action another install started is not one this install can finish (its kind is unknown here, 8.7). While one is waiting or ready, the start screen of every action on the phone says so before anything is started: "A protected action started on another of your devices goes ahead at 11:00. If that was you, finish it there; starting here waits two hours of its own." [Show it]. Starting here then is a choice, and makes a record of its own.
+- The relay holds at most a few delayed records per phone, cancelled ones included, until each expires; `429 too_many_delayed` at a start says "The relay is holding as many protected actions as it can for these words. Try again when one of them has ended."
 - A phone-only delay started on another install with the same words is shown as "Started on another of your devices", because the relay's record carries no kind (the phone's `notice` naming it goes to machines only). Under the countdown: "Showing your words, deleting your relay data or leaving sealctl was started on another phone or tablet with your words. It goes ahead at 11:00. Not you? Cancel it." Its banner: "A protected action started on another of your devices goes ahead at 11:00." Its `delayed` push: "A protected action started on another of your devices" / "It goes ahead at 11:00. Open sealctl to see it or cancel it." (the Android app builds it; on iPhone the extension rewrites it, 10.1). Once the wait is over: "The wait is over. The phone or tablet that started it can go ahead."; once the relay no longer has it: "This is no longer waiting: the phone or tablet that started it finished it, or it expired." A record from another install that names a machine is that machine's `unseal --all` and keeps its "Leaving sealctl on …" title. The install that starts an action never names it so: the relay lists the record and sends its `delayed` push before its answer to `POST delayed` reaches the app, so the app keeps the id aside until it has stored the record. A refresh of the relay's list leaves that id alone, and on iPhone the snapshot counts it among the delayed actions of known kind before the call goes out.
-- A banner on the Machines tab while any delay runs: "dev@mbp.example.com hands everything back at 11:00." [Show] [Cancel]. Cancel needs no biometrics: stopping is always allowed.
+- A banner on the Machines tab while any delay runs: "dev@mbp.example.com hands everything back at 11:00." [Show] [Cancel] ("Your words can be shown at 11:00.", "Your relay data is deleted at 11:00.", "This phone leaves sealctl at 11:00."). Cancel needs no biometrics: stopping is always allowed. Once an action on the phone is ready, until it expires: "Showing your words: ready until 12:00." [Show my words] [Cancel] ([Finish] for deleting the relay data and leaving).
 - Cancelled here: "Cancelled. Nothing was handed back." (an action on the phone: "Cancelled. Nothing happened."). Cancelled from a computer: "Cancelled from dev@box.example.com." The app then sends every machine a `notice` with `state: "cancelled"`.
 - A cancel here is recorded on the phone before the relay is asked, so its plan hands out no more keys whatever the relay answers: `404 gone` (the machine already fetched the approval, or the record expired) or no answer at all. The `notice` goes to every machine either way. A cancel the relay did not get is sent again whenever the phone reads the relay's list and finds that record still `waiting` or `released`. A cancel sent again keeps what the relay answered: once the relay takes it, or gives an answer that will not change (`404 gone`, `403`, any other `4xx`), it is not sent again; a `429` waits out its window, and no answer or a `5xx` waits 15 seconds, twice as long after each further failure, up to 15 minutes.
-- For an action on the phone, at `releaseAt` a local notification says "Ready: open sealctl to finish …" (10.1). A cancel removes it, however the phone hears of it (socket, push, the relay's list, `finish`); on Android the job that posts it asks the relay first. Opening it asks for biometrics, then calls `finish`; only on `200` does the action run. `409 cancelled`: "Cancelled from dev@box.example.com. Nothing happened." The finish is offered until the relay record expires, an hour after `releaseAt` (the app takes `expires` from the relay); after that: "This waited too long. Start again."
+- For an action on the phone, at `releaseAt` a local notification says "Ready: open sealctl to finish …" (10.1; on Android an alarm, 10.2). A cancel removes it, however the phone hears of it (socket, push, the relay's list, `finish`); on Android the alarm that posts it asks the relay first. The screen does not wait for the note: open at `releaseAt` (or opened later from Settings, the banner, the note, or a cold start), the delay screen reads:
+
+  > **Showing your words**
+  > Ready until 12:00
+  > The wait is over. Finish before then, or this has to start again.
+  > [Show my words]
+  > Cancel
+
+  [Show my words] ([Finish] for the others) asks for biometrics, then calls `finish`; only on `200` does the action run (the words then show in the protected view, 11.21). `409 cancelled`: "Cancelled from dev@box.example.com." (or "Cancelled. Nothing happened."). `425 too_early` (the phone's clock ahead of the relay's): "Not yet." The finish is offered until the relay record expires, an hour after `releaseAt` (the app takes `expires` from the relay); after that, or when the relay answers `404 gone` or no longer lists it: "This waited too long. Start again." [Start again] [Close]; [Start again] is a new start (biometrics, and away from a trusted place a new delay).
 - For `unseal --all`, nothing is needed from the phone when the hour ends: the computer fetches the approval from the relay.
 - Other installs with the same words show the delay too (from the relay's note) and can cancel it.
 - Notes, pushes and the relay's list can arrive in any order. Once the phone has recorded a delayed action as cancelled, finished, gone or expired, a later write from an older read (the list fetched just before a cancel note) never makes it wait again; only a known end (cancelled, with who cancelled, or finished) replaces "gone" or "expired". A cancelled plan approval stays cancelled, and a plan approval whose delayed action is cancelled is cancelled too, whichever of the two the phone recorded first (a cancel can arrive while the approval is still being posted); approving the same plan again is a new request with its own record.
@@ -1654,7 +1674,8 @@ The answers match the manifest:
 | Face ID | `NSFaceIDUsageDescription`: "Face ID protects showing and changing your 24 words." | `USE_BIOMETRIC` |
 | Notifications | System prompt | `POST_NOTIFICATIONS` |
 | Network | | `INTERNET`, `ACCESS_NETWORK_STATE` |
-| Boot | | `RECEIVE_BOOT_COMPLETED` (geofences) |
+| Boot | | `RECEIVE_BOOT_COMPLETED` (geofences, "Ready" alarms) |
+| Alarms | | `SCHEDULE_EXACT_ALARM` (the "Ready" alarm on time, 10.2; granted in Alarms & reminders, not asked for) |
 
 ### 14.6 Cryptography and libraries
 

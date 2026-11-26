@@ -911,6 +911,12 @@ impl Store {
                         action.cancelled_by = d.cancelled_by.clone().or(action.cancelled_by);
                     }
                 }
+                // A write that does not know when it started (an older read) keeps the time.
+                if action.started == 0 {
+                    if let Some(d) = l.delayed.iter().find(|d| d.id == action.id) {
+                        action.started = d.started;
+                    }
+                }
                 // Its plan approval is cancelled with it, whichever of the two was stored first.
                 if action.state == "cancelled" {
                     for p in l
@@ -2191,6 +2197,7 @@ mod tests {
                 expires: t0 + 2 * H + 15 * MIN,
                 state: state.into(),
                 cancelled_by: by.map(Into::into),
+                ..Default::default()
             },
         };
         let plan = |id: &str, hash: &str| LocalEvent::PutPlan {
@@ -2234,6 +2241,7 @@ mod tests {
                 expires: t0 + 2 * H + 15 * MIN,
                 state: state.into(),
                 cancelled_by: by.map(Into::into),
+                ..Default::default()
             },
         };
         // The relay's list no longer has it (gone), then the cancel note says who cancelled.
@@ -2261,6 +2269,30 @@ mod tests {
     }
 
     #[test]
+    fn a_write_without_a_start_time_keeps_the_stored_one() {
+        let st = store();
+        let t0 = MIDNIGHT + 9 * H;
+        st.set_now(t0);
+        let action = |state: &str, started: u64| LocalEvent::PutDelayed {
+            action: DelayedAction {
+                id: "d1".into(),
+                what: "words".into(),
+                release_at: t0 + 2 * H,
+                expires: t0 + 3 * H,
+                state: state.into(),
+                started,
+                ..Default::default()
+            },
+        };
+        st.apply_local(action("waiting", t0)).unwrap();
+        let l = st.apply_local(action("released", 0)).unwrap();
+        assert_eq!(
+            (l.delayed[0].state.as_str(), l.delayed[0].started),
+            ("released", t0)
+        );
+    }
+
+    #[test]
     fn a_cancel_is_not_undone_by_an_older_write() {
         let st = store();
         let t0 = MIDNIGHT + 9 * H;
@@ -2274,6 +2306,7 @@ mod tests {
                 expires: t0 + 2 * H + 15 * MIN,
                 state: state.into(),
                 cancelled_by: by.map(Into::into),
+                ..Default::default()
             },
         };
         st.apply_local(action("waiting", None)).unwrap();

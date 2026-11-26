@@ -6,6 +6,9 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.util.Log
 import androidx.work.WorkManager
+import com.sealctl.core.app.DelayPhase
+import com.sealctl.core.app.delayPhase
+import com.sealctl.core.app.runningPhoneAction
 import com.sealctl.core.Decision
 import com.sealctl.core.MachineMessage
 import com.sealctl.core.MessageKind
@@ -89,6 +92,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -184,6 +188,8 @@ class Engine(
     private val cancelResends = CancelResends()
     /** Delayed ids this install is registering with the relay (SPEC.md 11.23). */
     private val startingDelayed = StartingDelayed()
+    /** One start of an action on the phone at a time: a second tap finds the first's record. */
+    private val phoneStarts = PhoneActionStarts()
     /** Exits from trusted places so far, to tell whether one came while an answer was on its way. */
     private val placeExits = AtomicInteger(0)
     private var uploadJob: Job? = null
@@ -899,7 +905,7 @@ class Engine(
                         applyLocal(LocalEvent.PutDelayed(DelayedAction(
                             id = w.relay.id, what = "unseal_all", machine = w.machine.key,
                             releaseAt = notBefore.toULong(), expires = (notBefore + 900_000).toULong(),
-                            state = "waiting", cancelledBy = null,
+                            state = "waiting", cancelledBy = null, started = System.currentTimeMillis().toULong(),
                         )))
                         scope.launch { sendNotice("unseal_all", "pending", w.machine.key, w.relay.id, notBefore) }
                     }
@@ -948,10 +954,15 @@ class Engine(
         // Records the relay no longer has: fetched by the machine, finished or expired.
         val ids = list.map { it.id }.toSet()
         for (d in local.value.delayed) {
-            if (d.id !in ids && d.state == "waiting" && System.currentTimeMillis() > d.releaseAt.toLong()) {
-                // A machine's record leaves when the machine fetches it; a phone-only one leaves
-                // only when this phone finishes it or it expires, so a missing one is gone.
-                applyLocal(LocalEvent.PutDelayed(d.copy(state = if (d.machine == null) "gone" else "released")))
+            if (d.id in ids || System.currentTimeMillis() <= d.releaseAt.toLong()) continue
+            // A machine's record leaves when the machine fetches it; a phone-only one leaves
+            // only when this phone finishes it or it expires, so a missing one is gone, also
+            // after the list said `released`.
+            if (d.machine == null && (d.state == "waiting" || d.state == "released")) {
+                applyLocal(LocalEvent.PutDelayed(d.copy(state = "gone")))
+                takeBackReady(d.id)
+            } else if (d.machine != null && d.state == "waiting") {
+                applyLocal(LocalEvent.PutDelayed(d.copy(state = "released")))
             }
         }
         delayedTick.value = System.currentTimeMillis()
@@ -994,32 +1005,80 @@ class Engine(
         failed == null
     }
 
-    /** A cancelled action on the phone: no "Ready" note at its end (SPEC.md 11.23). */
+    /**
+     * An action on the phone that ended (cancelled, finished, gone): no "Ready" alarm or note
+     * for it (SPEC.md 11.23).
+     */
     private fun takeBackReady(id: String) {
-        Notify.cancel(context, "ready-$id")
+        Notify.cancel(context, Ready.tag(id))
+        Ready.cancel(id)
+        // Before alarms, a WorkManager job posted the note: one left from then goes too.
         runCatching { WorkManager.getInstance(context).cancelUniqueWork("release-$id") }
     }
 
-    /** Starts a level 3 action on the phone: at once at a trusted place, else after the hour. */
-    suspend fun startPhoneAction(what: String): DelayedAction? {
+    /**
+     * The action on the phone of kind [what] still waiting or ready on this install (or, with
+     * [Texts.OTHER_DEVICE], one another install started): its screen is shown instead of a start.
+     */
+    fun runningAction(what: String, now: Long = System.currentTimeMillis()): DelayedAction? =
+        runningPhoneAction(local.value.delayed, what, now.toULong())
+
+    /**
+     * Starts a level 3 action on the phone: null (go ahead now) at a trusted place, else the
+     * delayed record the relay keeps. One of the same kind still waiting or ready is returned
+     * instead of starting another, and starts are taken one at a time, so a second tap, or a
+     * second screen, never registers a second delay (SPEC.md 11.23).
+     */
+    suspend fun startPhoneAction(what: String): DelayedAction? = phoneStarts.start(running = { runningAction(what) }) begin@{
         freshClockAtHandAddedPlace()
-        if (delayLifted()) return null
+        if (delayLifted()) return@begin null
         val delay = delaySecs(Delays.LEVEL3_SECS)
         val id = randomId()
+        val started = System.currentTimeMillis()
         val action = startingDelayed.start(id, add = { relay.addDelayed(id, delay) }) { d ->
-            DelayedAction(id, what, null, d.releaseAt.toULong(), d.expires.toULong(), "waiting", null)
+            DelayedAction(id, what, null, d.releaseAt.toULong(), d.expires.toULong(), "waiting", null, started.toULong())
                 .also { applyLocal(LocalEvent.PutDelayed(it)) }
         }
         val at = action.releaseAt.toLong()
-        ReleaseWorker.schedule(context, id, what, at)
+        Ready.schedule(id, what, at)
         scope.launch { sendNotice(what, "pending", null, id, at) }
-        return action
+        action
     }
 
-    /** After the hour and biometrics again: the relay must answer `finish` with 200. */
+    /**
+     * The alarm at the end of [id]'s delay (SPEC.md 10.2): a cancel from a computer may not
+     * have reached this phone yet, so the relay is asked first, then "Ready" is posted, until
+     * the action expires. Without an answer in time it is posted all the same: `finish` asks
+     * the relay again before anything happens.
+     */
+    suspend fun readyAlarm(id: String) {
+        withTimeoutOrNull(8_000) { refreshDelayed() }
+        val d = local.value.delayed.firstOrNull { it.id == id } ?: return
+        val now = System.currentTimeMillis()
+        val phase = delayPhase(d, now.toULong())
+        // An alarm never fires early; a phone clock ahead of the relay's may make it look so.
+        if (!Ready.isOwn(d) || (phase != DelayPhase.READY && phase != DelayPhase.WAITING)) return
+        Notify.show(context, Notify.SENSITIVE, Ready.tag(id), Texts.ready(d.what), Texts.readyNote(d.expires.toLong()),
+            timeoutMs = d.expires.toLong() - now, screen = "delayed:$id")
+    }
+
+    /**
+     * Sets the "Ready" alarms again: alarms do not survive a reboot or a force stop, and one set
+     * while exact alarms were not allowed is made exact once they are (SPEC.md 10.2). After a
+     * reboot ([afterBoot]) the note of an action already ready is posted again.
+     */
+    suspend fun restoreReadyAlarms(afterBoot: Boolean) {
+        // Before alarms, WorkManager jobs posted the note: none is left to post it twice.
+        for (d in local.value.delayed.filter(Ready::isOwn)) runCatching { WorkManager.getInstance(context).cancelUniqueWork("release-${d.id}") }
+        val due = Ready.restore(local.value.delayed, System.currentTimeMillis())
+        if (afterBoot) for (id in due) readyAlarm(id)
+    }
+
+    /** After the wait and biometrics again: the relay must answer `finish` with 200. */
     suspend fun finishPhoneAction(id: String): String? = try {
         relay.finishDelayed(id)
         local.value.delayed.firstOrNull { it.id == id }?.let { applyLocal(LocalEvent.PutDelayed(it.copy(state = "finished"))) }
+        takeBackReady(id)
         null
     } catch (e: RelayException) {
         when (e.code) {
@@ -1035,6 +1094,7 @@ class Engine(
                 // Terminal: the relay no longer has it (it expired). Record that, so the screen
                 // offers a new start instead of a Finish that can only get `gone` again.
                 local.value.delayed.firstOrNull { it.id == id }?.let { applyLocal(LocalEvent.PutDelayed(it.copy(state = "gone"))) }
+                takeBackReady(id)
                 "gone"
             }
             else -> "relay"

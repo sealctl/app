@@ -448,10 +448,13 @@ pub struct DelayedAction {
     pub release_at: u64,
     /// Unix ms.
     pub expires: u64,
-    /// `waiting`, `released`, `cancelled`, `finished`.
+    /// `waiting`, `released`, `cancelled`, `finished`, `gone`, `expired` ([`crate::delays::delay_phase`]).
     pub state: String,
     /// Who cancelled: `phone` or a machine key.
     pub cancelled_by: Option<String>,
+    /// When it was started, Unix ms; 0 for a record kept before this was recorded.
+    #[uniffi(default = 0)]
+    pub started: u64,
 }
 
 /// One location sample of a place candidate.

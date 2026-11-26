@@ -223,6 +223,7 @@ object Texts {
     fun delayedAt(what: String, name: String, at: Long) = when (what) {
         "words" -> "Your words can be shown at ${time(at)}."
         "delete" -> "Your relay data is deleted at ${time(at)}."
+        "leave" -> "This phone leaves sealctl at ${time(at)}."
         OTHER_DEVICE -> "$OTHER_DEVICE_NOTE goes ahead at ${time(at)}."
         else -> handsBackAt(name, at)
     }
@@ -263,6 +264,26 @@ object Texts {
     fun delayGone(what: String?) =
         if (what == OTHER_DEVICE) "This is no longer waiting: the phone or tablet that started it finished it, or it expired."
         else "This waited too long. Start again."
+
+    // ---------- an action on the phone, by where its delay stands (SPEC.md 11.23) ----------
+
+    /** Under the title while it waits: when it was started (unknown for an old record) and when it goes ahead. */
+    fun goesAheadAt(started: Long, at: Long) =
+        if (started > 0) "Started at ${time(started)} · goes ahead at ${time(at)}" else "Goes ahead at ${time(at)}"
+    fun minutesLeft(at: Long, now: Long) = "${((at - now).coerceAtLeast(0) + 59_999) / 60_000} min left"
+    fun readyUntil(expires: Long) = "Ready until ${time(expires)}"
+    const val READY_BODY = "The wait is over. Finish before then, or this has to start again."
+    fun readyButton(what: String?) = if (what == "words") "Show my words" else "Finish"
+    /** The Machines banner once it is ready. */
+    fun readyBanner(what: String?, expires: Long) = "${delayScreenTitle(what, null)}: ready until ${time(expires)}."
+    const val START_AGAIN = "Start again"
+    /** Another install's action is running when this one is about to start. */
+    fun otherDeviceRunning(at: Long) =
+        "$OTHER_DEVICE_NOTE goes ahead at ${time(at)}. If that was you, finish it there; starting here waits two hours of its own."
+    const val TOO_MANY_DELAYED = "The relay is holding as many protected actions as it can for these words. Try again when one of them has ended."
+    const val EXACT_ALARMS_OFF = "Android may tell you late when this is ready. To be told on time, allow alarms for sealctl."
+    const val ALLOW_ALARMS = "Allow alarms"
+
     fun handedBack(name: String, done: Int, failed: Int) = "$name handed back $done objects. $failed failed."
 
     // ---------- pairing and errors (11.5, 11.20) ----------
@@ -296,6 +317,8 @@ object Texts {
     const val CANCELLED_BODY = "A pending sensitive action was cancelled."
     const val PLACE_LEARNED = "Trust this place? You opened your machines here on 3 mornings."
     fun leftPlace(place: String, names: String) = "You left $place. Locked $names."
+    /** The "Ready" notification's body: the window to finish. */
+    fun readyNote(expires: Long) = "Open it by ${time(expires)}, or it has to start again."
     fun ready(what: String) = "Ready: open sealctl to finish " + when (what) {
         "words" -> "showing your words."
         "delete" -> "deleting your relay data."

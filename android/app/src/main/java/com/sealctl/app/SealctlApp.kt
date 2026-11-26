@@ -23,6 +23,8 @@ class SealctlApp : Application(), NotifyHost, PlacesHost {
         engine.scope.launch {
             engine.computePhase()
             engine.monitorPlaces()
+            // Alarms do not survive a force stop: the "Ready" ones are set again (SPEC.md 10.2).
+            engine.restoreReadyAlarms(afterBoot = false)
             // Debug builds only: the FCM token, so the bench can send a test push before pairing.
             if (BuildConfig.DEBUG) Push.token()?.let { dlog("fcm token $it") }
         }

@@ -77,4 +77,22 @@ class TextsTest {
         assertEquals("This waited too long. Start again.", Texts.delayGone("words"))
         assertTrue(Texts.delayGone("unknown").startsWith("This is no longer waiting"))
     }
+
+    /** An action on the phone, by where its delay stands (SPEC.md 11.23). */
+    @Test
+    fun phoneActionPhases() {
+        val started = 1_000_000L
+        val at = started + 7_200_000
+        val until = at + 3_600_000
+        assertEquals("Started at ${Texts.time(started)} · goes ahead at ${Texts.time(at)}", Texts.goesAheadAt(started, at))
+        assertEquals("Goes ahead at ${Texts.time(at)}", Texts.goesAheadAt(0, at))
+        assertEquals("59 min left", Texts.minutesLeft(at, at - 59 * 60_000))
+        assertEquals("Ready until ${Texts.time(until)}", Texts.readyUntil(until))
+        assertEquals("Show my words", Texts.readyButton("words"))
+        assertEquals("Finish", Texts.readyButton("delete"))
+        assertEquals("Finish", Texts.readyButton("leave"))
+        assertEquals("Showing your words: ready until ${Texts.time(until)}.", Texts.readyBanner("words", until))
+        assertEquals("Open it by ${Texts.time(until)}, or it has to start again.", Texts.readyNote(until))
+        assertEquals("This phone leaves sealctl at ${Texts.time(at)}.", Texts.delayedAt("leave", "This phone", at))
+    }
 }

@@ -6,6 +6,8 @@ import com.sealctl.relay.RateLimitedException
 import com.sealctl.relay.RelayDelayed
 import com.sealctl.relay.RelayException
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Which approved plan answers a machine's later key requests (SPEC.md 9.6). A plan stops
@@ -20,7 +22,7 @@ internal object Plans {
      */
     fun fromRelay(d: RelayDelayed): DelayedAction =
         DelayedAction(d.id, if (d.machine != null) "unseal_all" else Texts.OTHER_DEVICE, d.machine,
-            d.releaseAt.toULong(), d.expires.toULong(), d.state, d.by)
+            d.releaseAt.toULong(), d.expires.toULong(), d.state, d.by, d.created.toULong())
 
     /** Plans of [machine] that may still hand out keys. */
     fun live(plans: List<PlanApprovalRecord>, delayed: List<DelayedAction>, machine: String): List<PlanApprovalRecord> {
@@ -171,4 +173,16 @@ internal class StartingDelayed {
     fun fromRelay(d: RelayDelayed, stored: (String) -> Boolean, put: (DelayedAction) -> Unit) {
         synchronized(this) { if (d.id !in ids && !stored(d.id)) put(Plans.fromRelay(d)) }
     }
+}
+
+/**
+ * Starts of the actions on the phone (SPEC.md 11.23), one at a time: a start first looks for
+ * one of its kind still waiting or ready ([running]) and returns that instead of calling
+ * [begin], so a double tap, or a second screen starting the same kind while the first start is
+ * still on its way to the relay, never registers a second two-hour delay.
+ */
+internal class PhoneActionStarts {
+    private val lock = Mutex()
+
+    suspend fun <T : Any> start(running: () -> T?, begin: suspend () -> T?): T? = lock.withLock { running() ?: begin() }
 }

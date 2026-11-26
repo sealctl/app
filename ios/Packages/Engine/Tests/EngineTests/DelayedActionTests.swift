@@ -54,5 +54,28 @@ struct DelayedActionTests {
         #expect(Texts.delayedNote("words", at: at) == (Texts.delayedTitle, Texts.delayedBody))
         #expect(Texts.delayedNote(nil, at: at) == (Texts.delayedTitle, Texts.delayedBody))
         #expect(Texts.delayGone("words") == "This waited too long. Start again.")
+        #expect(Texts.delayedAt("leave", name: "This phone", at: at) == "This phone leaves sealctl at \(Texts.time(at)).")
+    }
+
+    /// An action on the phone, by where its delay stands (11.23); the same texts as Android.
+    @Test func phoneActionPhases() {
+        let started: Int64 = 1_000_000
+        let release = started + 7_200_000
+        let until = release + 3_600_000
+        #expect(Texts.goesAheadAt(started: started, at: release) == "Started at \(Texts.time(started)) · goes ahead at \(Texts.time(release))")
+        #expect(Texts.goesAheadAt(started: 0, at: release) == "Goes ahead at \(Texts.time(release))")
+        #expect(Texts.minutesLeft(release, now: release - 59 * 60_000) == "59 min left")
+        #expect(Texts.readyUntil(until) == "Ready until \(Texts.time(until))")
+        #expect(Texts.readyButton("words") == "Show my words")
+        #expect(Texts.readyButton("delete") == "Finish")
+        #expect(Texts.readyBanner("words", expires: until) == "Showing your words: ready until \(Texts.time(until)).")
+        #expect(Texts.readyNote(until) == "Open it by \(Texts.time(until)), or it has to start again.")
+        let d = DelayedAction(id: "a", what: "words", machine: nil, releaseAt: UInt64(release), expires: UInt64(until),
+                              state: "waiting", cancelledBy: nil, started: UInt64(started))
+        #expect(delayPhase(action: d, now: UInt64(release - 1)) == .waiting)
+        #expect(delayPhase(action: d, now: UInt64(release)) == .ready)
+        #expect(delayPhase(action: d, now: UInt64(until)) == .expired)
+        #expect(runningPhoneAction(delayed: [d], what: "words", now: UInt64(release)) == d)
+        #expect(runningPhoneAction(delayed: [d], what: "words", now: UInt64(until)) == nil)
     }
 }

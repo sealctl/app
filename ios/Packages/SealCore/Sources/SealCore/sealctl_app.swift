@@ -1973,13 +1973,17 @@ public struct DelayedAction: Equatable, Hashable {
      */
     public var expires: UInt64
     /**
-     * `waiting`, `released`, `cancelled`, `finished`.
+     * `waiting`, `released`, `cancelled`, `finished`, `gone`, `expired` ([`crate::delays::delay_phase`]).
      */
     public var state: String
     /**
      * Who cancelled: `phone` or a machine key.
      */
     public var cancelledBy: String?
+    /**
+     * When it was started, Unix ms; 0 for a record kept before this was recorded.
+     */
+    public var started: UInt64
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -2000,11 +2004,14 @@ public struct DelayedAction: Equatable, Hashable {
          * Unix ms.
          */expires: UInt64, 
         /**
-         * `waiting`, `released`, `cancelled`, `finished`.
+         * `waiting`, `released`, `cancelled`, `finished`, `gone`, `expired` ([`crate::delays::delay_phase`]).
          */state: String, 
         /**
          * Who cancelled: `phone` or a machine key.
-         */cancelledBy: String?) {
+         */cancelledBy: String?, 
+        /**
+         * When it was started, Unix ms; 0 for a record kept before this was recorded.
+         */started: UInt64 = UInt64(0)) {
         self.id = id
         self.what = what
         self.machine = machine
@@ -2012,6 +2019,7 @@ public struct DelayedAction: Equatable, Hashable {
         self.expires = expires
         self.state = state
         self.cancelledBy = cancelledBy
+        self.started = started
     }
 
     
@@ -2036,7 +2044,8 @@ public struct FfiConverterTypeDelayedAction: FfiConverterRustBuffer {
                 releaseAt: FfiConverterUInt64.read(from: &buf), 
                 expires: FfiConverterUInt64.read(from: &buf), 
                 state: FfiConverterString.read(from: &buf), 
-                cancelledBy: FfiConverterOptionString.read(from: &buf)
+                cancelledBy: FfiConverterOptionString.read(from: &buf), 
+                started: FfiConverterUInt64.read(from: &buf)
         )
     }
 
@@ -2048,6 +2057,7 @@ public struct FfiConverterTypeDelayedAction: FfiConverterRustBuffer {
         FfiConverterUInt64.write(value.expires, into: &buf)
         FfiConverterString.write(value.state, into: &buf)
         FfiConverterOptionString.write(value.cancelledBy, into: &buf)
+        FfiConverterUInt64.write(value.started, into: &buf)
     }
 }
 
@@ -5716,6 +5726,111 @@ public func FfiConverterTypeBiometrics_lower(_ value: Biometrics) -> RustBuffer 
 
 
 /**
+ * Where a delayed action stands (SPEC.md 11.23 Delay).
+ */
+
+public enum DelayPhase: Equatable, Hashable {
+    
+    /**
+     * Counting down to `release_at`.
+     */
+    case waiting
+    /**
+     * Past `release_at` and before `expires`: an action on the phone can be finished.
+     */
+    case ready
+    /**
+     * Past `expires`, or the relay no longer has it: it can only be started again.
+     */
+    case expired
+    /**
+     * Cancelled, here or elsewhere.
+     */
+    case cancelled
+    /**
+     * Finished on the phone, or, for a machine's `unseal --all`, its wait is over.
+     */
+    case finished
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension DelayPhase: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDelayPhase: FfiConverterRustBuffer {
+    typealias SwiftType = DelayPhase
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DelayPhase {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .waiting
+        
+        case 2: return .ready
+        
+        case 3: return .expired
+        
+        case 4: return .cancelled
+        
+        case 5: return .finished
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: DelayPhase, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .waiting:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .ready:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .expired:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .cancelled:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .finished:
+            writeInt(&buf, Int32(5))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDelayPhase_lift(_ buf: RustBuffer) throws -> DelayPhase {
+    return try FfiConverterTypeDelayPhase.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDelayPhase_lower(_ value: DelayPhase) -> RustBuffer {
+    return FfiConverterTypeDelayPhase.lower(value)
+}
+
+
+
+/**
  * A change to the relay state.
  */
 
@@ -6429,6 +6544,30 @@ fileprivate struct FfiConverterOptionTypeDayRecord: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeDayRecord.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeDelayedAction: FfiConverterRustBuffer {
+    typealias SwiftType = DelayedAction?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeDelayedAction.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeDelayedAction.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -7576,6 +7715,34 @@ public func placeSettled(place: TrustedPlace, now: UInt64) -> Bool  {
 })
 }
 /**
+ * Where `action` stands at `now` (Unix ms). A machine's record (`unseal --all`) needs nothing
+ * from the phone when its wait ends, so it is `Finished` from `release_at` on.
+ */
+public func delayPhase(action: DelayedAction, now: UInt64) -> DelayPhase  {
+    return try!  FfiConverterTypeDelayPhase_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_func_delay_phase(
+        FfiConverterTypeDelayedAction_lower(action),
+        FfiConverterUInt64.lower(now),uniffiCallStatus
+    )
+})
+}
+/**
+ * The phone-only action of kind `what` that is still waiting or ready at `now`, the newest
+ * when there are several. A start button of that kind shows it instead of starting another,
+ * and with `what` = [`OTHER_DEVICE`] it finds one another install started (SPEC.md 11.23).
+ */
+public func runningPhoneAction(delayed: [DelayedAction], what: String, now: UInt64) -> DelayedAction?  {
+    return try!  FfiConverterOptionTypeDelayedAction.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_sealctl_app_fn_func_running_phone_action(
+        FfiConverterSequenceTypeDelayedAction.lower(delayed),
+        FfiConverterString.lower(what),
+        FfiConverterUInt64.lower(now),uniffiCallStatus
+    )
+})
+}
+/**
  * The model as the Machines list shows it: `Mac16,10` → `Mac mini`, `MacBookPro18,3` →
  * `MacBook Pro`; any other value as reported, made safe to show (SPEC.md 11.7) and at most
  * 60 characters. Empty when the machine reported nothing.
@@ -7750,6 +7917,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_func_place_settled() != 45654) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sealctl_app_checksum_func_delay_phase() != 65285) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sealctl_app_checksum_func_running_phone_action() != 4141) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sealctl_app_checksum_func_machine_model_name() != 64728) {

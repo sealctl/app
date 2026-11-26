@@ -54,6 +54,8 @@ public final class AppEngine {
     /// Delayed ids this install is registering with the relay: the relay's list may show one
     /// before it is recorded here, and it is not another install's (11.23).
     @ObservationIgnored var startingDelayed: Set<String> = []
+    /// The last start of an action on the phone; the next one waits for it (11.23).
+    @ObservationIgnored var phoneStart: Task<DelayedAction?, Error>?
     @ObservationIgnored let approvals = SerialQueue()
     @ObservationIgnored var socket: PhoneSocket?
     @ObservationIgnored var uploadTask: Task<Void, Never>?

@@ -22,10 +22,13 @@ final class RecordingNotifier: Notifier {
     var bodies: [String] = []
     var removed: [String] = []
     var badge = 0
+    /// When each scheduled post is due, by id (nil: at once).
+    var due: [String: Date] = [:]
 
     func post(id: String, content: UNNotificationContent, at: Date?) {
         posted.append((id, content.title))
         bodies.append(content.body)
+        due[id] = at
     }
     func remove(ids: [String]) { removed += ids }
     func removeStale(now: Int64, answered: Set<String>) {}

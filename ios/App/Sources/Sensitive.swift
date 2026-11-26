@@ -244,39 +244,79 @@ private struct PlanView: View {
     }
 }
 
-/// The countdown of a delayed approval, with Cancel (11.23 Delay).
+/// What the delay screen of an action this install started on the phone does once its wait is
+/// over (11.23): `onReady` (Show my words, Finish) until it expires, then `onStartAgain`.
+/// `busy` while one of them runs, so a second tap starts nothing.
+struct PhoneActionButtons {
+    let what: String
+    let busy: Bool
+    let error: String?
+    let onReady: () -> Void
+    let onStartAgain: () -> Void
+}
+
+/// A delayed approval (11.23 Delay): its countdown with Cancel. For an action this install
+/// started on the phone (`phone`), the screen turns ready by itself at `releaseAt`, notification
+/// or not: "Ready until …" with `onReady`; after `expires`, "This waited too long" with Start again.
 struct DelayView: View {
     @Environment(AppModel.self) private var model
     @Environment(Router.self) private var router
     let id: String
     let title: String
+    var phone: PhoneActionButtons?
 
     var body: some View {
         let e = model.engine!
         let d = e.local.delayed.first { $0.id == id }
         Ticker { now in
+            let phase = d.map { delayPhase(action: $0, now: UInt64(clamping: now)) }
             Page(onBack: { router.pop() }) {
                 Gap(24)
                 TitleText(title)
-                switch d?.state {
-                case "waiting":
-                    Text(Texts.startsAt(Int64(d!.releaseAt), now: now)).font(.title3.weight(.semibold)).foregroundStyle(Palette.waiting)
-                        .accessibilityIdentifier("countdown")
-                    BodyText(Texts.delayWaiting(d?.what, at: Int64(d!.releaseAt)))
-                case "cancelled":
-                    if d?.cancelledBy == nil || d?.cancelledBy == "phone" {
-                        BodyText(Texts.delayCancelledHere(d?.what))
-                    } else {
-                        BodyText(Texts.cancelledFrom(d!.cancelledBy.flatMap { e.machine($0) }.map(e.displayName) ?? "a computer"))
+                if let d {
+                    switch phase {
+                    case .waiting:
+                        if phone != nil {
+                            Text(Texts.minutesLeft(Int64(d.releaseAt), now: now)).font(.title3.weight(.semibold)).foregroundStyle(Palette.waiting)
+                                .accessibilityIdentifier("countdown")
+                            MutedText(Texts.goesAheadAt(started: Int64(d.started), at: Int64(d.releaseAt)))
+                        } else {
+                            Text(Texts.startsAt(Int64(d.releaseAt), now: now)).font(.title3.weight(.semibold)).foregroundStyle(Palette.waiting)
+                                .accessibilityIdentifier("countdown")
+                        }
+                        BodyText(Texts.delayWaiting(d.what, at: Int64(d.releaseAt)))
+                    case .ready:
+                        if phone != nil {
+                            Text(Texts.readyUntil(Int64(d.expires))).font(.title3.weight(.semibold)).foregroundStyle(Palette.accent)
+                                .accessibilityIdentifier("ready")
+                            BodyText(Texts.readyBody)
+                        } else {
+                            BodyText(Texts.delayOver(d.what))
+                        }
+                    case .cancelled:
+                        if d.cancelledBy == nil || d.cancelledBy == "phone" {
+                            BodyText(Texts.delayCancelledHere(d.what))
+                        } else {
+                            BodyText(Texts.cancelledFrom(d.cancelledBy.flatMap { e.machine($0) }.map(e.displayName) ?? "a computer"))
+                        }
+                    case .finished:
+                        BodyText(Texts.delayOver(d.what))
+                    default:
+                        BodyText(Texts.delayGone(d.what))
                     }
-                case "released", "finished":
-                    BodyText(Texts.delayOver(d?.what))
-                default:
-                    BodyText(Texts.delayGone(d?.what))
+                } else {
+                    BodyText(Texts.delayGone(nil))
                 }
             } bottom: {
-                if d?.state == "waiting" {
+                ErrorText(phone?.error)
+                if phase == .waiting {
                     PrimaryButton("Cancel") { Task { await e.cancelDelayed(id) } }
+                } else if phase == .ready, let phone {
+                    PrimaryButton(Texts.readyButton(phone.what), enabled: !phone.busy) { phone.onReady() }
+                    PlainButton("Cancel") { Task { await e.cancelDelayed(id) } }
+                } else if phase == .expired, let phone {
+                    PrimaryButton(Texts.startAgain, enabled: !phone.busy) { phone.onStartAgain() }
+                    PlainButton("Close") { router.pop() }
                 } else {
                     PrimaryButton("Close") { router.pop() }
                 }
@@ -291,6 +331,8 @@ struct DelayView: View {
     }
 }
 
+/// A delayed record's screen, from a notification or a banner. An action this install started
+/// on the phone opens its own screen, which can finish it once ready (11.23).
 struct DelayedView: View {
     @Environment(AppModel.self) private var model
     let id: String
@@ -298,7 +340,16 @@ struct DelayedView: View {
     var body: some View {
         let e = model.engine!
         let d = e.local.delayed.first { $0.id == id }
-        DelayView(id: id, title: Texts.delayScreenTitle(d?.what, name: d?.machine.flatMap { e.machine($0) }.map(e.displayName)))
+        let own = d.map { $0.machine == nil } ?? false
+        if own, d?.what == "words" {
+            ShowWordsView(focus: id)
+        } else if own, d?.what == "delete" {
+            DeleteRelayView(focus: id)
+        } else if own, d?.what == "leave", e.local.leaveStep == 3 {
+            LeaveView()
+        } else {
+            DelayView(id: id, title: Texts.delayScreenTitle(d?.what, name: d?.machine.flatMap { e.machine($0) }.map(e.displayName)))
+        }
     }
 }
 

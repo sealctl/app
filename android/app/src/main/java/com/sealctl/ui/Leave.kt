@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -21,6 +22,7 @@ import com.sealctl.core.app.Event
 import com.sealctl.core.app.HandbackReport
 import com.sealctl.core.app.LocalEvent
 import com.sealctl.core.app.ReportItem
+import com.sealctl.core.app.runningPhoneAction
 import com.sealctl.designsystem.Body
 import com.sealctl.designsystem.Mono
 import com.sealctl.designsystem.Muted
@@ -45,6 +47,15 @@ fun LeaveScreen(activity: MainActivity) {
     var error by remember { mutableStateOf<String?>(null) }
     // Two card words before a new gate (9.6) at step 1 or 3; then the step goes on.
     var gateCard by remember { mutableStateOf<GateResult?>(null) }
+    // At step 3: one start or finish at a time, and the delay on screen until closed.
+    var busy by remember { mutableStateOf(false) }
+    var shown by remember { mutableStateOf<String?>(null) }
+    var finishing by remember { mutableStateOf(false) }
+    fun once(block: suspend () -> Unit) {
+        if (busy) return
+        busy = true
+        scope.launch { try { block() } finally { busy = false } }
+    }
     fun go(n: Int, skipped: List<String> = local.leaveSkipped) = engine.applyLocal(LocalEvent.SetLeave(n.toUInt(), skipped))
     fun cancel() { go(0, emptyList()); Ui.pop() }
     // Skipped computers keep their names after step 5 forgets every machine.
@@ -60,34 +71,44 @@ fun LeaveScreen(activity: MainActivity) {
             else -> error = Texts.NO_BIOMETRICS
         }
     }
-    suspend fun confirm() {
-        val pending = local.delayed.lastOrNull { it.what == "leave" && it.state in setOf("waiting", "released") }
+    /** Step 3: biometrics, then the delayed record [id] finished, or a new start (11.22, 11.23). */
+    suspend fun confirm(id: String?) {
+        error = null
         when (val g = biometricGate(activity, "Confirm leaving sealctl.")) {
             GateResult.Passed -> {}
             GateResult.Cancelled -> return
             GateResult.LockedOut -> { error = Texts.LOCKED_OUT; return }
-            GateResult.Changed, GateResult.NoGate -> { error = null; gateCard = g; return }
+            GateResult.Changed, GateResult.NoGate -> { error = null; finishing = id != null; gateCard = g; return }
             else -> { error = Texts.NO_BIOMETRICS; return }
         }
-        if (pending != null) {
-            when (engine.finishPhoneAction(pending.id)) {
+        if (id != null) {
+            when (engine.finishPhoneAction(id)) {
                 null -> go(4)
                 "relay" -> error = "The relay isn't answering, and sealctl can't finish until it confirms nothing was cancelled."
                 "too_early" -> error = "Not yet."
-                "gone" -> error = "This waited too long. Start again."
-                else -> error = "Cancelled from another device. Nothing happened."
+                // Expired or cancelled: the delay screen says so itself.
+                else -> {}
             }
             return
         }
-        val delayed = try { engine.startPhoneAction("leave") } catch (e: Exception) { error = Texts.RELAY_DOWN; return }
-        if (delayed == null) go(4)
+        val delayed = try {
+            engine.startPhoneAction("leave")
+        } catch (e: com.sealctl.relay.RelayException) {
+            error = if (e.code == "too_many_delayed") Texts.TOO_MANY_DELAYED else Texts.RELAY_DOWN
+            return
+        } catch (e: Exception) {
+            error = Texts.RELAY_DOWN
+            return
+        }
+        if (delayed == null) go(4) else shown = delayed.id
     }
 
     gateCard?.let { why ->
         if (step == 1 || step == 3) {
             GateCardWords(activity, why, onPassed = {
                 gateCard = null
-                scope.launch { if (step == 1) start() else confirm() }
+                if (step == 1) scope.launch { start() }
+                else once { confirm(if (finishing) engine.runningAction("leave")?.id else null) }
             }, onCancel = { gateCard = null })
             return
         }
@@ -105,23 +126,27 @@ fun LeaveScreen(activity: MainActivity) {
         }
         2 -> EachComputer(onContinue = { go(3) }, onSkip = { key -> go(2, local.leaveSkipped + key) }, onBack = { cancel() })
         3 -> {
-            val pending = local.delayed.lastOrNull { it.what == "leave" && it.state in setOf("waiting", "released") }
+            // A leave still waiting or ready is shown, never started again (11.23).
             val now by rememberNow()
-            if (pending != null && pending.releaseAt.toLong() > now) {
-                DelayView(pending.id, "Leaving sealctl")
+            val running = runningPhoneAction(local.delayed, "leave", now.toULong())
+            LaunchedEffect(running?.id) { if (running != null) shown = running.id }
+            val d = (running?.id ?: shown)?.let { id -> local.delayed.firstOrNull { it.id == id } }
+            if (d != null) {
+                DelayView(d.id, "Leaving sealctl", PhoneActionButtons("leave", busy, error,
+                    onReady = { once { confirm(d.id) } },
+                    onStartAgain = { shown = null; once { confirm(null) } }))
                 return
             }
             Page(null, onBack = { cancel() }, bottom = {
                 ErrorText(error)
-                PrimaryButton(Texts.CONFIRM, { scope.launch { confirm() } })
+                PrimaryButton(Texts.CONFIRM, { once { confirm(null) } }, enabled = !busy)
                 PlainButton("Cancel", { cancel() })
             }) {
                 Gap(24)
                 Title("Delete your data and the last copy of your words?")
                 Body("Next, this phone deletes your data on the relay and removes your words from your Google backup.")
                 Body(
-                    if (pending != null) "The hour is over. Confirm again to finish."
-                    else if (engine.delayLifted()) "At your trusted place: this happens as soon as you confirm."
+                    if (engine.delayLifted()) "At your trusted place: this happens as soon as you confirm."
                     else "This starts two hours after you confirm. Your phone and your computers can cancel it until then.",
                 )
             }

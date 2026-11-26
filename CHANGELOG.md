@@ -27,6 +27,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Fixed
 
+- Show words, Delete my relay data and Leave sealctl after their two-hour wait: the delay screen
+  now turns into "Ready until 12:37" with [Show my words] or [Finish] by itself at the end of the
+  wait, from Settings, the Machines banner ("Showing your words: ready until 12:37.") or the
+  "Ready" notification, also when the app was closed. Before, the notification and the banner
+  opened a screen that only said "The hour is over." with no way to finish. Once the hour to
+  finish has passed: "This waited too long. Start again." with [Start again].
+- A second tap on Show words (or Delete, or Leave) while the first start was still on its way to
+  the relay no longer starts a second two-hour wait: starts run one at a time, and while one of a
+  kind waits or is ready, its start opens that one. The waiting screen shows when it was started
+  and when it goes ahead. An action another of your devices started is named on the start screen
+  before anything starts.
+- Android: the "Ready" notification comes from an alarm at the end of the wait instead of a
+  WorkManager job, which Android could hold back past the time to finish. It is exact when
+  sealctl may set alarms (Alarms & reminders; the delay screen offers [Allow alarms]), and is set
+  again after a reboot, an update or a force stop.
+- A record the relay no longer lists after it said "released" is shown as expired instead of
+  offering a Finish that could only fail.
+- The Machines banner of Leave sealctl says "This phone leaves sealctl at 11:00." instead of
+  "This phone hands everything back at 11:00."
+
 - Month names in Activity use the standalone form, capitalised ("Listopad", not "listopada" in
   Polish; also Ukrainian, Russian and other languages that inflect them).
 - An SSH signature a machine reports from its session reads "SSH key ed25519", as when the

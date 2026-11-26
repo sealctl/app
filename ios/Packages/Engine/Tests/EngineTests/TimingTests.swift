@@ -803,3 +803,95 @@ extension TimingTests {
     }
 }
 #endif
+
+#if os(macOS)
+extension TimingTests {
+    /// A double tap on Show words: the second start comes while the first is still waiting for
+    /// the relay's answer. It waits its turn and gets the first's record; the relay has one
+    /// delay, and one "Ready" note is scheduled (SPEC.md 11.23).
+    @Test func aSecondStartWhileTheFirstIsOnItsWayGetsTheSameRecord() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, notifier, _) = try await paired(relay)
+        try await relay.control("/test/hold", #"{"method": "POST", "path": "/delayed"}"#)
+        let first = Task { try await engine.startPhoneAction("words") }
+        #expect(try await relay.untilHeld("/delayed"))
+        let second = Task { try await engine.startPhoneAction("words") }
+        try await relay.control("/test/release", #"{"path": "/delayed"}"#)
+        let a = try #require(try await first.value)
+        let b = try #require(try await second.value)
+        #expect(a.id == b.id)
+        #expect(try await engine.relay.listDelayed().count == 1)
+        #expect(notifier.posted.filter { $0.0 == "ready-\(a.id)" }.count == 1)
+        // Later, while it waits: the same again, nothing new on the relay.
+        #expect(try await engine.startPhoneAction("words")?.id == a.id)
+        #expect(try await engine.relay.listDelayed().count == 1)
+        // Another kind is its own action.
+        let delete = try #require(try await engine.startPhoneAction("delete"))
+        #expect(delete.id != a.id)
+    }
+
+    /// At a trusted place there is no delay: the start goes ahead at once (nil), the relay keeps
+    /// no record and no "Ready" note is scheduled. One started away and still waiting is shown
+    /// instead, also at the desk; once cancelled, the desk start goes ahead (11.23).
+    @Test func atATrustedPlaceTheActionGoesAheadAtOnce() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, notifier, _) = try await paired(relay, places: StubPlaces())
+        let away = try #require(try await engine.startPhoneAction("words"))
+        try await atDesk(engine)
+        #expect(try await engine.startPhoneAction("words")?.id == away.id)
+        #expect(await engine.cancelDelayed(away.id))
+        let posted = notifier.posted.count
+        #expect(try await engine.startPhoneAction("words") == nil)
+        #expect(try await engine.relay.listDelayed().allSatisfy { $0.id == away.id })
+        #expect(notifier.posted.count == posted)
+    }
+
+    /// The "Ready" note is due at `releaseAt`, says until when, and goes with a cancel; a new
+    /// start after the cancel is a new record (SPEC.md 10.1, 11.23).
+    @Test func theReadyNoteIsDueAtReleaseAtAndGoesWithACancel() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, notifier, _) = try await paired(relay)
+        let d = try #require(try await engine.startPhoneAction("words"))
+        #expect(d.started > 0 && d.started <= d.releaseAt)
+        let due = try #require(notifier.due["ready-\(d.id)"])
+        #expect(abs(due.timeIntervalSince1970 * 1000 - Double(d.releaseAt)) < 1)
+        #expect(notifier.bodies.last == Texts.readyNote(Int64(d.expires)))
+        #expect(await engine.cancelDelayed(d.id))
+        #expect(notifier.removed.contains("ready-\(d.id)"))
+        let again = try #require(try await engine.startPhoneAction("words"))
+        #expect(again.id != d.id)
+    }
+
+    /// The wait ends with the app open: the record reads as ready from `releaseAt` on, the
+    /// finish goes through, and its note is taken back; once the relay no longer has a record
+    /// (it expired), a refresh calls it gone, also after the list had said `released`.
+    @Test func readyAtReleaseAtThenFinishedOrGone() async throws {
+        let relay = try await LocalRelay.start()
+        defer { relay.stop() }
+        let (engine, notifier, _) = try await paired(relay)
+        let d = try #require(try await engine.startPhoneAction("words"))
+        #expect(delayPhase(action: d, now: d.releaseAt - 1) == .waiting)
+        #expect(delayPhase(action: d, now: d.releaseAt) == .ready)
+        try await Task.sleep(for: .milliseconds(Int(Int64(d.releaseAt) - nowMs()) + 300))
+        #expect(await engine.refreshDelayed())
+        #expect(engine.local.delayed.first { $0.id == d.id }?.state == "released")
+        #expect(engine.runningAction("words")?.id == d.id)
+        #expect(await engine.finishPhoneAction(d.id) == nil)
+        #expect(notifier.removed.contains("ready-\(d.id)"))
+        #expect(engine.runningAction("words") == nil)
+
+        // A record the relay dropped while the list last said released.
+        let gone = DelayedAction(id: randomId(), what: "delete", machine: nil, releaseAt: UInt64(nowMs() - 60_000),
+                                 expires: UInt64(nowMs() + 60_000), state: "released", cancelledBy: nil, started: 0)
+        await engine.applyLocal(.putDelayed(action: gone))
+        #expect(engine.runningAction("delete")?.id == gone.id)
+        #expect(await engine.refreshDelayed())
+        #expect(engine.local.delayed.first { $0.id == gone.id }?.state == "gone")
+        #expect(engine.runningAction("delete") == nil)
+        #expect(notifier.removed.contains("ready-\(gone.id)"))
+    }
+}
+#endif

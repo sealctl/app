@@ -748,6 +748,10 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_sealctl_app_checksum_func_place_settled(
     ): Int
+    external fun uniffi_sealctl_app_checksum_func_delay_phase(
+    ): Int
+    external fun uniffi_sealctl_app_checksum_func_running_phone_action(
+    ): Int
     external fun uniffi_sealctl_app_checksum_func_machine_model_name(
     ): Int
     external fun uniffi_sealctl_app_checksum_func_merge_state(
@@ -935,6 +939,10 @@ internal object UniffiLib {
     ): RustBufferPlace.ByValue
     external fun uniffi_sealctl_app_fn_func_place_settled(`place`: RustBuffer.ByValue,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_sealctl_app_fn_func_delay_phase(`action`: RustBuffer.ByValue,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_sealctl_app_fn_func_running_phone_action(`delayed`: RustBuffer.ByValue,`what`: RustBuffer.ByValue,`now`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_machine_model_name(`model`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_sealctl_app_fn_func_merge_state(`local`: RustBuffer.ByValue,`remote`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1132,6 +1140,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_func_place_settled() and 0xFFFF) != 45654) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_sealctl_app_checksum_func_delay_phase() and 0xFFFF) != 65285) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_sealctl_app_checksum_func_running_phone_action() and 0xFFFF) != 4141) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_sealctl_app_checksum_func_machine_model_name() and 0xFFFF) != 64728) {
@@ -3035,7 +3049,7 @@ data class DelayedAction (
     var `expires`: kotlin.ULong
     , 
     /**
-     * `waiting`, `released`, `cancelled`, `finished`.
+     * `waiting`, `released`, `cancelled`, `finished`, `gone`, `expired` ([`crate::delays::delay_phase`]).
      */
     var `state`: kotlin.String
     , 
@@ -3043,6 +3057,11 @@ data class DelayedAction (
      * Who cancelled: `phone` or a machine key.
      */
     var `cancelledBy`: kotlin.String?
+    , 
+    /**
+     * When it was started, Unix ms; 0 for a record kept before this was recorded.
+     */
+    var `started`: kotlin.ULong = 0uL 
     
 ){
     
@@ -3066,6 +3085,7 @@ public object FfiConverterTypeDelayedAction: FfiConverterRustBuffer<DelayedActio
             FfiConverterULong.read(buf),
             FfiConverterString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterULong.read(buf),
         )
     }
 
@@ -3076,7 +3096,8 @@ public object FfiConverterTypeDelayedAction: FfiConverterRustBuffer<DelayedActio
             FfiConverterULong.allocationSize(value.`releaseAt`) +
             FfiConverterULong.allocationSize(value.`expires`) +
             FfiConverterString.allocationSize(value.`state`) +
-            FfiConverterOptionalString.allocationSize(value.`cancelledBy`)
+            FfiConverterOptionalString.allocationSize(value.`cancelledBy`) +
+            FfiConverterULong.allocationSize(value.`started`)
     )
 
     override fun write(value: DelayedAction, buf: ByteBuffer) {
@@ -3087,6 +3108,7 @@ public object FfiConverterTypeDelayedAction: FfiConverterRustBuffer<DelayedActio
             FfiConverterULong.write(value.`expires`, buf)
             FfiConverterString.write(value.`state`, buf)
             FfiConverterOptionalString.write(value.`cancelledBy`, buf)
+            FfiConverterULong.write(value.`started`, buf)
     }
 }
 
@@ -5742,6 +5764,61 @@ public object FfiConverterTypeBiometrics: FfiConverterRustBuffer<Biometrics> {
 
 
 /**
+ * Where a delayed action stands (SPEC.md 11.23 Delay).
+ */
+
+enum class DelayPhase {
+    
+    /**
+     * Counting down to `release_at`.
+     */
+    WAITING,
+    /**
+     * Past `release_at` and before `expires`: an action on the phone can be finished.
+     */
+    READY,
+    /**
+     * Past `expires`, or the relay no longer has it: it can only be started again.
+     */
+    EXPIRED,
+    /**
+     * Cancelled, here or elsewhere.
+     */
+    CANCELLED,
+    /**
+     * Finished on the phone, or, for a machine's `unseal --all`, its wait is over.
+     */
+    FINISHED;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeDelayPhase: FfiConverterRustBuffer<DelayPhase> {
+    override fun read(buf: ByteBuffer) = try {
+        DelayPhase.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: DelayPhase) = 4UL
+
+    override fun write(value: DelayPhase, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+/**
  * A change to the relay state.
  */
 sealed class Event {
@@ -6766,6 +6843,38 @@ public object FfiConverterOptionalTypeDayRecord: FfiConverterRustBuffer<DayRecor
         } else {
             buf.put(1)
             FfiConverterTypeDayRecord.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalTypeDelayedAction: FfiConverterRustBuffer<DelayedAction?> {
+    override fun read(buf: ByteBuffer): DelayedAction? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeDelayedAction.read(buf)
+    }
+
+    override fun allocationSize(value: DelayedAction?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeDelayedAction.allocationSize(value)
+        }
+    }
+
+    override fun write(value: DelayedAction?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeDelayedAction.write(value, buf)
         }
     }
 }
@@ -8156,6 +8265,40 @@ object CoreExceptionExternalErrorHandler : UniffiRustCallStatusErrorHandler<Core
     
         
         FfiConverterTypeTrustedPlace.lower(`place`),
+        FfiConverterULong.lower(`now`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Where `action` stands at `now` (Unix ms). A machine's record (`unseal --all`) needs nothing
+         * from the phone when its wait ends, so it is `Finished` from `release_at` on.
+         */ fun `delayPhase`(`action`: DelayedAction, `now`: kotlin.ULong): DelayPhase {
+            return FfiConverterTypeDelayPhase.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_func_delay_phase(
+    
+        
+        FfiConverterTypeDelayedAction.lower(`action`),
+        FfiConverterULong.lower(`now`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * The phone-only action of kind `what` that is still waiting or ready at `now`, the newest
+         * when there are several. A start button of that kind shows it instead of starting another,
+         * and with `what` = [`OTHER_DEVICE`] it finds one another install started (SPEC.md 11.23).
+         */ fun `runningPhoneAction`(`delayed`: List<DelayedAction>, `what`: kotlin.String, `now`: kotlin.ULong): DelayedAction? {
+            return FfiConverterOptionalTypeDelayedAction.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_sealctl_app_fn_func_running_phone_action(
+    
+        
+        FfiConverterSequenceTypeDelayedAction.lower(`delayed`),
+        FfiConverterString.lower(`what`),
         FfiConverterULong.lower(`now`),_status)
 }
     )

@@ -143,12 +143,22 @@ struct MachinesTab: View {
         if !e.notificationsAllowed {
             Banner(Texts.notificationsOff) { TextButton("Open settings") { Links.notificationSettings() } }
         }
-        let change = e.local.delayed.filter { $0.state == "waiting" && Int64($0.releaseAt) > now }
+        // Each delay still counting down, and an action this install started on the phone once
+        // its wait is over, until it expires (11.23).
+        let change = e.local.delayed.filter {
+            switch delayPhase(action: $0, now: UInt64(clamping: now)) {
+            case .waiting: return true
+            case .ready: return $0.machine == nil && ["words", "delete", "leave"].contains($0.what)
+            default: return false
+            }
+        }
         ForEach(change, id: \.id) { d in
             let name = d.machine.flatMap { e.machine($0) }.map(e.displayName) ?? "This phone"
-            Banner(Texts.delayedAt(d.what, name: name, at: Int64(d.releaseAt)), tone: Palette.accentSoft) {
+            let ready = Int64(d.releaseAt) <= now
+            Banner(ready ? Texts.readyBanner(d.what, expires: Int64(d.expires)) : Texts.delayedAt(d.what, name: name, at: Int64(d.releaseAt)),
+                   tone: Palette.accentSoft) {
                 HStack(spacing: 16) {
-                    TextButton("Show") { router.push(.delayed(d.id)) }
+                    TextButton(ready ? Texts.readyButton(d.what) : "Show") { router.push(.delayed(d.id)) }
                     TextButton("Cancel") { Task { await e.cancelDelayed(d.id) } }
                 }
             }

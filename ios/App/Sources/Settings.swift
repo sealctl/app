@@ -490,8 +490,13 @@ struct LostMachineView: View {
 
 // MARK: level 3 actions on the phone (11.18, 11.19)
 
-/// A level 3 action: biometrics, then at once at a trusted place or after the hour, then
+/// A level 3 action: biometrics, then at once at a trusted place or after the two hours, then
 /// biometrics again and the relay's `finish`.
+///
+/// While an action of this kind waits or is ready, the screen shows its delay instead of a start
+/// (11.23), and the record it shows (`focus`, from a notification or a banner, or the one just
+/// started) stays on screen until closed, also after it was cancelled or expired. One tap runs
+/// at a time: the buttons are off while a start or a finish is on its way.
 struct PhoneAction<Intro: View>: View {
     @Environment(AppModel.self) private var model
     @Environment(Router.self) private var router
@@ -504,18 +509,22 @@ struct PhoneAction<Intro: View>: View {
     @SwiftUI.State private var done: String?
     /// The delay on screen stays until closed, also after a cancel.
     @SwiftUI.State private var delayId: String?
+    @SwiftUI.State private var busy = false
     /// No gate yet, or a face or fingerprint was added or removed: two card words come before
-    /// a new gate (9.6).
+    /// a new gate (9.6), then the start or finish it interrupted (`afterCard`, the id to finish).
     @SwiftUI.State private var cardCheck: GateResult?
+    @SwiftUI.State private var afterCard: String??
 
-    init(what: String, reason: String, button: String, @ViewBuilder intro: () -> Intro, run: @escaping () async -> String?) {
+    init(what: String, reason: String, button: String, focus: String? = nil,
+         @ViewBuilder intro: () -> Intro, run: @escaping () async -> String?) {
         self.what = what; self.reason = reason; self.button = button; self.intro = intro(); self.run = run
+        _delayId = SwiftUI.State(initialValue: focus)
     }
 
     var body: some View {
         let e = model.engine!
-        let pending = e.local.delayed.last { $0.what == what && ($0.state == "waiting" || $0.state == "released") }
         Ticker { now in
+            let running = e.runningAction(what, now: now)
             if let done {
                 Page(onBack: nil) {
                     Gap(24)
@@ -524,35 +533,40 @@ struct PhoneAction<Intro: View>: View {
             } else if let why = cardCheck {
                 GateCardWordsView(why: why, onPassed: {
                     cardCheck = nil
-                    go(pending, e)
-                }, onCancel: { cardCheck = nil })
-            } else if let id = delayId ?? pending.flatMap({ Int64($0.releaseAt) > now ? $0.id : nil }),
-                      let d = e.local.delayed.first(where: { $0.id == id }),
-                      (d.state == "waiting" && Int64(d.releaseAt) > now) || (d.state == "cancelled" && delayId == id) {
-                DelayView(id: id, title: Texts.delayScreenTitle(what, name: nil))
-                    .onAppear { if d.state == "waiting" { delayId = id } }
-                    .onChange(of: d.state) { _, st in if st == "waiting" { delayId = id } }
+                    if let next = afterCard { afterCard = nil; go(finish: next, e) }
+                }, onCancel: { cardCheck = nil; afterCard = nil })
+            } else if let id = running?.id ?? delayId, e.local.delayed.contains(where: { $0.id == id }) {
+                DelayView(id: id, title: Texts.delayScreenTitle(what, name: nil),
+                          phone: PhoneActionButtons(what: what, busy: busy, error: error,
+                                                    onReady: { go(finish: id, e) },
+                                                    onStartAgain: { delayId = nil; go(finish: nil, e) }))
+                    .onAppear { delayId = id }
             } else {
                 Page(onBack: { router.pop() }) {
                     Gap(16)
                     intro
-                    if pending == nil {
-                        BodyText(e.delayLifted() ? "At your trusted place: this happens as soon as you confirm."
-                                 : "This starts two hours after you confirm. Your phone and your computers can cancel it until then.")
-                    } else {
-                        BodyText("The hour is over. Confirm again to finish.")
+                    BodyText(e.delayLifted() ? "At your trusted place: this happens as soon as you confirm."
+                             : "This starts two hours after you confirm. Your phone and your computers can cancel it until then.")
+                    if let other = e.runningAction(Texts.otherDevice, now: now) {
+                        // Not started blindly next to another install's action, whose kind is unknown here.
+                        MutedText(Texts.otherDeviceRunning(Int64(other.releaseAt)))
+                        TextButton("Show it") { router.push(.delayed(other.id)) }
                     }
                 } bottom: {
                     ErrorText(error)
-                    PrimaryButton(pending != nil ? "Finish" : button) { go(pending, e) }
+                    PrimaryButton(button, enabled: !busy) { go(finish: nil, e) }
                     PlainButton("Cancel") { router.pop() }
                 }
             }
         }
     }
 
-    private func go(_ pending: DelayedAction?, _ e: AppEngine) {
+    /// Biometrics, then `finish` of the record `id` and the action, or a new start (nil).
+    private func go(finish id: String?, _ e: AppEngine) {
+        guard !busy else { return }
+        busy = true
         Task {
+            defer { busy = false }
             error = nil
             let result = await e.vault.gate(reason: reason)
             switch result {
@@ -560,23 +574,27 @@ struct PhoneAction<Intro: View>: View {
             case .cancelled: return
             case .lockedOut: error = Texts.lockedOut(e.biometryName); return
             case .unavailable: error = Texts.noBiometrics(e.biometryName); return
-            case .changed, .noGate: cardCheck = result; return
+            case .changed, .noGate: afterCard = .some(id); cardCheck = result; return
             case .failed(let m): error = "Couldn't confirm (\(m))."; return
             }
-            if let pending {
-                switch await e.finishPhoneAction(pending.id) {
+            if let id {
+                switch await e.finishPhoneAction(id) {
                 case nil: done = await run()
                 case "too_early": error = "Not yet."
-                case "gone": error = "This waited too long. Start again."
                 case "relay": error = "The relay isn't answering, and sealctl can't finish until it confirms nothing was cancelled."
-                case let r?:
-                    let by = String(r.dropFirst("cancelled:".count))
-                    error = "Cancelled from \(e.machine(by).map(e.displayName) ?? "another device"). Nothing happened."
+                // Expired or cancelled: the record says so and the delay screen shows it.
+                default: break
                 }
                 return
             }
             do {
-                if try await e.startPhoneAction(what) == nil { done = await run() }
+                if let started = try await e.startPhoneAction(what) {
+                    delayId = started.id
+                } else {
+                    done = await run()
+                }
+            } catch let err as RelayError where err.code == "too_many_delayed" {
+                self.error = Texts.tooManyDelayed
             } catch {
                 self.error = Texts.relayDown
             }
@@ -590,6 +608,7 @@ struct ShowWordsView: View {
     @Environment(AppModel.self) private var model
     @Environment(Router.self) private var router
     @SwiftUI.State private var error: String?
+    var focus: String?
 
     var body: some View {
         let e = model.engine!
@@ -604,7 +623,7 @@ struct ShowWordsView: View {
             }
             .onDisappear { e.words.release() }
         } else {
-            PhoneAction(what: "words", reason: "Confirm showing your words.", button: Texts.confirm(e.biometryName)) {
+            PhoneAction(what: "words", reason: "Confirm showing your words.", button: Texts.confirm(e.biometryName), focus: focus) {
                 TitleText("Show your words")
                 BodyText("Showing the words is a sensitive action. Every paired computer is told.")
                 ErrorText(error)
@@ -622,11 +641,12 @@ struct ShowWordsView: View {
 
 struct DeleteRelayView: View {
     @Environment(AppModel.self) private var model
+    var focus: String?
 
     var body: some View {
         let e = model.engine!
         let n = e.liveMachines.count
-        PhoneAction(what: "delete", reason: "Confirm deleting your relay data.", button: "Delete") {
+        PhoneAction(what: "delete", reason: "Confirm deleting your relay data.", button: "Delete", focus: focus) {
             TitleText("Delete your data on the relay?")
             BodyText("This unpairs your \(n) machines and deletes what the relay keeps for these words: your encrypted phone backup, your machines' records and every phone's notification address. It can't be undone. The privacy policy lists what stays.")
             BodyText("Your words, what this phone keeps, and your sealed files are not touched. To use a machine again, run `sealctl pair` on it.")

@@ -100,7 +100,8 @@ fun ActivityScreen(title: String, onBack: (() -> Unit)?, machine: String?) {
     // is not shown again.
     val page by produceState<ActivityPage?>(null, state, machine, today, grid) {
         if (value != null) delay(RELOAD_AFTER_MS)
-        val read = withContext(Dispatchers.IO) { ActivityPage.load(engine, machine, today, zone, grid) }
+        val old = value
+        val read = withContext(Dispatchers.IO) { ActivityPage.load(engine, machine, today, zone, grid, old) }
         if (read != value) value = read.reusing(value)
     }
     // Which days the person opened or closed; in memory only. The newest day starts open.

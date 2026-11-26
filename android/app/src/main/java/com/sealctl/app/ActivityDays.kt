@@ -3,6 +3,7 @@ package com.sealctl.app
 import com.sealctl.core.app.ActivityCounts
 import com.sealctl.core.app.ActivityRow
 import com.sealctl.core.app.DailyCount
+import com.sealctl.core.app.Machine
 import com.sealctl.core.app.Store
 import com.sealctl.core.app.UsageEntry
 import com.sealctl.core.app.activityCounts
@@ -51,7 +52,12 @@ object ActivityDays {
  * rows, and on the main tab the heatmap's cells. Read off the main thread: the store is one
  * connection behind a lock, which a sync, a prune or a status report may hold.
  */
-data class ActivityPage(val days: List<ShownDay>, val cells: List<HeatGrid.Cell>?) {
+data class ActivityPage(
+    val days: List<ShownDay>,
+    val cells: List<HeatGrid.Cell>?,
+    /** The machines the rows were made with, as passed to the shared core. */
+    val machines: Map<String, Machine> = emptyMap(),
+) {
     /** A listed day: its date, its figures and its uses, newest first. */
     data class ShownDay(val date: LocalDate, val counts: ActivityCounts, val rows: List<Use>)
 
@@ -69,29 +75,41 @@ data class ActivityPage(val days: List<ShownDay>, val cells: List<HeatGrid.Cell>
         return ActivityPage(
             days.map { d -> oldDays[d] ?: d.copy(rows = d.rows.map { oldRows[it] ?: it }) },
             if (cells == old.cells) old.cells else cells,
+            machines,
         )
     }
 
     companion object {
-        /** [grid] is the heatmap's, on the main tab; null for one machine's log. */
-        fun load(engine: Engine, machine: String?, today: LocalDate, zone: ZoneId, grid: HeatGrid?): ActivityPage {
+        /**
+         * [grid] is the heatmap's, on the main tab; null for one machine's log. The rows of
+         * [old] are kept for the uses it already had while the machines are the same: each new
+         * row is a call into the shared core.
+         */
+        fun load(engine: Engine, machine: String?, today: LocalDate, zone: ZoneId, grid: HeatGrid?, old: ActivityPage? = null): ActivityPage {
             val days = safe { ActivityDays.load(engine.store, machine, today, zone) } ?: emptyList()
             // A row names its machine by its name, nickname and tag: the rest of the record (its
-            // last status above all) is left out, as each row passes it through the FFI.
-            val machines = engine.liveMachines().associate { it.key to it.copy(lastStatus = null, boxKey = "", relay = "", hint = null) }
+            // last status and when it was last seen above all) is left out, as each row passes it
+            // through the FFI and the rows are kept while these stay the same.
+            val machines = engine.liveMachines().associate {
+                it.key to it.copy(
+                    boxKey = "", os = "", model = null, hint = null, pairedAt = 0u, lastSeen = null, lastStatus = null,
+                    flagged = false, relay = "", updated = 0u,
+                )
+            }
+            val known = old?.takeIf { it.machines == machines }?.days?.flatMap { it.rows }?.associateBy { it.key } ?: emptyMap()
             val shown = days.map { d ->
                 val seen = HashMap<String, Int>()
                 ShownDay(d.date, d.counts, d.entries.map { e ->
                     // The same use reported twice in one millisecond still gets a key of its own.
-                    val base = "${e.time}|${e.machine}|${e.key}|${e.outcome}"
-                    val n = seen.merge(base, 1, Int::plus)!!
-                    Use("$base|$n", Texts.time(e.time.toLong()), activityRow(e, machines[e.machine]))
+                    val base = listOf(e.time, e.machine, e.key, e.outcome, e.agent, e.repo, e.command, e.kind).joinToString("|")
+                    val key = "$base|${seen.merge(base, 1, Int::plus)}"
+                    known[key] ?: Use(key, Texts.time(e.time.toLong()), activityRow(e, machines[e.machine]))
                 })
             }
             val cells = grid?.let { g ->
                 g.cells(safe { engine.store.dailyCounts(g.start.toString(), today.toString(), engine.offset()) } ?: emptyList())
             }
-            return ActivityPage(shown, cells)
+            return ActivityPage(shown, cells, machines)
         }
     }
 }

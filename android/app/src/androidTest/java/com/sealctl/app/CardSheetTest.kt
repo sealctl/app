@@ -86,6 +86,10 @@ class CardSheetTest {
     }
 
     private fun tabStillWorks() {
+        // The sheet's window leaves the window manager a moment after the sheet leaves the
+        // composition: the activity has the focus again once it is gone. A window left behind
+        // keeps the focus, and this times out.
+        rule.waitUntil(5_000) { rule.activity.hasWindowFocus() }
         val before = tabTaps
         tap("Tab")
         rule.runOnIdle { assertEquals(before + 1, tabTaps) }

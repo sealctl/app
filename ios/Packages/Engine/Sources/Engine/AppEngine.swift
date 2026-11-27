@@ -78,6 +78,8 @@ public final class AppEngine {
     @ObservationIgnored var placeExits: [String: Int] = [:]
     /// When a fix was last taken to check for an exit the monitor missed, Unix ms.
     @ObservationIgnored var lastFixCheck: Int64 = 0
+    /// Each `onForeground` is one turn; `onBackground` ends it (8.3).
+    @ObservationIgnored var foregroundTurn = 0
     /// Test seams; always empty in the app.
     @ObservationIgnored var hooks = EngineHooks()
     /// The phone's clock for a request's time (deadlines, the card's timer, catch-up). A test
@@ -95,13 +97,18 @@ public final class AppEngine {
         self.files = files
         self.notifier = notifier
         self.places = places
+        // An erase that a stop cut short is finished before anything reads the database (11.19).
+        if files.erasing { await Self.eraseLocal(vault: vault, db: db, files: files) }
         state = (try? await db.run { try $0.snapshot() }) ?? Self.emptyState
         local = (try? await db.run { try $0.local() }) ?? Self.emptyLocal
         words = WordsSession()
         let box = KeyBox(vault: vault)
         keyBox = box
+        // One rate-limit window for the app and the extension (8.1).
         relay = RelayClient(baseURL: config.relayURL, keys: { await box.get() },
                             onRelayTime: { db.relayTime($0) }, onAccepted: { db.relayAccepted($0) },
+                            rateLimitedUntil: files.keptRateLimit(now: nowMs()),
+                            onRateLimited: { [files] in files.keepRateLimit(until: $0) },
                             callResourceTimeout: config.callResourceTimeout)
         words.engine = self
         biometryName = await vault.biometryName()
@@ -240,6 +247,8 @@ public final class AppEngine {
 
     public func onForeground() async {
         foreground = true
+        foregroundTurn &+= 1
+        let turn = foregroundTurn
         refreshLocation()
         notificationsAllowed = await notifier.allowed()
         biometryName = await vault.biometryName()
@@ -248,14 +257,22 @@ public final class AppEngine {
         // The relay's time, for every security window (8.1); the snapshot carries it.
         if await relay.relayTime() != nil { writeSnapshot() }
         await takeInbox()
-        if socket == nil {
-            socket = PhoneSocket(
-                client: relay,
-                onMessage: { [weak self] o in await self?.onSocketMessage(o) },
-                onConnected: { [weak self] in _ = await self?.catchUp() },
-                onState: { [weak self] ok in await self?.socketState(ok) })
+        if let h = hooks.beforeSocket { await h() }
+        // The app left the foreground during the calls above (or came back, in a newer turn):
+        // this turn opens no socket, which would stay open in the background (8.3).
+        guard isTurn(turn) else { return }
+        let s = socket ?? PhoneSocket(
+            client: relay,
+            onMessage: { [weak self] o in await self?.onSocketMessage(o) },
+            onConnected: { [weak self] in _ = await self?.catchUp() },
+            onState: { [weak self] ok in await self?.socketState(ok) })
+        socket = s
+        await s.start()
+        guard isTurn(turn) else {
+            // `onBackground` ran while it started: closed again, unless a newer turn has it.
+            if !foreground { await s.stop() }
+            return
         }
-        await socket?.start()
         await catchUp()
         await refreshStatus()
         await refreshDelayed()
@@ -282,6 +299,9 @@ public final class AppEngine {
     /// Leave sealctl from step 5 on: the relay data is being deleted or is gone, so foreground
     /// work does not call the relay, which would only be refused or bring the phone back (11.22).
     var relayDataDeleted: Bool { local.leaveStep >= 5 }
+
+    /// The foreground that began as `turn` is still on: no background or newer foreground since.
+    func isTurn(_ turn: Int) -> Bool { foreground && turn == foregroundTurn }
 
     public func onBackground() async {
         foreground = false
@@ -455,6 +475,8 @@ struct EngineHooks {
     var afterReplyCall: (@MainActor (String, Error?) async -> Error?)?
     /// After the relay took a reply, once the place it counts for is chosen, before it is recorded.
     var beforeRecord: (@MainActor (String) async -> Void)?
+    /// In `onForeground`, after its first relay calls, before the socket opens.
+    var beforeSocket: (@MainActor () async -> Void)?
 }
 
 /// The phone keys for the relay client's signing closure.

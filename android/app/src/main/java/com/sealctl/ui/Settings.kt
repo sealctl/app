@@ -455,7 +455,7 @@ fun MachineDetailScreen(activity: MainActivity, key: String) {
             TextButton({ scope.launch { release() } }) { Text("Release now") }
             ErrorText(releaseError)
         }
-        if (v.state == com.sealctl.designsystem.MachineState.Open) PrimaryButton("Lock now", { scope.launch { if (engine.lock(m)) Ui.toast("Locked ${engine.displayName(m)}.") } })
+        if (v.state == com.sealctl.designsystem.MachineState.Open) PrimaryButton("Lock now", { scope.launch { if (engine.lock(m, userTapped = true)) Ui.toast("Locked ${engine.displayName(m)}.") } })
         OutlinedTextField(nickname, { nickname = it.take(40) }, label = { Text("Nickname") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         if (nickname != (m.nickname ?: "")) SecondaryButton("Save nickname", { engine.apply(Event.SetNickname(key, nickname.ifBlank { null })) })
         Muted(listOfNotNull(m.os.ifEmpty { null }, m.model, "paired ${Texts.isoDate(m.pairedAt.toLong())}", "seen ${Texts.ago(m.lastSeen?.toLong())}").joinToString(" · "))
@@ -704,7 +704,7 @@ suspend fun deleteRelayData(lockFirst: Boolean): String {
     val engine = Graph.engine
     engine.sendNotice("delete", "done", null, null, null)
     if (lockFirst) for (m in engine.liveMachines()) {
-        if (MachineView.of(m, engine).state == com.sealctl.designsystem.MachineState.Open) engine.lock(m)
+        if (MachineView.of(m, engine).state == com.sealctl.designsystem.MachineState.Open) engine.lock(m, userTapped = true)
     }
     return try {
         engine.relay.deletePhone()
@@ -766,12 +766,7 @@ private suspend fun eraseNow(alsoBackup: Boolean) {
     val engine = Graph.engine
     runCatching { engine.relay.deletePush(engine.deviceId()) }
     if (alsoBackup) Graph.blockStore.delete()
-    engine.closeSocket()
-    engine.vault.erase()
-    engine.forgetPhoneKeys()
-    com.sealctl.app.safe { engine.store.erase() }
-    engine.refreshState()
-    engine.waiting.value = emptyList()
+    engine.eraseLocal()
     engine.computePhase()
     Ui.reset()
 }

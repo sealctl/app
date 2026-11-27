@@ -34,6 +34,15 @@ final class Box<T>: @unchecked Sendable {
     }
 }
 
+extension SharedFiles {
+    /// A relay client for the extension, which makes one per push: it starts inside the
+    /// rate-limit window kept in the app group and keeps a new one there (SPEC.md 8.1).
+    public func relayClient(baseURL: String, keys: PhoneKeys) -> RelayClient {
+        RelayClient(baseURL: baseURL, keys: { keys }, rateLimitedUntil: keptRateLimit(now: nowMs()),
+                    onRateLimited: { [self] in keepRateLimit(until: $0) })
+    }
+}
+
 /// The Notification Service Extension's work (SPEC.md 10.1): open the pushed request with the
 /// phone keys, answer it when `decide` says Automatic and the root can be read, otherwise
 /// rewrite the notification with the request's own text and buttons. Any failure leaves the
@@ -56,7 +65,7 @@ public struct ExtensionHandler: Sendable {
         guard let keys = await vault.readPhoneKeys(), let snap = files.readSnapshot(), let state = snap.decodedState() else {
             return nil
         }
-        let relay = RelayClient(baseURL: snap.relay, keys: { keys })
+        let relay = files.relayClient(baseURL: snap.relay, keys: keys)
         guard let list = try? await relay.requests() else { return nil }
         guard let r = list.first(where: { $0.id == id }) else {
             content.title = Texts.requestTitle
@@ -165,7 +174,7 @@ public struct ExtensionHandler: Sendable {
     func delayed(_ content: UNMutableNotificationContent, id: String) async -> UNNotificationContent? {
         guard let snap = files.readSnapshot(), let known = snap.knownDelayed, !known.contains(id),
               let keys = await vault.readPhoneKeys() else { return nil }
-        let relay = RelayClient(baseURL: snap.relay, keys: { keys })
+        let relay = files.relayClient(baseURL: snap.relay, keys: keys)
         guard let d = try? await relay.listDelayed().first(where: { $0.id == id }), d.machine == nil, d.state == "waiting"
         else { return nil }
         let note = Texts.delayedNote(Texts.otherDevice, at: d.releaseAt)

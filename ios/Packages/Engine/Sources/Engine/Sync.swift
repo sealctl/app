@@ -3,6 +3,7 @@ import EngineKit
 import Relay
 import SealCore
 import UserNotifications
+import Vault
 
 extension AppEngine {
     // MARK: sync (6.5)
@@ -180,7 +181,7 @@ extension AppEngine {
     public func deleteRelayData(lockFirst: Bool) async -> (ok: Bool, text: String) {
         await sendNotice(what: "delete", state: "done", machine: nil, delayId: nil, at: nil)
         if lockFirst {
-            for m in liveMachines where MachineView.of(m, self).state == .open { await lock(m) }
+            for m in liveMachines where MachineView.of(m, self).state == .open { await lock(m, userTapped: true) }
         }
         do {
             try await relay.deletePhone()
@@ -201,13 +202,23 @@ extension AppEngine {
         if await phoneKeys() != nil { try? await relay.deletePush(await deviceId()) }
         if alsoBackup { await vault.deleteSyncBackup() }
         await onBackground()
-        await vault.erase()
         forgetPhoneKeys()
-        _ = try? await db.run { try $0.erase() }
-        files.removeAll()
+        await Self.eraseLocal(vault: vault, db: db, files: files)
         waiting = []
         await notifier.remove(ids: [])
         await computePhase()
+    }
+
+    /// The keychain items, then the database and the shared files, under the erase marker: a
+    /// stop between the two is finished at the next start (`init`), so a database is never kept
+    /// without its keys (11.19).
+    static func eraseLocal(vault: Vault, db: Database, files: SharedFiles) async {
+        files.markErasing()
+        await vault.erase()
+        let erased = (try? await db.run { try $0.erase() }) != nil
+        files.removeAll()
+        // A database that could not be erased is tried again at the next start.
+        if erased { files.clearErasing() }
     }
 
     // MARK: Leave sealctl (11.22)

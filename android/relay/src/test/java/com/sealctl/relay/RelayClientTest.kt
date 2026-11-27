@@ -115,6 +115,45 @@ class RelayClientTest {
         assertEquals("""{"sealed":"sealed"}""", r.body.readUtf8())
     }
 
+    /** SPEC.md 8.1: a message the app sends by itself (a lock on leaving a place, a notice) waits out the window; one the person taps goes. */
+    @Test
+    fun messagesTheAppSendsByItselfWaitOutTheWindow() = runTest {
+        server.enqueue(json(429, """{"error":"rate_limited","retryAfter":600,"scope":"phone"}"""))
+        try {
+            client.machines(); fail()
+        } catch (e: RateLimitedException) {
+        }
+        try {
+            client.postMessage("m", "sealed"); fail()
+        } catch (e: RateLimitedException) {
+            assertEquals(clock + 600_000, e.until)
+        }
+        assertEquals(1, server.requestCount)
+        server.enqueue(json(200, """{"delivered":true}"""))
+        assertTrue(client.postMessage("m", "sealed", userTapped = true))
+        assertEquals(2, server.requestCount)
+    }
+
+    /** SPEC.md 8.1: the window outlives the process: a client made later starts inside it. */
+    @Test
+    fun theWindowIsKeptForTheNextClient() = runTest {
+        val kept = mutableListOf<Long>()
+        val first = RelayClient(server.url("/").toString().trimEnd('/'), { keys }, now = { clock }, onRateLimited = { kept += it })
+        server.enqueue(json(429, """{"error":"rate_limited","retryAfter":120}"""))
+        try {
+            first.requests(); fail()
+        } catch (e: RateLimitedException) {
+        }
+        assertEquals(listOf(clock + 120_000), kept)
+        val next = RelayClient(server.url("/").toString().trimEnd('/'), { keys }, now = { clock + 1_000 }, rateLimitedUntil = kept.last())
+        assertEquals(119_000L, next.rateLimitedForMs())
+        try {
+            next.requests(); fail()
+        } catch (e: RateLimitedException) {
+        }
+        assertEquals(1, server.requestCount)
+    }
+
     @Test
     fun theSocketWaitsOutTheRateLimitWindow() {
         // Staging incident 2026-11-22: a client that kept calling after 429 sent ~86,000 calls.

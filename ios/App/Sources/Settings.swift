@@ -395,7 +395,7 @@ struct MachineDetailView: View {
                     }
                     if v.state == .open {
                         PrimaryButton("Lock now") {
-                            Task { if await e.lock(m) { e.show("Locked \(e.displayName(m)).") } }
+                            Task { if await e.lock(m, userTapped: true) { e.show("Locked \(e.displayName(m)).") } }
                         }
                     }
                     TextField("Nickname", text: $nickname).textFieldStyle(.roundedBorder)

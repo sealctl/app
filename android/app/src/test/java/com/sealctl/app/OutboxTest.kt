@@ -7,6 +7,8 @@ import com.sealctl.relay.UnavailableException
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
@@ -116,6 +118,33 @@ class OutboxTest {
         assertEquals(listOf("l", "n1", "n2"), sent)
         // Another machine's notice does not wait.
         assertEquals(Outbox.Result.SENT, box.send(notice("n3", "m2"), userTapped = false))
+    }
+
+    /** A notice sent while the one before it for the same machine is on its way waits behind it, also when that one fails. */
+    @Test
+    fun aNoticeSentWhileAnotherIsOnItsWayKeepsTheOrder() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        var first = true
+        val box = Outbox(
+            file = File(dir, "outbox.json"), now = { clock },
+            post = { o, _ ->
+                if (first) { first = false; gate.await(); throw IOException("the response was lost") }
+                sent += o.id
+            },
+            live = { it in live }, delivered = { delivered += it.id }, wake = { wakes += it }, clock = { clock }, random = { 0.5 },
+        )
+        val n1 = async { box.send(notice("n1"), userTapped = false) }
+        testScheduler.runCurrent()
+        assertEquals(Outbox.Result.QUEUED, box.send(notice("n2"), userTapped = false))
+        // A flush meanwhile leaves both: n1 is on its way, n2 waits for it.
+        box.flush()
+        assertTrue(sent.isEmpty())
+        gate.complete(Unit)
+        assertEquals(Outbox.Result.QUEUED, n1.await())
+        assertEquals(listOf("n1", "n2"), box.pending().map { it.id })
+        clock += 10_000
+        box.flush()
+        assertEquals(listOf("n1", "n2"), sent)
     }
 
     @Test

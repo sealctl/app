@@ -68,6 +68,8 @@ internal class Outbox(
     }
 
     private val items = ArrayList<Outgoing>()
+    /** Notices in [items] whose first try is on its way: the next one for their machine waits behind them. */
+    private val inFlight = HashSet<String>()
     /** One flush at a time. */
     private val flushing = Mutex()
     /** No try before this (system ms): a `Retry-After`, the rate-limit window, or the backoff. */
@@ -88,7 +90,17 @@ internal class Outbox(
      * `Retry-After` or the rate-limit window in the queue.
      */
     suspend fun send(o: Outgoing, userTapped: Boolean): Result {
-        val behind = synchronized(this) { !o.lock && items.any { it.machine == o.machine } }
+        val behind = synchronized(this) {
+            val behind = !o.lock && items.any { it.machine == o.machine }
+            // A notice holds its place while it goes: one sent meanwhile for its machine waits
+            // behind it, and if it fails it is sent again first.
+            if (!behind && !o.lock && (userTapped || clock() >= notBefore)) {
+                items += o
+                inFlight += o.id
+                save()
+            }
+            behind
+        }
         if (behind || (!userTapped && clock() < notBefore)) {
             enqueue(o)
             if (behind) wake(maxOf(0, notBefore - clock()))
@@ -96,6 +108,7 @@ internal class Outbox(
         }
         return try {
             post(o, userTapped)
+            if (!o.lock) synchronized(this) { inFlight -= o.id; remove(o.id) }
             // A lock made later covers every session one queued earlier would lock.
             if (o.lock) for (old in removeLocks(o.machine)) delivered(old)
             // The relay is back: what waits goes now.
@@ -103,10 +116,16 @@ internal class Outbox(
             if (more) wake(0)
             Result.SENT
         } catch (e: CancellationException) {
+            synchronized(this) { inFlight -= o.id }
             throw e
         } catch (e: Exception) {
-            if (isFinal(e)) return Result.REFUSED
-            enqueue(o)
+            synchronized(this) { inFlight -= o.id }
+            if (isFinal(e)) {
+                remove(o.id)
+                return Result.REFUSED
+            }
+            // A notice is already in its place.
+            if (o.lock) enqueue(o)
             failed(e)
             Result.QUEUED
         }
@@ -125,7 +144,11 @@ internal class Outbox(
                 if (pending().isNotEmpty()) wake(wait)
                 return
             }
+            // Machines with a notice on its way: their later notices wait for it.
+            val busy = HashSet<String>()
             for (o in pending()) {
+                if (synchronized(this) { o.id in inFlight }) { busy += o.machine; continue }
+                if (!o.lock && o.machine in busy) continue
                 try {
                     post(o, false)
                 } catch (e: CancellationException) {

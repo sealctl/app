@@ -103,6 +103,37 @@ import SealCore
         #expect(await box.send(s.notice("n3", "m2"), userTapped: false) == .sent)
     }
 
+    /// A notice sent while the one before it for the same machine is on its way waits behind it,
+    /// also when that one fails.
+    @Test func aNoticeSentWhileAnotherIsOnItsWayKeepsTheOrder() async {
+        let s = Script()
+        var gate: CheckedContinuation<Void, Never>?
+        var first = true
+        let box = Outbox(file: s.file, now: { s.clock },
+                         post: { o, _ in
+                             if first {
+                                 first = false
+                                 await withCheckedContinuation { gate = $0 }
+                                 throw RelayError.transport("the response was lost")
+                             }
+                             s.sent.append(o.id)
+                         },
+                         live: { s.live.contains($0) }, delivered: { s.delivered.append($0.id) },
+                         wake: { s.wakes.append($0) }, clock: { s.clock }, random: { 0.5 })
+        let n1 = Task { await box.send(s.notice("n1"), userTapped: false) }
+        while gate == nil { await Task.yield() }
+        #expect(await box.send(s.notice("n2"), userTapped: false) == .queued)
+        // A flush meanwhile leaves both: n1 is on its way, n2 waits for it.
+        await box.flush()
+        #expect(s.sent.isEmpty)
+        gate?.resume()
+        #expect(await n1.value == .queued)
+        #expect(box.items.map(\.id) == ["n1", "n2"])
+        s.clock += 10_000
+        await box.flush()
+        #expect(s.sent == ["n1", "n2"])
+    }
+
     @Test func oneLockPerMachineKeepingItsAllowanceAcrossARestart() async {
         let s = Script()
         let g = GrantRecord(machine: "m1", placeId: "p1", at: 5, ends: 9, locked: false)

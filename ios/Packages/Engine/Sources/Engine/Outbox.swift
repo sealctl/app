@@ -53,6 +53,8 @@ final class Outbox {
     private let clock: () -> Int64
     private let random: () -> Double
     private(set) var items: [Outgoing] = []
+    /// Notices in `items` whose first try is on its way: the next one for their machine waits behind them.
+    private var inFlight: Set<String> = []
     /// No try before this (system ms): a `Retry-After`, the rate-limit window, or the backoff.
     private var notBefore: Int64 = 0
     private var failures = 0
@@ -76,13 +78,29 @@ final class Outbox {
             if behind { wake(max(0, notBefore - clock())) }
             return .queued
         }
+        // A notice holds its place while it goes: one sent meanwhile for its machine waits behind
+        // it, and if it fails it is sent again first.
+        if !o.lock {
+            items.append(o)
+            inFlight.insert(o.id)
+            save()
+        }
         do {
             try await post(o, userTapped)
         } catch {
-            if Self.isFinal(error) { return .refused }
-            enqueue(o)
+            inFlight.remove(o.id)
+            if Self.isFinal(error) {
+                remove(o.id)
+                return .refused
+            }
+            // A notice is already in its place.
+            if o.lock { enqueue(o) }
             failed(error)
             return .queued
+        }
+        if !o.lock {
+            inFlight.remove(o.id)
+            remove(o.id)
         }
         // A lock made later covers every session one queued earlier would lock.
         if o.lock { for old in removeLocks(o.machine) { delivered(old) } }
@@ -105,7 +123,11 @@ final class Outbox {
             if !items.isEmpty { wake(wait) }
             return
         }
+        // Machines with a notice on its way: their later notices wait for it.
+        var busy: Set<String> = []
         for o in items {
+            if inFlight.contains(o.id) { busy.insert(o.machine); continue }
+            if !o.lock && busy.contains(o.machine) { continue }
             do {
                 try await post(o, false)
             } catch {

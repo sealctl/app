@@ -1,3 +1,5 @@
+import LocalAuthentication
+import UserNotifications
 import XCTest
 
 /// A fresh install for every test: the app erases its keychain items and database at launch
@@ -15,6 +17,7 @@ class SealctlTestCase: XCTestCase {
         try XCTSkipUnless(Harness.up, "the harness (ios/scripts/harness.py) is not running")
         _ = Prompts.shared // counts prompts from before the first one
         Bio.enroll()
+        try Self.waitForSystem()
         Harness.reset()
         if Env.fakeRelay {
             FakeRelay.reset()
@@ -31,6 +34,38 @@ class SealctlTestCase: XCTestCase {
             return false
         }
         app.launch()
+    }
+
+    /// The simulator's own services are ready (once per run, before the first launch). A
+    /// freshly booted simulator answers before SpringBoard's notification server has loaded its
+    /// sources; until then an app's notification calls wait, so the first test's "Allow
+    /// notifications" asked for an alert that never came (seen under load: the initial load had
+    /// not happened two minutes after boot). The runner's own `notificationSettings()` is answered
+    /// only after that load, so it is the signal; and Face ID must be enrolled as far as
+    /// LocalAuthentication can tell. Waits on those answers, never a fixed time.
+    private static var systemReady = false
+
+    struct NotReady: Error, CustomStringConvertible {
+        let what: String
+        var description: String { "the simulator is not ready: \(what)" }
+    }
+
+    static func waitForSystem() throws {
+        guard !systemReady else { return }
+        let start = Date()
+        let settings = XCTestExpectation(description: "SpringBoard's notification server answers")
+        UNUserNotificationCenter.current().getNotificationSettings { _ in settings.fulfill() }
+        guard XCTWaiter().wait(for: [settings], timeout: 300) == .completed else {
+            throw NotReady(what: "SpringBoard's notification server did not answer in 300 s")
+        }
+        let enrolled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            LAContext().canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil)
+        }, object: nil)
+        guard XCTWaiter().wait(for: [enrolled], timeout: 60) == .completed else {
+            throw NotReady(what: "Face ID is not enrolled as far as LocalAuthentication can tell")
+        }
+        print(String(format: "simulator ready after %.1f s (notification server, Face ID)", Date().timeIntervalSince(start)))
+        systemReady = true
     }
 
     override func tearDownWithError() throws {
@@ -75,9 +110,22 @@ class SealctlTestCase: XCTestCase {
     func see(_ contains: String, _ timeout: TimeInterval = 15, file: StaticString = #filePath, line: UInt = #line) -> XCUIElement {
         let e = text(contains)
         if !e.waitForExistence(timeout: timeout) {
-            XCTFail("not shown: \(contains)\n\(uiTree())", file: file, line: line)
+            XCTFail("not shown: \(contains)\n\(systemState())\n\(uiTree())", file: file, line: line)
         }
         return e
+    }
+
+    /// What the system shows over the app, for a failure message: a SpringBoard alert (its
+    /// title and buttons), the Face ID sheet, and the prompts LocalAuthentication announced.
+    func systemState() -> String {
+        let springboard = PromptButtons.springboard
+        let alert = springboard.alerts.firstMatch
+        let alertLine = alert.exists
+            ? "system alert: \(alert.label) [\((0..<alert.buttons.count).map { alert.buttons.element(boundBy: $0).label }.joined(separator: ", "))]"
+            : "no system alert"
+        let sheet = springboard.otherElements["authentication_ui"].exists ? "Face ID sheet on screen" : "no Face ID sheet"
+        let c = Prompts.shared.counts
+        return "\(alertLine); \(sheet); prompts shown \(c.shown), ended \(c.ended); app state \(app.state.rawValue)"
     }
 
     func shows(_ contains: String, _ timeout: TimeInterval = 3) -> Bool { text(contains).waitForExistence(timeout: timeout) }
@@ -95,6 +143,17 @@ class SealctlTestCase: XCTestCase {
             return
         }
         XCTFail("no button: \(Self.shown(id))\n\(uiTree())", file: file, line: line)
+    }
+
+    /// Waits until the system keyboard has gone. After the pairing code is typed, the keyboard
+    /// slides away over the bottom of the next screen, where its buttons are; a tap made while it
+    /// is still there lands on the keyboard and is lost (slow first keyboard on a cold simulator,
+    /// PR #64's first CI run: "Pair" tapped, nothing happened).
+    func keyboardGone(_ timeout: TimeInterval = 20, file: StaticString = #filePath, line: UInt = #line) {
+        let keyboard = app.keyboards.firstMatch
+        if keyboard.exists && !keyboard.waitForNonExistence(timeout: timeout) {
+            XCTFail("the keyboard stayed up\n\(uiTree())", file: file, line: line)
+        }
     }
 
     func waitHittable(_ e: XCUIElement, _ timeout: TimeInterval = 5) {
@@ -218,17 +277,27 @@ class SealctlTestCase: XCTestCase {
         tap("Check", file: file, line: line)
     }
 
-    /// Answers the notification permission alert, which only the first launch of a run sees
-    /// (iOS asks once per install): SpringBoard's own "Allow"; the interruption monitor only
-    /// when an alert without "Allow" shows. Tests that see no alert lose 2 s.
-    func allowSystemAlert() {
-        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+    /// Answers the notification permission alert until `next` shows. Only the first launch of a
+    /// run sees the alert (iOS asks once per install), and on a cold simulator it can come up
+    /// seconds after the tap, while the app waits for its answer: a fixed short wait missed it
+    /// and left the app behind it. So until `next` shows, SpringBoard's "Allow" is tapped whenever
+    /// the alert is there (an alert without it goes to the interruption monitor); each wait is for
+    /// `next` itself.
+    func allowSystemAlert(until shown: String, _ timeout: TimeInterval = 30,
+                          file: StaticString = #filePath, line: UInt = #line) {
+        let next = text(shown)
+        let springboard = PromptButtons.springboard
         let alert = springboard.alerts.firstMatch
-        guard alert.waitForExistence(timeout: 2) else { return }
-        if alert.buttons["Allow"].exists {
-            alert.buttons["Allow"].tap()
-        } else {
-            nudge()
+        let end = Date().addingTimeInterval(timeout)
+        while !next.exists && Date() < end {
+            if alert.exists {
+                if alert.buttons["Allow"].exists { alert.buttons["Allow"].tap() } else { nudge() }
+            }
+            _ = next.waitForExistence(timeout: 1)
+        }
+        if !next.exists {
+            XCTFail("not shown after the notification alert: \(shown)\n\(uiTree())\n\(uiTree(2000, of: springboard))",
+                    file: file, line: line)
         }
     }
 
@@ -289,7 +358,7 @@ class SealctlTestCase: XCTestCase {
         tap("Continue")
         see("Requests arrive as notifications")
         tap("Allow notifications")
-        allowSystemAlert()
+        allowSystemAlert(until: restored ? "Machines" : "Learn your places?")
         if restored {
             see("Machines", 20)
             return
@@ -380,9 +449,10 @@ class SealctlTestCase: XCTestCase {
         tap("Continue")
     }
 
-    func confirmPairing(_ name: String, button: String = "Pair") {
-        if button == "Pair" { see("Pair this machine?") }
-        tap(button)
+    func confirmPairing(_ name: String, button: String = "Pair", file: StaticString = #filePath, line: UInt = #line) {
+        if button == "Pair" { see("Pair this machine?", file: file, line: line) }
+        keyboardGone(file: file, line: line)
+        tap(button, file: file, line: line)
         gate(then: "Paired. \(name) can now ask this phone for keys.", 30)
         tap("Done")
     }

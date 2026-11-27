@@ -107,7 +107,12 @@ enum Harness {
 
     static func openURL(_ url: String) { HTTP.call("POST", "\(Env.harness)/openurl", ["url": url]) }
 
-    static func push(_ payload: [String: Any]) { HTTP.call("POST", "\(Env.harness)/push", ["payload": payload]) }
+    /// Pushes with `xcrun simctl push`, which the harness runs as a job: it can take more than a
+    /// minute on a busy simulator, so the call returns at once and the job says when it ended.
+    @discardableResult
+    static func push(_ payload: [String: Any]) -> Job {
+        Job(id: HTTP.call("POST", "\(Env.harness)/push", ["payload": payload])["id"] as? String ?? "")
+    }
 
     static func reset() { HTTP.call("POST", "\(Env.harness)/reset") }
 }

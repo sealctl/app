@@ -2,7 +2,9 @@ package com.sealctl.app
 
 import com.sealctl.core.RequestKind
 import com.sealctl.core.app.ReplyOption
+import com.sealctl.vault.AuthResult
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -128,5 +130,19 @@ class TextsTest {
         assertEquals("Skips the two-hour wait from ${Texts.time(at)}, unless one of your computers cancels it.", Texts.placeSettles(at))
         assertEquals("Home skips the two-hour wait from ${Texts.time(at)}, unless one of your computers cancels it.", Texts.delayedAt(Texts.PLACE, "Home", at))
         assertEquals("Trusting Home", Texts.delayScreenTitle(Texts.PLACE, "Home"))
+    }
+
+    /** 11.4: a cancelled or failed restore prompt says so; the screen stays and Yes asks again. */
+    @Test
+    fun restoreLineAfterThePrompt() {
+        assertNull(Texts.restoreLine(AuthResult.Success(null)))
+        assertEquals("Couldn't confirm it's you, so nothing was restored. Try again.", Texts.restoreLine(AuthResult.Cancelled))
+        assertEquals(Texts.RESTORE_NOT_CONFIRMED, Texts.restoreLine(AuthResult.Failed(BiometricErrorTimeout, "Timeout")))
+        assertEquals(Texts.LOCKED_OUT, Texts.restoreLine(AuthResult.LockedOut))
+    }
+
+    private companion object {
+        /** `BiometricPrompt.ERROR_TIMEOUT`. */
+        const val BiometricErrorTimeout = 3
     }
 }

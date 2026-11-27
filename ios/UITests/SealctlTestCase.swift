@@ -13,6 +13,7 @@ class SealctlTestCase: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
         try XCTSkipUnless(Harness.up, "the harness (ios/scripts/harness.py) is not running")
+        _ = Prompts.shared // counts prompts from before the first one
         Bio.enroll()
         Harness.reset()
         if Env.fakeRelay {
@@ -130,16 +131,67 @@ class SealctlTestCase: XCTestCase {
         field.typeText(text)
     }
 
-    /// Answers the Face ID prompt the last tap raised: matches until `next` shows.
-    func faceID(then next: String, _ timeout: TimeInterval = 20, file: StaticString = #filePath, line: UInt = #line) {
-        let end = Date().addingTimeInterval(timeout)
-        Thread.sleep(forTimeInterval: 1)
-        while Date() < end {
-            if shows(next, 0.5) { return }
-            Bio.match()
-            Thread.sleep(forTimeInterval: 1)
+    /// Answers the Face ID prompt the last tap raised: matches until `next` shows. With `again`,
+    /// a prompt that ended without a match (the app shows its error line and `again` can be
+    /// tapped, SPEC.md 11.4) is asked again with that button.
+    func faceID(then next: String, _ timeout: TimeInterval = 20, again: String? = nil,
+                file: StaticString = #filePath, line: UInt = #line) {
+        if !answerFaceID(until: text(next), timeout, again: again) {
+            let c = Prompts.shared.counts
+            XCTFail("not shown after Face ID: \(next) (prompts shown \(c.shown), ended \(c.ended), open: \(Prompts.shared.open))\n\(uiTree())",
+                    file: file, line: line)
         }
-        see(next, 1, file: file, line: line)
+    }
+
+    /// Answers Face ID prompts until `done` exists. A match only counts while the prompt is
+    /// matching: the simulator drops one posted before (its sheet is still coming up, which on a
+    /// cold simulator takes seconds) or after. So while a prompt is open (`Prompts`) a match is
+    /// posted and the wait is for `done` itself, never a fixed sleep; a prompt that gave up on a
+    /// face offers "Try Face ID Again", which is tapped as a person would. When the app shows its
+    /// error line with `again` enabled, its prompt ended without a match (the app clears the line
+    /// when it asks and sets it only from the prompt's answer, so this holds even when the prompt
+    /// ended without announcing it): `again` asks again, at most twice, and the test log says so.
+    @discardableResult
+    func answerFaceID(until done: XCUIElement, _ timeout: TimeInterval, again: String? = nil) -> Bool {
+        let error = element("error")
+        let end = Date().addingTimeInterval(timeout)
+        var asked = 0
+        while Date() < end {
+            if done.exists { return true }
+            if let again, asked < 2, error.exists, app.buttons[again].exists, app.buttons[again].isEnabled {
+                asked += 1
+                print("faceID: the prompt ended without a match (\"\(error.label)\"); tapping \(Self.shown(again)) again")
+                app.buttons[again].tap()
+                continue
+            } else if Prompts.shared.open {
+                if PromptButtons.tryAgain.exists { PromptButtons.tryAgain.tap() }
+                Bio.match()
+            } else {
+                // No prompt open yet (or one the notifications did not announce): a match no
+                // prompt takes is dropped, so this is harmless.
+                Bio.match()
+            }
+            _ = done.waitForExistence(timeout: 1)
+        }
+        return done.exists
+    }
+
+    /// Makes the open Face ID prompt fail: a face it doesn't recognise until it offers "Try Face
+    /// ID Again", then Cancel. Returns once the prompt has ended.
+    func failFaceID(file: StaticString = #filePath, line: UInt = #line) {
+        let tryAgain = PromptButtons.tryAgain
+        let end = Date().addingTimeInterval(20)
+        while !tryAgain.exists && Date() < end {
+            Bio.noMatch()
+            _ = tryAgain.waitForExistence(timeout: 1)
+        }
+        guard tryAgain.exists else {
+            XCTFail("Face ID never failed (prompt open: \(Prompts.shared.open))\n\(uiTree())", file: file, line: line)
+            return
+        }
+        PromptButtons.cancel.tap()
+        let closed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in !Prompts.shared.open }, object: nil)
+        XCTAssertEqual(XCTWaiter().wait(for: [closed], timeout: 10), .completed, "the prompt stayed open", file: file, line: line)
     }
 
     /// Answers a level 2 or 3 confirmation the last tap raised. The first one on this phone
@@ -158,11 +210,7 @@ class SealctlTestCase: XCTestCase {
     func typeCardWords(_ count: Int, file: StaticString = #filePath, line: UInt = #line) {
         tap("Use my card", file: file, line: line)
         let fields = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'field-'"))
-        let end = Date().addingTimeInterval(30)
-        while !fields.firstMatch.exists && Date() < end {
-            Bio.match()
-            Thread.sleep(forTimeInterval: 1)
-        }
+        answerFaceID(until: fields.firstMatch, 30)
         XCTAssertTrue(fields.firstMatch.waitForExistence(timeout: 5), uiTree(3000), file: file, line: line)
         let positions = (0..<fields.count).map { Int(fields.element(boundBy: $0).identifier.dropFirst(6))! }
         XCTAssertEqual(positions.count, count, file: file, line: line)
@@ -279,15 +327,20 @@ class SealctlTestCase: XCTestCase {
         }
     }
 
-    func restoreVectorWords() {
+    /// Welcome, Restore, the vector words typed: up to "Does your card say qHWf?".
+    func typeVectorWords() {
         see("Your phone holds the keys.", 30)
         tap("Restore")
         see("Type your 24 words")
         typeWords(Env.vectorWords)
         see("This is seed", 20)
         see("Does your card say qHWf?")
+    }
+
+    func restoreVectorWords() {
+        typeVectorWords()
         tap("Yes")
-        faceID(then: "Found your backup", 30)
+        faceID(then: "Found your backup", 30, again: "Yes")
         words = Env.vectorWords
         tap("Continue")
         see("Where is your old phone?")

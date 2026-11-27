@@ -369,23 +369,34 @@ private fun PairFirst(onScan: () -> Unit, onLater: () -> Unit) {
 private fun BackupFoundScreen(found: Phase.BackupFound?, activity: MainActivity, onRestored: () -> Unit, onPaper: () -> Unit, onCreate: () -> Unit) {
     val scope = rememberCoroutineScope()
     var error by remember { mutableStateOf<String?>(null) }
+    // The prompt is open: the button waits for its answer instead of asking twice.
+    var asking by remember { mutableStateOf(false) }
     val fp = found?.fingerprint ?: ""
     Page(null, onBack = null, bottom = {
         ErrorText(error)
         PrimaryButton("Restore $fp", {
+            if (asking) return@PrimaryButton
+            asking = true
+            error = null
             scope.launch {
-                val bytes = Graph.blockStore.read() ?: run { error = "The backup is gone."; return@launch }
-                val item = runCatching { backupItemDecode(bytes) }.getOrNull() ?: run { error = "The backup can't be read."; return@launch }
-                bytes.fill(0)
-                val r = try { Graph.words.restore(activity, item.words) } catch (e: NoBiometricsException) { error = NEEDS_FINGERPRINT; return@launch }
-                if (r is AuthResult.Success) {
-                    Graph.words.restored(item.fingerprint)
-                    Graph.words.release()
-                    onRestored()
+                try {
+                    val bytes = Graph.blockStore.read() ?: run { error = "The backup is gone."; return@launch }
+                    val item = runCatching { backupItemDecode(bytes) }.getOrNull() ?: run { error = "The backup can't be read."; return@launch }
+                    bytes.fill(0)
+                    val r = try { Graph.words.restore(activity, item.words) } catch (e: NoBiometricsException) { error = NEEDS_FINGERPRINT; return@launch }
+                    // Cancelled or failed: nothing was stored; the button asks again.
+                    error = Texts.restoreLine(r)
+                    if (r is AuthResult.Success) {
+                        Graph.words.restored(item.fingerprint)
+                        Graph.words.release()
+                        onRestored()
+                    }
+                } finally {
+                    asking = false
                 }
             }
-        })
-        SecondaryButton("Restore from paper", onPaper)
+        }, enabled = !asking)
+        SecondaryButton("Restore from paper", onPaper, enabled = !asking)
         PlainButton("Create new words", onCreate)
     }) {
         Spacer(Modifier.height(48.dp))
@@ -449,22 +460,33 @@ private fun RestoreWords(onBack: () -> Unit, onParsed: () -> Unit) {
 private fun RestoreConfirm(activity: MainActivity, onNo: () -> Unit, onYes: () -> Unit) {
     val scope = rememberCoroutineScope()
     var error by remember { mutableStateOf<String?>(null) }
+    // The prompt is open: Yes waits for its answer instead of asking twice.
+    var asking by remember { mutableStateOf(false) }
     val words = Typed.parsed ?: run { LaunchedEffect(Unit) { onNo() }; return }
     val fp = remember(words) { Root.fromWords(words).let { r -> fingerprint(r).also { r.destroy() } } }
     Page(null, onBack = onNo, bottom = {
         ErrorText(error)
         PrimaryButton("Yes", {
+            if (asking) return@PrimaryButton
+            asking = true
+            error = null
             scope.launch {
-                val r = try { Graph.words.restore(activity, words) } catch (e: NoBiometricsException) { error = NEEDS_FINGERPRINT; return@launch }
-                if (r is AuthResult.Success) {
-                    Graph.words.restored(fp)
-                    Graph.words.release()
-                    Typed.clear()
-                    onYes()
+                try {
+                    val r = try { Graph.words.restore(activity, words) } catch (e: NoBiometricsException) { error = NEEDS_FINGERPRINT; return@launch }
+                    // Cancelled or failed: nothing was stored; Yes asks again.
+                    error = Texts.restoreLine(r)
+                    if (r is AuthResult.Success) {
+                        Graph.words.restored(fp)
+                        Graph.words.release()
+                        Typed.clear()
+                        onYes()
+                    }
+                } finally {
+                    asking = false
                 }
             }
-        })
-        SecondaryButton("No, check again", onNo)
+        }, enabled = !asking)
+        SecondaryButton("No, check again", onNo, enabled = !asking)
     }) {
         Spacer(Modifier.height(32.dp))
         Row(verticalAlignment = Alignment.CenterVertically) { Title("This is seed "); Mono(fp, size = 22, weight = FontWeight.SemiBold) }

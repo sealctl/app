@@ -25,6 +25,28 @@ final class OnboardingTests: SealctlTestCase {
         see("Your phone holds the keys.")
     }
 
+    /// 11.4: Face ID doesn't recognise the face and the prompt is cancelled. Nothing is restored,
+    /// the screen says so and Yes asks again; the second prompt matches and the restore goes on.
+    func testRestoreAfterAFailedFaceIDAsksAgain() {
+        typeVectorWords()
+        tap("Yes")
+        failFaceID()
+        see("Couldn't confirm it's you, so nothing was restored. Try again.")
+        see("Does your card say qHWf?")
+        XCTAssertTrue(app.buttons["Yes"].isEnabled, uiTree())
+        XCTAssertFalse(shows("Found your backup", 1))
+        tap("Yes")
+        faceID(then: "Found your backup", 30)
+        XCTAssertFalse(element("error").exists)
+        words = Env.vectorWords
+        tap("Continue")
+        see("Where is your old phone?")
+        tap("I still have it, or it was reset")
+        finishOnboarding(restored: true)
+        tab("Settings")
+        see("qHWf")
+    }
+
     func testBadChecksumAndDisabledLetters() {
         see("Your phone holds the keys.", 30)
         tap("Restore")

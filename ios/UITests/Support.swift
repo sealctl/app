@@ -150,3 +150,48 @@ enum Bio {
         notify_post("com.apple.BiometricKit_Sim.fingerTouch.nomatch")
     }
 }
+
+/// The Face ID prompt as LocalAuthentication announces it to the whole simulator: coreauthd
+/// posts `ui.presented` when it shows a prompt and `ui.dismissed` once when that prompt ends
+/// (matched, cancelled or failed). Both are counted from the first use (`setUp`), so a prompt
+/// a tap raised before a helper looks is still seen. A prompt is open while more were shown
+/// than ended.
+final class Prompts: @unchecked Sendable {
+    static let shared = Prompts()
+
+    private let lock = NSLock()
+    private var shown = 0
+    private var ended = 0
+
+    private init() {
+        let queue = DispatchQueue(label: "sealctl.uitests.prompts")
+        for (name, isEnd) in [("com.apple.LocalAuthentication.ui.presented", false),
+                              ("com.apple.LocalAuthentication.ui.dismissed", true)] {
+            var token: Int32 = 0
+            notify_register_dispatch(name, &token, queue) { [self] _ in
+                lock.lock()
+                if isEnd { ended += 1 } else { shown += 1 }
+                lock.unlock()
+            }
+        }
+    }
+
+    var counts: (shown: Int, ended: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (shown, ended)
+    }
+
+    var open: Bool { let c = counts; return c.shown > c.ended }
+}
+
+/// The Face ID prompt's own buttons (in SpringBoard), after a face it didn't recognise.
+enum PromptButtons {
+    static let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+    static var tryAgain: XCUIElement {
+        springboard.buttons["com.apple.localauthentication.ax.authentication.button.try-again"].firstMatch
+    }
+    static var cancel: XCUIElement {
+        springboard.buttons["com.apple.localauthentication.ax.authentication.button.cancel"].firstMatch
+    }
+}

@@ -313,6 +313,28 @@ struct EngineFlowTests {
 
 @MainActor
 struct EngineUnitTests {
+    /// 11.4: a cancelled or failed restore prompt stores nothing and the screen says so; the
+    /// next prompt restores.
+    @Test func restoreAfterAFailedPrompt() async throws {
+        let (engine, vault, _) = try await makeEngine()
+        let w = try Words.parse(list: "bulk search gospel radio edit key flip afford jaguar rapid mechanic power family category snap boss iron web various grow smoke next example lounge"
+            .split(separator: " ").map(String.init))
+        await vault.set(nextOwner: .cancelled)
+        let cancelled = await engine.words.restore(w)
+        #expect(cancelled == .cancelled)
+        #expect(Texts.restoreLine(cancelled) == "Couldn't confirm it's you, so nothing was restored. Try again.")
+        await vault.set(nextOwner: .failed("-1"))
+        #expect(Texts.restoreLine(await engine.words.restore(w)) == Texts.restoreNotConfirmed)
+        #expect(await !vault.hasWords())
+        #expect(!engine.words.hasSession)
+        await vault.set(nextOwner: .passed)
+        let passed = await engine.words.restore(w)
+        #expect(passed == .passed)
+        #expect(Texts.restoreLine(passed) == nil)
+        #expect(await vault.hasWords())
+        engine.words.release()
+    }
+
     @Test func phases() async throws {
         let (engine, vault, _) = try await makeEngine()
         await engine.computePhase()

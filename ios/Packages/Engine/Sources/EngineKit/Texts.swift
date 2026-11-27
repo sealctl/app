@@ -1,5 +1,6 @@
 import Foundation
 import SealCore
+import Vault
 
 /// The app's wording, exactly as SPEC.md 11 gives it, in one place so it can move to the
 /// string catalog for translation (SPEC.md 13) without touching the screens.
@@ -397,6 +398,17 @@ public enum Texts {
     public static func readyNote(_ expires: Int64) -> String { "Open it by \(time(expires)), or it has to start again." }
 
     public static func handedBack(_ name: String, done: Int, failed: Int) -> String { "\(name) handed back \(done) objects. \(failed) failed." }
+
+    // MARK: restore (11.4)
+
+    /// The restore prompt (Face ID, Touch ID or the passcode) was cancelled or failed: nothing
+    /// was stored, and the button that asked can be tapped again.
+    public static let restoreNotConfirmed = "Couldn't confirm it's you, so nothing was restored. Try again."
+
+    /// The line a restore screen shows after its prompt: nil once it passed.
+    public static func restoreLine(_ auth: OwnerAuth) -> String? {
+        auth == .passed ? nil : restoreNotConfirmed
+    }
 
     // MARK: pairing and errors (11.5, 11.20)
 

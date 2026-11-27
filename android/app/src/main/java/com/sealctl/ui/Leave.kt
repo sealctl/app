@@ -13,10 +13,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.sealctl.app.Graph
 import com.sealctl.app.MainActivity
+import com.sealctl.app.PollBackoff
 import com.sealctl.app.Texts
 import com.sealctl.app.Ui
+import com.sealctl.app.pollWhileStarted
 import com.sealctl.core.Place as PlaceKind
 import com.sealctl.core.app.Event
 import com.sealctl.core.app.HandbackReport
@@ -249,8 +252,13 @@ private fun EachComputer(onContinue: () -> Unit, onSkip: (String) -> Unit, onBac
     val state by engine.state.collectAsState()
     val delayed = local.delayed
     var skipping by remember { mutableStateOf<String?>(null) }
-    // Asks the relay every 5 s while this screen is on show, not in the background.
-    WhileStarted(5_000) { engine.refreshMachines(); engine.refreshDelayed() }
+    // Asks the relay every 5 s while this screen is on show, not in the background; after an
+    // error it waits longer each time, and a final answer stops it (SPEC.md 8.1).
+    val backoff = remember { PollBackoff(5_000) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle) {
+        lifecycle.pollWhileStarted(backoff, engine.relay::rateLimitedForMs) { engine.refreshHandBack() }
+    }
     // Every machine paired when leaving began; one that unpaired itself shows as handed back.
     val machines = state.machines.filter { !it.deleted }
     val rows = machines.map { m ->

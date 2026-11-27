@@ -135,6 +135,48 @@ struct RelayClientTests {
         }
     }
 
+    /// A message the app sends by itself (a lock on leaving a place, a notice) waits out the
+    /// window; one the person taps goes (SPEC.md 8.1).
+    @Test func messagesTheAppSendsByItselfWaitOutTheWindow() async throws {
+        let keys = try fresh()
+        let c = RelayClient(baseURL: testRelay!, keys: { keys })
+        _ = try await control("/test/fail", ["status": 429, "error": "rate_limited", "retryAfter": 120])
+        _ = try? await c.machines()
+        do {
+            try await c.postMessage(machine: "nope", sealed: "x")
+            Issue.record("sent inside the window")
+        } catch let e as RelayError {
+            #expect(e.code == "rate_limited")
+        }
+        do {
+            try await c.postMessage(machine: "nope", sealed: "x", userTapped: true)
+        } catch let e as RelayError {
+            // The relay was reached: the machine is not paired.
+            #expect(e.code != "rate_limited")
+        }
+    }
+
+    /// The window outlives the client: one made later (the extension makes one per push)
+    /// starts inside it (SPEC.md 8.1, 10.1).
+    @Test func theWindowIsKeptForTheNextClient() async throws {
+        let keys = try fresh()
+        let kept = Kept()
+        let first = RelayClient(baseURL: testRelay!, keys: { keys }, onRateLimited: { kept.value = $0 })
+        _ = try await control("/test/fail", ["status": 429, "error": "rate_limited", "retryAfter": 120])
+        _ = try? await first.requests()
+        let end = try #require(kept.value)
+        #expect(end == (await first.rateLimitedUntil))
+        let next = RelayClient(baseURL: testRelay!, keys: { keys }, rateLimitedUntil: end)
+        let left = await next.rateLimitedForMs()
+        #expect(left > 110_000 && left <= 120_000)
+        do {
+            _ = try await next.requests()
+            Issue.record("called inside the window")
+        } catch let e as RelayError {
+            #expect(e.code == "rate_limited")
+        }
+    }
+
     @Test func forcedErrorBodies() async throws {
         let keys = try fresh()
         let c = RelayClient(baseURL: testRelay!, keys: { keys })
@@ -183,4 +225,14 @@ actor Seen {
     var acceptedTimes: [Int64] = []
     func time(_ t: Int64) { times.append(t) }
     func accepted(_ t: Int64) { acceptedTimes.append(t) }
+}
+
+/// The window a client handed to `onRateLimited`.
+final class Kept: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value: Int64?
+    var value: Int64? {
+        get { lock.withLock { _value } }
+        set { lock.withLock { _value = newValue } }
+    }
 }

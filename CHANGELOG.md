@@ -38,6 +38,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
   longer recorded or counted.
 - iPhone: the lifetimes (and the usage log's trim) now apply when the app comes to the
   foreground, at most once a day.
+- Leave sealctl: "Hand back each computer" asks the relay less often after errors (up to once
+  a minute) and stops at an answer that will not change.
+- Answers, refusals, locks and notices the app sends by itself wait while the relay asks the
+  phone to slow down, as its other background calls do; what you tap still goes at once. The
+  wait is remembered when the app, or the iPhone notification extension, starts again.
+- An erase that was cut short (the app closed halfway) finishes at the next start.
+- iPhone: leaving the app while it was coming to the foreground no longer opens the live
+  connection in the background, and an answer from a notification button that comes before the
+  app has started says "Couldn't send your answer — try again." instead of nothing.
 - Android: Activity shows the previous months behind a chevron, as on iPhone.
 - A machine's day ends at the next 02:00 local time or 24 hours after its first approval,
   whichever is first (it was 14 hours, which ended a day begun in the morning in the middle of

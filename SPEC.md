@@ -360,7 +360,8 @@ Secrets are encrypted with AES-256-GCM using Android Keystore keys and stored as
   - Signed calls check it: every call the relay accepts shows that the relay's clock is within its 5-minute signature window of the `Sealctl-Time` sent. If the corrected clock is further than that from it, it is **stale** until the relay's time is learned again.
   - **Stale or unknown** (not fresh, or never learned): the later of the system clock and the last-known corrected clock (the last relay time plus the since-boot time since, or only the last relay time after a reboot). A wait never ends early because the clock was set back, and a place added by hand does not lift the level 3 delay at all until the clock is fresh again (9.6). A place added by hand while the clock is stale is not stamped (`created` 0, shown as "trusted just now"): its two hours start when the clock is next fresh, since a stale clock can be days behind. If `/v1/health` can't be reached, the clock stays stale, which fails closed.
   - On iOS the app copies the last relay time into the extension's snapshot (6.4). When it is stale, the extension asks `/v1/health` itself before it decides.
-- Calls the app makes count towards the phone's 5,000 calls a day. The app never polls on a timer.
+- Calls the app makes count towards the phone's 5,000 calls a day. The app never polls on a timer in the background. A screen that checks the relay while it is on show (Leave sealctl's "Hand back each computer", every 5 seconds, 11.22) waits twice as long after each error, up to a minute, with ±20% jitter, never inside the rate-limit window, and stops at an answer that will not change (any `4xx` but `408` and `429`, a refused clock, no keys).
+- The rate-limit window holds back every call the person did not tap. What the person taps goes: a reply, Lock, Lock all, Unpair, Delete my relay data. What the app sends by itself waits: automatic answers and refusals, plan-key and report replies, a lock on leaving a place (sent again at the next exit, fix or start), notices, a cancel sent again. The window outlives the process: the app keeps its end (on iPhone in the app group, shared with the extension, which makes a client for each push; on Android in the app's preferences), and a client made later starts inside it, for at most a day.
 
 Errors the app handles everywhere:
 
@@ -370,7 +371,7 @@ Errors the app handles everywhere:
 | Other `401` | Log (private); show "The relay refused this phone's signature. Update the app." |
 | `403 forbidden` | The phone key is unknown for that machine: refresh the machine list |
 | `413 too_large` | Bodies other than the state stay far below the relay's 16 KiB limit, so this only means a bug; for the state, see 6.5 |
-| `429 rate_limited` with `retryAfter` and `scope` | Stop calls until `retryAfter` except replies the user taps; show the limit banner |
+| `429 rate_limited` with `retryAfter` and `scope` | Stop calls until `retryAfter` except what the person taps (above); show the limit banner |
 | `500 internal`, `502`, `503`, network errors | Retry with the backoff in 8.3; replies follow 8.5 |
 
 ### 8.2 Endpoints the app uses
@@ -404,7 +405,7 @@ The app never calls `licence`, `checkout` or `claim`.
 - The app sends the text `ping` every 30 seconds; the relay answers `pong`. No `pong` within 10 seconds means the socket is dead: close and reconnect.
 - The relay also pushes while the socket is open. The app ignores a push for a request it already handled through the socket and shows no notification for it in the foreground.
 - Reconnect after a drop: 1, 2, 4, 8, 16, then every 30 seconds, each with ±20% jitter. At most 60 upgrades an hour, since upgrades count towards the abuse limit.
-- When the app leaves the foreground the socket closes, however long it was open: a call's time limits (8.1) cover only the socket's upgrade, and the foreground and the ping bound the open socket. A message that still arrives on a closed socket is not acted on; the request waits for its push and the next catch-up. iOS would suspend it anyway; Android closes it so it does not hold a connection in the background. A foreground that ends before its work starts opens no socket and does not count as foreground, so requests then still show notifications.
+- When the app leaves the foreground the socket closes, however long it was open: a call's time limits (8.1) cover only the socket's upgrade, and the foreground and the ping bound the open socket. A message that still arrives on a closed socket is not acted on; the request waits for its push and the next catch-up. iOS would suspend it anyway; Android closes it so it does not hold a connection in the background. A foreground that ends before its work starts opens no socket and does not count as foreground, so requests then still show notifications. Each foreground is a turn: on iPhone, a foreground whose turn ended while its first calls were on their way (the app left, or came back in a newer turn) opens no socket either.
 
 ### 8.4 Background: push
 
@@ -418,10 +419,10 @@ The app never calls `licence`, `checkout` or `claim`.
 - `created` and `expires` are on the relay's clock. A phone clock ahead of the relay's by less than its 5-minute signature window raises no clock error, so the phone counts a request's time to `expires` plus the time between `created` and when it first saw the request, at most 5 minutes. A reply after the relay's own `expires` gets `404 gone`; the relay decides.
 - The card's timer and an answer on its way, at any level: the answer decides. When the relay takes it, it is recorded once, as answered; when it fails after the request's time, the card shows "stopped waiting". A tap after the request's time (the timer did not run, for example after the phone slept) sends nothing and shows "stopped waiting". Claiming a card for an answer and expiring it are one step each, so on Android, where the timer and the answer run on different threads, only one of them gets the card.
 - A try that got no answer or a `5xx` may still have reached the relay. When a later try gets `404 gone`, or the request's time runs out while trying, an allow is recorded as given (its use and the day, at the place it was decided; never as a remembered answer), the card shows "stopped waiting", and leaving that place locks the machine (11.9). The machine may have the keys, so the phone acts as if it does.
-- When a reply the person tapped does not go (a `4xx` other than `404 gone`, `429`, or it could not be sealed), the card keeps its buttons and shows "Couldn't send your answer — try again." The core seals a request once, so the app opens it again from the relay's text for the next tap. From a notification action, the request's notification comes back with that text as its body (on iPhone an action removes the notification); when the request list could not be fetched either, a notification "Waiting for your phone" with that text opens the app.
+- When a reply the person tapped does not go (a `4xx` other than `404 gone`, `429`, or it could not be sealed), the card keeps its buttons and shows "Couldn't send your answer — try again." The core seals a request once, so the app opens it again from the relay's text for the next tap. From a notification action, the request's notification comes back with that text as its body (on iPhone an action removes the notification); when the request list could not be fetched either, a notification "Waiting for your phone" with that text opens the app. The same notification replaces the request's when an iPhone action finds the app not started within 5 seconds.
 - An answer keeps going when the person leaves the app at once: iPhone runs it inside `beginBackgroundTask`; Android runs it in the app's scope, not the screen's.
 - `404 gone` means the machine stopped waiting. The app records the request as expired and shows "dev@mbp.example.com stopped waiting." if the user is looking at it.
-- `429 rate_limited`: the app shows the limit banner with the reset time from `retryAfter` (and `scope` in the private log), and stops making calls until then except replies the user taps.
+- `429 rate_limited`: the app shows the limit banner with the reset time from `retryAfter` (and `scope` in the private log), and stops making calls until then except replies the user taps. An answer the app would give by itself waits too: the person is asked instead (9.1).
 
 ### 8.6 Offline
 
@@ -1398,7 +1399,7 @@ The relay keeps a licence record, if there is one, so a restore from the words i
 > [ ] Also remove the copy in iCloud Keychain (Android: Google backup)
 > [Erase] [Cancel]
 
-Erase removes this install's push device (`DELETE /v1/phones/{phone}/push/{device}`), then deletes every keychain item or Keystore key and file, the database and the snapshot, then returns to Welcome. Erasing does not delete relay data; the screen offers [Delete my relay data first] above [Erase].
+Erase removes this install's push device (`DELETE /v1/phones/{phone}/push/{device}`), then deletes every keychain item or Keystore key and file, the database and the snapshot, then returns to Welcome. A marker is written before the keys go and removed once the database is gone too: an erase cut short (the app closed or ended halfway) is finished at the next start, before anything reads the database. Erasing does not delete relay data; the screen offers [Delete my relay data first] above [Erase].
 
 ### 11.20 Empty and error states
 

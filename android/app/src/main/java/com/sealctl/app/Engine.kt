@@ -83,8 +83,10 @@ import com.sealctl.relay.long
 import com.sealctl.vault.Biometric
 import com.sealctl.vault.KeysInvalidatedException
 import com.sealctl.vault.Vault
+import java.io.File
 import java.io.IOException
 import java.util.TimeZone
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -157,11 +159,22 @@ class Engine(
 ) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     @Volatile private var phoneKeysCache: PhoneKeys? = null
+    /** The rate-limit window, kept for a process started later (a push, a notification action). */
+    private val relayPrefs = context.getSharedPreferences("relay", Context.MODE_PRIVATE)
     val relay = RelayClient(
         relayUrl, { phoneKeys() },
         onRelayTime = { t -> safe { store.relayTime(t.toULong()) } },
         onAccepted = { t -> safe { store.relayAccepted(t.toULong()) } },
+        rateLimitedUntil = Polling.keptWindow(relayPrefs.getLong(RATE_LIMITED_UNTIL, 0), System.currentTimeMillis()),
+        onRateLimited = { until -> relayPrefs.edit().putLong(RATE_LIMITED_UNTIL, until).apply() },
     )
+
+    /** An erase cut short by a stop is finished before anything reads the database (SPEC.md 11.19). */
+    private val eraseMarker = EraseMarker(File(context.noBackupFilesDir, "erasing"))
+
+    init {
+        if (eraseMarker.resume(::eraseKeysAndData)) dlog("finished an erase that did not end")
+    }
 
     val phase = MutableStateFlow<Phase>(Phase.Loading)
     val state = MutableStateFlow(safe { store.snapshot() } ?: emptyState())
@@ -381,6 +394,25 @@ class Engine(
     fun closeSocket() = sockets.close()
 
     /**
+     * Erase on this phone (SPEC.md 11.19): the keys, then the database, under [eraseMarker], so
+     * that a stop between the two is finished at the next start. False when the database could
+     * not be erased (the next start tries again).
+     */
+    suspend fun eraseLocal(): Boolean = withContext(Dispatchers.Default) {
+        closeSocket()
+        val done = eraseMarker.erasing(::eraseKeysAndData)
+        refreshState()
+        waiting.value = emptyList()
+        done
+    }
+
+    private fun eraseKeysAndData(): Boolean {
+        vault.erase()
+        forgetPhoneKeys()
+        return safe { store.erase() } != null
+    }
+
+    /**
      * Leave sealctl from step 5 on: the relay data is being deleted or is gone, so foreground
      * work does not call the relay, which would only be refused or bring the phone back (SPEC.md 11.22).
      */
@@ -471,7 +503,7 @@ class Engine(
             plan = try {
                 assemblers.getOrPut(r.machine) { PlanAssembler() }.add(req)
             } catch (e: Exception) {
-                reply(req, r, Decision.Refuse(RefuseReason.BAD_LABEL), "ignored", allowed = false)
+                reply(req, r, Decision.Refuse(RefuseReason.BAD_LABEL), "ignored", allowed = false, userTapped = false)
                 return@withLock
             }
         }
@@ -490,7 +522,7 @@ class Engine(
             Asking.SILENT -> silent(req, r)
             Asking.AUTOMATIC -> {
                 val d = verdict.automatic ?: return@withLock
-                when (send(req, r, d, "automatic", allowed = true, remember = false, decidedAt = mark)) {
+                when (send(req, r, d, "automatic", allowed = true, remember = false, decidedAt = mark, userTapped = false)) {
                     Sent.POSTED -> Notify.show(
                         context, Notify.ANSWERED, "auto-${r.id}",
                         Texts.answeredByItself(displayName(machine), placeName()), null, timeoutMs = 60_000,
@@ -506,7 +538,7 @@ class Engine(
             Asking.PLAN_KEYS -> planKeys(req, r)
             Asking.REFUSED -> {
                 val err = verdict.refuse ?: RefuseReason.UNSUPPORTED
-                reply(req, r, Decision.Refuse(err), "denied", allowed = false)
+                reply(req, r, Decision.Refuse(err), "denied", allowed = false, userTapped = false)
                 if (err == RefuseReason.NOT_NEAR || err == RefuseReason.NO_BIOMETRICS) {
                     val text = if (err == RefuseReason.NOT_NEAR) Texts.notNear(displayName(machine)) else Texts.NO_BIOMETRICS
                     Notify.show(context, Notify.SENSITIVE, "refused-${r.id}", text, null)
@@ -792,7 +824,8 @@ class Engine(
 
     /**
      * Seals and posts one reply, then records it. Returns false when the reply could not be
-     * sealed or the machine stopped waiting.
+     * sealed or the machine stopped waiting. [userTapped]: the person answered; false for an
+     * answer the app gives by itself, which waits out the rate-limit window (SPEC.md 8.1).
      */
     suspend fun reply(
         req: Request,
@@ -803,7 +836,8 @@ class Engine(
         remember: Boolean = false,
         delaySecs: Int? = null,
         decidedAt: PlaceMark? = null,
-    ): Boolean = send(req, r, decision, outcome, allowed, remember, delaySecs, decidedAt) == Sent.POSTED
+        userTapped: Boolean = true,
+    ): Boolean = send(req, r, decision, outcome, allowed, remember, delaySecs, decidedAt, userTapped) == Sent.POSTED
 
     /**
      * [reply], telling why a reply did not go. A request on the card whose reply did not go is
@@ -818,6 +852,7 @@ class Engine(
         remember: Boolean = false,
         delaySecs: Int? = null,
         decidedAt: PlaceMark? = null,
+        userTapped: Boolean = true,
     ): Sent {
         val mark = decidedAt ?: placeMark()
         val keys = phoneKeys() ?: return Sent.FAILED
@@ -831,7 +866,7 @@ class Engine(
             reopen(r, keys)
             return Sent.FAILED
         }
-        val (sent, unsure) = post(r, sealed, delaySecs, userTapped = true)
+        val (sent, unsure) = post(r, sealed, delaySecs, userTapped)
         when {
             sent == Sent.POSTED -> record(req, r, outcome, allowed, remember, mark)
             sent == Sent.GONE && unsure && allowed -> {
@@ -997,11 +1032,12 @@ class Engine(
     // ---------- delayed approvals (SPEC.md 11.23) ----------
 
     /** Returns whether the relay's list was fetched. Main-safe: the store is read off the main thread. */
-    suspend fun refreshDelayed(): Boolean = withContext(Dispatchers.Default) { refreshDelayedHere() }
+    suspend fun refreshDelayed(): Boolean = withContext(Dispatchers.Default) { refreshDelayedHere() == null }
 
-    private suspend fun refreshDelayedHere(): Boolean {
-        if (phoneKeys() == null) return false
-        val list = runCatching { relay.listDelayed() }.getOrNull() ?: return false
+    /** Null when the relay's list was fetched; otherwise why not. */
+    private suspend fun refreshDelayedHere(): Exception? {
+        if (phoneKeys() == null) return RelayException(0, "no_keys")
+        val list = try { relay.listDelayed() } catch (e: CancellationException) { throw e } catch (e: Exception) { return e }
         for (d in list) {
             val mine = local.value.delayed.firstOrNull { it.id == d.id }
             if (mine == null) {
@@ -1038,7 +1074,7 @@ class Engine(
             }
         }
         delayedTick.value = System.currentTimeMillis()
-        return true
+        return null
     }
 
     /**
@@ -1278,7 +1314,8 @@ class Engine(
             if (m.boxKey.isEmpty()) continue
             val msg = MachineMessage(1u, System.currentTimeMillis().toULong(), nextSeq(m.key),
                 MessageKind.Notice(Notice(what, st, name, delayId, at?.toULong(), report)))
-            runCatching { relay.postMessage(m.key, sealMachineMessage(keys, m.key, m.boxKey, msg)) }
+            // Sent by the app, not tapped: the rate-limit window holds it back (SPEC.md 8.1).
+            runCatching { relay.postMessage(m.key, sealMachineMessage(keys, m.key, m.boxKey, msg), userTapped = false) }
         }
     }
 
@@ -1286,25 +1323,30 @@ class Engine(
 
     // ---------- machines ----------
 
-    /** Sends a lock to a machine; the relay holds it up to 24 hours. */
-    suspend fun lock(machine: Machine, reason: String = "phone"): Boolean {
+    /**
+     * Sends a lock to a machine; the relay holds it up to 24 hours. [userTapped]: the person
+     * tapped Lock (or Unpair, Delete); a lock the app sends by itself, such as on leaving a
+     * place, waits out the rate-limit window and is sent again later (SPEC.md 8.1, 11.9).
+     */
+    suspend fun lock(machine: Machine, reason: String = "phone", userTapped: Boolean = false): Boolean {
         lockSender?.let { return it(machine, reason) }
         val keys = phoneKeys() ?: return false
         if (machine.boxKey.isEmpty()) return false
         val msg = MachineMessage(1u, System.currentTimeMillis().toULong(), nextSeq(machine.key), MessageKind.Lock(reason))
         return runCatching {
-            relay.postMessage(machine.key, sealMachineMessage(keys, machine.key, machine.boxKey, msg)); true
+            relay.postMessage(machine.key, sealMachineMessage(keys, machine.key, machine.boxKey, msg), userTapped); true
         }.getOrElse { relayFailed(it as? Exception ?: Exception()); false }
     }
 
+    /** Lock all, tapped by the person. */
     suspend fun lockAll(): Int = withContext(Dispatchers.Default) {
         var n = 0
-        for (m in liveMachines()) if (MachineView.of(m, this@Engine).state == com.sealctl.designsystem.MachineState.Open && lock(m)) n++
+        for (m in liveMachines()) if (MachineView.of(m, this@Engine).state == com.sealctl.designsystem.MachineState.Open && lock(m, userTapped = true)) n++
         n
     }
 
     suspend fun unpair(machine: Machine): Boolean {
-        lock(machine)
+        lock(machine, userTapped = true)
         return try {
             relay.removeMachine(machine.key)
             apply(Event.UnpairMachine(machine.key), upload = true)
@@ -1315,8 +1357,11 @@ class Engine(
     }
 
     /** Main-safe, like [refreshStatus] and [refreshDelayed]: screens call them while on show. */
-    suspend fun refreshMachines(): Unit = withContext(Dispatchers.Default) {
-        val list = runCatching { relay.machines() }.getOrNull() ?: return@withContext
+    suspend fun refreshMachines() { refreshMachinesHere() }
+
+    /** Null when the relay's list was fetched; otherwise why not. */
+    private suspend fun refreshMachinesHere(): Exception? = withContext(Dispatchers.Default) {
+        val list = try { relay.machines() } catch (e: CancellationException) { throw e } catch (e: Exception) { return@withContext e }
         apply(Event.MachinesListed(list.map { MachineSeen(it.machine, it.lastSeen?.toULong()) }))
         val keys = list.map { it.machine }.toSet()
         relayMachines.value = keys
@@ -1325,7 +1370,16 @@ class Engine(
         if (local.value.leaveStep == 0u) {
             for (m in liveMachines().filter { it.key !in keys }) apply(Event.UnpairMachine(m.key))
         }
+        null
     }
+
+    /**
+     * One check of Leave sealctl's "Hand back each computer" (SPEC.md 11.22 step 2): the paired
+     * machines, then the delayed records. Null when both were fetched; otherwise the error,
+     * which paces the next check ([PollBackoff]).
+     */
+    suspend fun refreshHandBack(): Exception? =
+        refreshMachinesHere() ?: withContext(Dispatchers.Default) { refreshDelayedHere() }
 
     /** Machines the relay lists as paired, for Leave sealctl (SPEC.md 11.22 step 2). */
     val relayMachines = MutableStateFlow<Set<String>?>(null)
@@ -1628,6 +1682,7 @@ class Engine(
 
     companion object {
         private const val TAG = "sealctl"
+        private const val RATE_LIMITED_UNTIL = "rateLimitedUntil"
         /** The least time between two fixes for a missed exit: at foreground, and in the background. */
         const val FOREGROUND_FIX_GAP_MS = 60_000L
         const val BACKGROUND_FIX_GAP_MS = 10 * 60_000L

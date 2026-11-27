@@ -3,6 +3,7 @@ package com.sealctl.app
 import com.sealctl.core.app.DelayedAction
 import com.sealctl.core.app.PlanApprovalRecord
 import com.sealctl.relay.RateLimitedException
+import com.sealctl.relay.UnavailableException
 import com.sealctl.relay.RelayDelayed
 import com.sealctl.relay.RelayException
 import kotlin.coroutines.cancellation.CancellationException
@@ -145,6 +146,8 @@ internal class CancelResends(private val now: () -> Long = System::currentTimeMi
                 waits -= id
             }
             error is RateLimitedException -> waits[id] = maxOf(error.until, now()) to failures
+            // `503 maintenance` and any 5xx that said when to come back: then (SPEC.md 8.1).
+            error is UnavailableException -> waits[id] = maxOf(error.until, now()) to failures + 1
             else -> waits[id] = now() + backoffMs(failures + 1) to failures + 1
         }
     }

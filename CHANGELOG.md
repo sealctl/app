@@ -8,6 +8,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Added
 
+- Machines: after a lock (leaving a trusted place, Lock, Lock all) the machine's row says
+  "Locking…" until the machine reports it locked, or "Locked" once the relay has held the lock
+  for a minute with no report. A report the machine sent before it got the lock no longer shows
+  the session as open.
+
 - Activity: a heatmap of the last year at the bottom of the tab, as GitHub's contribution graph:
   53 weeks of key uses by day, a tap shows a day's figures, one VoiceOver or TalkBack element
   that moves day by day or week by week. The phone keeps a small table of daily counts for it.
@@ -60,6 +65,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
   explains first and then opens the system's location page for sealctl.
 
 ### Fixed
+
+- Locks and notices to machines are kept and sent again when the relay can't take them at once
+  (no answer, a server error, or a maintenance answer with `Retry-After`), including the lock
+  sent when you leave a trusted place, instead of being dropped. The app waits out a relay's
+  `Retry-After` before calling again.
+- Locks and notices to machines are dated by the clock corrected against the relay, as answers
+  are.
 
 - Show words, Delete my relay data and Leave sealctl after their two-hour wait: the delay screen
   now turns into "Ready until 12:37" with [Show my words] or [Finish] by itself at the end of the

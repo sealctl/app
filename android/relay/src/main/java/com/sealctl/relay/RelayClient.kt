@@ -36,6 +36,13 @@ class ClockSkewException(body: JsonObject) : RelayException(401, "clock_skew", b
 /** `429 rate_limited`: no calls until [until] except replies the user taps (SPEC.md 8.1). */
 class RateLimitedException(val until: Long, val scope: String?, body: JsonObject) : RelayException(429, "rate_limited", body)
 
+/**
+ * The relay is unavailable until [until] (Unix ms on this phone's clock): a `5xx` that carried
+ * `Retry-After`, such as `503 maintenance` while the relay moves, or a call the app makes by
+ * itself held back until then without being sent (SPEC.md 8.1).
+ */
+class UnavailableException(val until: Long, status: Int, code: String, body: JsonObject) : RelayException(status, code, body)
+
 /** `409 conflict` on the state, with the stored revision. */
 class ConflictException(val rev: Long, body: JsonObject) : RelayException(409, "conflict", body)
 
@@ -79,6 +86,9 @@ class RelayClient(
     @Volatile var clockOffsetSecs: Long = 0
     @Volatile var rateLimitedUntil: Long = rateLimitedUntil
         private set
+    /** The end of the last `Retry-After` on a `5xx`, Unix ms on this phone's clock (SPEC.md 8.1). */
+    @Volatile var unavailableUntil: Long = 0
+        private set
 
     val host: String get() = baseUrl.removePrefix("https://").removePrefix("http://")
 
@@ -88,6 +98,19 @@ class RelayClient(
 
     /** Milliseconds left in the rate-limit window (0 when calls may go out). */
     fun rateLimitedForMs(): Long = (rateLimitedUntil - now()).coerceAtLeast(0)
+
+    /** Milliseconds until calls the app makes by itself may go out: the rate-limit window or a `Retry-After`. */
+    fun waitMs(): Long = maxOf(rateLimitedForMs(), (unavailableUntil - now()).coerceAtLeast(0))
+
+    /**
+     * A `5xx` answer (a call or the socket upgrade) that said when to come back: calls the app
+     * makes by itself wait until then. [retryAfterSecs] is capped at an hour; null changes nothing.
+     */
+    fun noteUnavailable(retryAfterSecs: Long?): Long {
+        if (retryAfterSecs == null) return unavailableUntil
+        unavailableUntil = now() + retryAfterSecs.coerceIn(1, MAX_RETRY_AFTER_SECS) * 1000
+        return unavailableUntil
+    }
 
     /** A `429 rate_limited` answer (a call or the socket upgrade): no calls for `retryAfter` seconds (60 when absent). */
     fun noteRateLimited(retryAfterSecs: Long?): Long {
@@ -104,17 +127,21 @@ class RelayClient(
             if (!userTapped && now() < rateLimitedUntil) {
                 throw RateLimitedException(rateLimitedUntil, null, JsonObject(emptyMap()))
             }
+            // The relay said when to come back: what the app sends by itself waits until then.
+            if (!userTapped && now() < unavailableUntil) {
+                throw UnavailableException(unavailableUntil, 503, "unavailable", JsonObject(emptyMap()))
+            }
             val first = execute(method, path, body)
-            val result = if (first.first == 401 && first.second.code() == "clock_skew") {
-                first.second["time"]?.jsonPrimitive?.longOrNull?.let {
+            val result = if (first.status == 401 && first.json.code() == "clock_skew") {
+                first.json["time"]?.jsonPrimitive?.longOrNull?.let {
                     clockOffsetSecs = it - now() / 1000
                     onRelayTime(it * 1000)
                 }
                 val again = execute(method, path, body)
-                if (again.first == 401 && again.second.code() == "clock_skew") throw ClockSkewException(again.second)
+                if (again.status == 401 && again.json.code() == "clock_skew") throw ClockSkewException(again.json)
                 again
             } else first
-            val (status, json, signedAt) = result
+            val (status, json, signedAt, retryAfter) = result
             if (status in 200..299) {
                 onAccepted(signedAt * 1000)
                 return@withContext json
@@ -128,12 +155,18 @@ class RelayClient(
                 }
                 status == 409 && json.code() == "conflict" ->
                     throw ConflictException(json["rev"]?.jsonPrimitive?.longOrNull ?: 0, json)
+                // `503 maintenance` and any other 5xx that says when to come back (relay SPEC 3.18).
+                status >= 500 && (retryAfter ?: json["retryAfter"]?.jsonPrimitive?.longOrNull) != null ->
+                    throw UnavailableException(noteUnavailable(retryAfter ?: json["retryAfter"]?.jsonPrimitive?.longOrNull), status, json.code(), json)
                 else -> throw RelayException(status, json.code(), json)
             }
         }
 
-    /** One try: the status, the body and the signed time (Unix seconds). */
-    private fun execute(method: String, path: String, body: JsonObject?): Triple<Int, JsonObject, Long> {
+    /** One try's answer: the status, the body, the signed time (Unix seconds) and `Retry-After` in seconds. */
+    private data class Answer(val status: Int, val json: JsonObject, val signedAt: Long, val retryAfter: Long?)
+
+    /** One try. */
+    private fun execute(method: String, path: String, body: JsonObject?): Answer {
         val bytes = body?.toString()?.toByteArray() ?: ByteArray(0)
         val t = unixTime()
         val h = relayHeaders(phoneKeys(), method, path, t.toULong(), bytes)
@@ -150,7 +183,7 @@ class RelayClient(
             val json = runCatching { Json.parseToJsonElement(text).jsonObject }.getOrElse {
                 buildJsonObject { put("error", if (res.isSuccessful) "" else "http_${res.code}") }
             }
-            return Triple(res.code, json, t)
+            return Answer(res.code, json, t, retryAfterSecs(res.header("Retry-After")))
         }
     }
 
@@ -288,6 +321,12 @@ class RelayClient(
 
     companion object {
         private val JSON = "application/json".toMediaType()
+
+        /** The longest `Retry-After` taken from a `5xx`: the relay's maintenance never asks for more. */
+        const val MAX_RETRY_AFTER_SECS = 3600L
+
+        /** `Retry-After` in seconds; an HTTP date or anything else reads as none. */
+        fun retryAfterSecs(header: String?): Long? = header?.trim()?.toLongOrNull()?.takeIf { it >= 0 }
 
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .cache(null)

@@ -2,7 +2,8 @@ import Foundation
 
 /// The phone socket while the app is in the foreground (SPEC.md 8.3): `ping` every 30 s, a
 /// dead socket after 10 s without `pong`, reconnect with backoff 1, 2, 4, 8, 16 then 30 s
-/// (±20% jitter), at most 60 upgrades an hour. The first `pong` counts as connected.
+/// (±20% jitter), at most 60 upgrades an hour, none during a `429` window or before a
+/// `Retry-After` a `5xx` gave (`503 maintenance`). The first `pong` counts as connected.
 public actor PhoneSocket {
     public typealias OnMessage = @Sendable (JSON) async -> Void
     public typealias OnState = @Sendable (Bool) async -> Void
@@ -47,8 +48,8 @@ public actor PhoneSocket {
                 try? await Task.sleep(for: .seconds(60))
                 continue
             }
-            // The relay said to slow down: no upgrade (and no catch-up after it) until then.
-            let limited = await client.rateLimitedForMs()
+            // The relay said to slow down or come back later: no upgrade (and no catch-up after it) until then.
+            let limited = await client.waitMs()
             if limited > 0 {
                 try? await Task.sleep(for: .milliseconds(limited))
                 continue

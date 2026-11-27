@@ -44,6 +44,8 @@ public final class AppEngine {
     public internal(set) var biometryName = "Face ID"
     /// Bumped when a delayed record changes, so countdown screens refresh.
     public internal(set) var delayedTick: Int64 = 0
+    /// Locks sent that no status has answered yet, by machine: the card shows "Locking…" (11.8).
+    public internal(set) var lockMarks: [String: LockMark] = [:]
     /// The words, while one of the words screens is open.
     public let words: WordsSession
     /// A request the card should show first (from a notification tap).
@@ -82,6 +84,9 @@ public final class AppEngine {
     @ObservationIgnored var foregroundTurn = 0
     /// Test seams; always empty in the app.
     @ObservationIgnored var hooks = EngineHooks()
+    /// Locks and notices the relay did not take, kept and sent again (9.6).
+    @ObservationIgnored var outbox: Outbox!
+    @ObservationIgnored var outboxTimer: Task<Void, Never>?
     /// The phone's clock for a request's time (deadlines, the card's timer, catch-up). A test
     /// sets it to move time on; the app never does.
     @ObservationIgnored var clock: () -> Int64 = { nowMs() }
@@ -112,7 +117,32 @@ public final class AppEngine {
                             callResourceTimeout: config.callResourceTimeout)
         words.engine = self
         biometryName = await vault.biometryName()
+        lockMarks = (try? JSONDecoder().decode([String: LockMark].self, from: Data(contentsOf: files.lockMarksURL))) ?? [:]
+        outbox = Outbox(
+            file: files.outboxURL,
+            now: { [weak self] in self?.clockNow() ?? nowMs() },
+            post: { [weak self] o, tapped in
+                guard let self else { return }
+                do {
+                    try await self.relay.postMessage(machine: o.machine, sealed: o.sealed, userTapped: tapped)
+                } catch {
+                    self.relayFailed(error)
+                    throw error
+                }
+            },
+            live: { [weak self] key in self?.machine(key) != nil },
+            delivered: { [weak self] o in
+                guard let self else { return }
+                Task { @MainActor in
+                    // A place's lock that went after it was queued: its allowance is locked now.
+                    if let g = o.grant { await self.applyLocal(.grantLocked(grant: g)) }
+                }
+                if o.lock { self.updateMarks { LockMarks.accepted($0, o.machine, now: nowMs()) } }
+            },
+            wake: { [weak self] ms in self?.wakeOutbox(after: ms) })
         watchNetwork()
+        // Locks and notices an earlier run could not send.
+        if !outbox.items.isEmpty { wakeOutbox(after: 0) }
     }
 
     // MARK: keys
@@ -256,6 +286,8 @@ public final class AppEngine {
         guard phase == .ready, !relayDataDeleted, let _ = await phoneKeys() else { return }
         // The relay's time, for every security window (8.1); the snapshot carries it.
         if await relay.relayTime() != nil { writeSnapshot() }
+        // Locks and notices that waited for the relay.
+        await flushOutbox()
         await takeInbox()
         if let h = hooks.beforeSocket { await h() }
         // The app left the foreground during the calls above (or came back, in a newer turn):
@@ -386,6 +418,7 @@ public final class AppEngine {
         case .http(let status, _, _):
             if status == 401 { banners.signatureRefused = true } else if status >= 500 { banners.relayDown = true }
         case .transport: if !banners.offline { banners.relayDown = true }
+        case .unavailable: banners.relayDown = true
         default: break
         }
         Log.note("relay call failed: \(e.code)")
@@ -442,6 +475,8 @@ public final class AppEngine {
                 self.banners.offline = !up
                 self.onWifi = wifi
                 if up && wasOffline && self.foreground { _ = await self.catchUp() }
+                // Back online: what waited for the network goes, unless the relay said to wait.
+                if up && wasOffline && !self.outbox.items.isEmpty { await self.flushOutbox() }
             }
         }
         m.start(queue: DispatchQueue(label: "sealctl.network"))

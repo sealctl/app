@@ -13,15 +13,56 @@ extension AppEngine {
     /// place, waits out the rate-limit window and is sent again later (8.1, 11.9).
     @discardableResult
     public func lock(_ machine: Machine, reason: String = "phone", userTapped: Bool = false) async -> Bool {
-        guard let keys = await phoneKeys(), !machine.boxKey.isEmpty else { return false }
-        let msg = MachineMessage(version: 1, time: UInt64(nowMs()), seq: await nextSeq(machine.key), kind: .lock(reason: reason))
-        do {
-            let sealed = try sealMachineMessage(keys: keys, machineKey: machine.key, machineBoxKey: machine.boxKey, message: msg)
-            try await relay.postMessage(machine: machine.key, sealed: sealed, userTapped: userTapped)
-            return true
-        } catch {
-            relayFailed(error)
-            return false
+        await lockOutcome(machine, reason: reason, userTapped: userTapped, grant: nil) == .sent
+    }
+
+    /// `lock`, telling whether the relay took it now, or it waits in the outbox (no answer, a
+    /// `5xx`, a `Retry-After`, the rate-limit window) to be sent again, or it was refused.
+    /// `grant`: the allowance a place's lock is for, recorded as locked when a queued lock goes.
+    func lockOutcome(_ machine: Machine, reason: String, userTapped: Bool, grant: GrantRecord?) async -> Outbox.Result {
+        guard let keys = await phoneKeys(), !machine.boxKey.isEmpty else { return .refused }
+        let msg = await message(machine.key, .lock(reason: reason))
+        guard let sealed = try? sealMachineMessage(keys: keys, machineKey: machine.key, machineBoxKey: machine.boxKey, message: msg)
+        else { return .refused }
+        let result = await outbox.send(Outgoing(id: randomId(), machine: machine.key, sealed: sealed, lock: true,
+                                                made: Int64(msg.time), grant: grant), userTapped: userTapped)
+        // The card shows "Locking…" until a status answers it, sent or queued (11.8).
+        if result != .refused {
+            updateMarks { LockMarks.sent($0, machine.key, at: Int64(msg.time), accepted: result == .sent ? nowMs() : 0) }
+        }
+        return result
+    }
+
+    func updateMarks(_ change: ([String: LockMark]) -> [String: LockMark]) {
+        let next = change(lockMarks)
+        guard next != lockMarks else { return }
+        lockMarks = next
+        if let data = try? JSONEncoder().encode(next) {
+            try? FileManager.default.createDirectory(at: files.root, withIntermediateDirectories: true)
+            try? data.write(to: files.lockMarksURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        }
+    }
+
+    /// A status `machine` made: it may answer a lock this phone sent (11.8).
+    func statusSeen(_ machine: String, _ st: MachineStatus) {
+        guard let session = st.state else { return }
+        updateMarks { LockMarks.status($0, machine, statusTime: Int64(clamping: st.time), open: session.session == "open") }
+    }
+
+    /// Sends the locks and notices that wait, when their wait is over (9.6).
+    public func flushOutbox() async {
+        guard await phoneKeys() != nil else { return }
+        await outbox.flush()
+    }
+
+    /// The outbox asks to be flushed in `ms`: a timer while the app runs; otherwise the next
+    /// launch, foreground or wake flushes it.
+    func wakeOutbox(after ms: Int64) {
+        outboxTimer?.cancel()
+        outboxTimer = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(max(0, ms)))
+            guard !Task.isCancelled else { return }
+            await self?.flushOutbox()
         }
     }
 
@@ -85,7 +126,7 @@ extension AppEngine {
         while !Task.isCancelled {
             var error = await refreshMachinesOutcome()
             if error == nil { error = await refreshDelayedOutcome() }
-            guard let pause = backoff.after(error, window: await relay.rateLimitedForMs()) else { return }
+            guard let pause = backoff.after(error, window: await relay.waitMs()) else { return }
             await sleep(pause)
         }
     }
@@ -95,7 +136,10 @@ extension AppEngine {
         for s in list where machine(s.machine) != nil {
             guard let st = try? openMachineStatus(keys: keys, machineKey: s.machine, sealed: s.sealed) else { continue }
             _ = try? await db.run { try $0.applyStatus(machine: s.machine, status: st, utcOffsetSecs: utcOffset()) }
+            statusSeen(s.machine, st)
         }
+        let now = clockNow()
+        updateMarks { LockMarks.pruned($0, now: now) { self.machine($0) != nil } }
         await refreshState()
     }
 
@@ -388,11 +432,13 @@ extension AppEngine {
     }
 
     /// Sends a lock for each allowance and records it once the relay took it; one that did not
-    /// go is sent again at the next exit, fix or launch.
+    /// go waits in the outbox, which records it once it goes, and the next exit, fix or launch
+    /// sends it again too (one lock per machine waits).
     func lockGrants(_ grants: [GrantRecord]) async -> [(GrantRecord, Machine)] {
         var out: [(GrantRecord, Machine)] = []
         for g in grants {
-            guard let m = machine(g.machine), await lock(m, reason: "place") else { continue }
+            guard let m = machine(g.machine),
+                  await lockOutcome(m, reason: "place", userTapped: false, grant: g) == .sent else { continue }
             await applyLocal(.grantLocked(grant: g))
             out.append((g, m))
         }
@@ -485,6 +531,17 @@ public struct MachineView: Sendable, Identifiable {
             let secs = (now - min(w.relay.created, now)) / 1000
             return MachineView(machine: m, name: name, state: .waiting, row: String(format: "Waiting · %d:%02d", secs / 60, secs % 60),
                                detail: "A request is on this phone.", leftSecs: nil)
+        }
+        // A lock this phone sent that no status has answered yet (11.8): an Open status the
+        // machine made before it got the lock does not show the session as open.
+        if let mark = engine.lockMarks[m.key] {
+            if !LockMarks.settled(mark, now: now) {
+                return MachineView(machine: m, name: name, state: .waiting, row: "Locking…",
+                                   detail: "The lock is on its way to this machine.", leftSecs: nil)
+            }
+            let row = m.lastStatus.map { "Locked · last report \(Texts.ago(Int64($0.reportedAt), now: now))" } ?? "Locked"
+            return MachineView(machine: m, name: name, state: .locked, row: row,
+                               detail: "No keys in memory. Volumes unmounted.", leftSecs: nil)
         }
         guard let st = m.lastStatus else {
             return MachineView(machine: m, name: name, state: .unknown, row: "Seen \(Texts.ago(m.lastSeen.map { Int64($0) }, now: now))",

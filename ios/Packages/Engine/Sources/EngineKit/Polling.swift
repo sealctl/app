@@ -22,7 +22,7 @@ public struct PollBackoff: Sendable {
     public static func isFinal(_ error: Error) -> Bool {
         guard let e = error as? RelayError else { return false }
         switch e {
-        case .rateLimited, .transport: return false
+        case .rateLimited, .transport, .unavailable: return false
         case .clockSkew, .noKeys: return true
         case .http, .conflict: return (400..<500).contains(e.status) && e.status != 408
         }

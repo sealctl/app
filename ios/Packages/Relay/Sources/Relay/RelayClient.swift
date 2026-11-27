@@ -11,6 +11,10 @@ public enum RelayError: Error, Sendable, Equatable {
     case rateLimited(until: Int64, scope: String?)
     /// `409 conflict` on the state, with the stored revision.
     case conflict(rev: Int64)
+    /// The relay is unavailable until `until` (Unix ms on this phone's clock): a `5xx` that
+    /// carried `Retry-After`, such as `503 maintenance` while the relay moves, or a call the app
+    /// makes by itself held back until then without being sent (SPEC.md 8.1).
+    case unavailable(until: Int64, status: Int, code: String)
     /// No answer: offline, timeout, TLS.
     case transport(String)
     /// This phone has no keys yet.
@@ -22,6 +26,7 @@ public enum RelayError: Error, Sendable, Equatable {
         case .clockSkew: return 401
         case .rateLimited: return 429
         case .conflict: return 409
+        case .unavailable(_, let s, _): return s
         case .transport, .noKeys: return 0
         }
     }
@@ -32,6 +37,7 @@ public enum RelayError: Error, Sendable, Equatable {
         case .clockSkew: return "clock_skew"
         case .rateLimited: return "rate_limited"
         case .conflict: return "conflict"
+        case .unavailable(_, _, let c): return c
         case .transport: return "transport"
         case .noKeys: return "no_keys"
         }
@@ -120,6 +126,11 @@ public actor RelayClient {
     private let socketSession: URLSession
     public private(set) var clockOffsetSecs: Int64 = 0
     public private(set) var rateLimitedUntil: Int64 = 0
+    /// The end of the last `Retry-After` on a `5xx`, Unix ms on this phone's clock (SPEC.md 8.1).
+    public private(set) var unavailableUntil: Int64 = 0
+
+    /// The longest `Retry-After` taken from a `5xx`: the relay's maintenance never asks for more.
+    public static let maxRetryAfterSecs: Int64 = 3600
 
     public init(baseURL: String, keys: @escaping @Sendable () async -> PhoneKeys?,
                 now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) },
@@ -163,6 +174,25 @@ public actor RelayClient {
     /// Milliseconds left in the rate-limit window (0 when calls may go out).
     public func rateLimitedForMs() -> Int64 { max(0, rateLimitedUntil - now()) }
 
+    /// Milliseconds until calls the app makes by itself may go out: the rate-limit window or a
+    /// `Retry-After`.
+    public func waitMs() -> Int64 { max(rateLimitedForMs(), max(0, unavailableUntil - now())) }
+
+    /// A `5xx` that said when to come back: calls the app makes by itself wait until then.
+    /// `retryAfterSecs` is capped at an hour; nil changes nothing.
+    @discardableResult
+    public func noteUnavailable(retryAfterSecs: Int64?) -> Int64 {
+        guard let secs = retryAfterSecs else { return unavailableUntil }
+        unavailableUntil = now() + min(max(secs, 1), Self.maxRetryAfterSecs) * 1000
+        return unavailableUntil
+    }
+
+    /// `Retry-After` in seconds; an HTTP date or anything else reads as none.
+    public static func retryAfterSecs(_ header: String?) -> Int64? {
+        guard let h = header?.trimmingCharacters(in: .whitespaces), let v = Int64(h), v >= 0 else { return nil }
+        return v
+    }
+
     private func unixTime() -> Int64 { now() / 1000 + clockOffsetSecs }
 
     private func phone() async throws -> String { "/v1/phones/\(try await phoneId())" }
@@ -173,13 +203,17 @@ public actor RelayClient {
         if !userTapped && now() < rateLimitedUntil {
             throw RelayError.rateLimited(until: rateLimitedUntil, scope: nil)
         }
-        var (status, json, signedAt) = try await execute(method, path, body)
+        // The relay said when to come back: what the app sends by itself waits until then.
+        if !userTapped && now() < unavailableUntil {
+            throw RelayError.unavailable(until: unavailableUntil, status: 503, code: "unavailable")
+        }
+        var (status, json, signedAt, retryAfter) = try await execute(method, path, body)
         if status == 401 && json["error"].str == "clock_skew" {
             if let t = json["time"].int64 {
                 clockOffsetSecs = t - now() / 1000
                 onRelayTime(t * 1000)
             }
-            (status, json, signedAt) = try await execute(method, path, body)
+            (status, json, signedAt, retryAfter) = try await execute(method, path, body)
             if status == 401 && json["error"].str == "clock_skew" { throw RelayError.clockSkew }
         }
         if (200..<300).contains(status) {
@@ -195,11 +229,15 @@ public actor RelayClient {
         if status == 409 && json["error"].str == "conflict" {
             throw RelayError.conflict(rev: json["rev"].long)
         }
+        // `503 maintenance` and any other 5xx that says when to come back (relay SPEC 3.18).
+        if status >= 500, let secs = retryAfter ?? json["retryAfter"].int64 {
+            throw RelayError.unavailable(until: noteUnavailable(retryAfterSecs: secs), status: status, code: json["error"].str)
+        }
         throw RelayError.http(status: status, code: json["error"].str, body: json)
     }
 
-    /// One try: the status, the body and the signed time (Unix seconds).
-    private func execute(_ method: String, _ path: String, _ body: JSON?) async throws -> (Int, JSON, Int64) {
+    /// One try: the status, the body, the signed time (Unix seconds) and `Retry-After` in seconds.
+    private func execute(_ method: String, _ path: String, _ body: JSON?) async throws -> (Int, JSON, Int64, Int64?) {
         let bytes = body?.data() ?? Data()
         let t = max(0, unixTime())
         let h = relayHeaders(keys: try await phoneKeys(), method: method, pathAndQuery: path,
@@ -224,7 +262,8 @@ public actor RelayClient {
         }
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         let json = (try? JSON(data: data)) ?? (code < 300 ? .object([:]) : ["error": .string("http_\(code)")])
-        return (code, json, t)
+        let retryAfter = Self.retryAfterSecs((response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Retry-After"))
+        return (code, json, t, retryAfter)
     }
 
     // MARK: typed calls (SPEC.md 8.2)

@@ -16,7 +16,8 @@ import okhttp3.WebSocketListener
 /**
  * The phone socket while the app is in the foreground (SPEC.md 8.3): `ping` every 30 s, a
  * dead socket after 10 s without `pong`, reconnect with backoff 1, 2, 4, 8, 16 then 30 s
- * (±20% jitter, reset by a `pong`), at most 60 upgrades an hour, none during a `429` window.
+ * (±20% jitter, reset by a `pong`), at most 60 upgrades an hour, none during a `429` window or
+ * before a `Retry-After` a `5xx` gave (`503 maintenance`).
  */
 class PhoneSocket(
     private val client: RelayClient,
@@ -41,8 +42,8 @@ class PhoneSocket(
                 if (upgrades.size >= 60) {
                     delay(60_000); continue
                 }
-                // The relay said to slow down: no upgrade (and no catch-up after it) until then.
-                val limited = client.rateLimitedForMs()
+                // The relay said to slow down or come back later: no upgrade (and no catch-up after it) until then.
+                val limited = client.waitMs()
                 if (limited > 0) {
                     delay(limited); continue
                 }
@@ -67,6 +68,8 @@ class PhoneSocket(
                         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                             // The upgrade itself was refused with 429: the same window as a call's.
                             if (response?.code == 429) client.noteRateLimited(response.header("Retry-After")?.trim()?.toLongOrNull())
+                            // A 5xx that says when to come back (`503 maintenance`): no upgrade before then.
+                            if ((response?.code ?: 0) >= 500) client.noteUnavailable(RelayClient.retryAfterSecs(response?.header("Retry-After")))
                             finish()
                         }
 

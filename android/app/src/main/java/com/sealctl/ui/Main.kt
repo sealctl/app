@@ -149,6 +149,8 @@ private fun MachinesTab() {
     val waiting by engine.waiting.collectAsState()
     val banners by engine.banners.collectAsState()
     val local by engine.local.collectAsState()
+    // A lock sent shows "Locking…" at once (SPEC.md 11.8): a change redraws the list.
+    val locks by engine.lockMarks.collectAsState()
     val context = ctx()
     val scope = rememberCoroutineScope()
     // Read by the parts that count time, not here: the tab itself recomposes only on a change.
@@ -189,7 +191,7 @@ private fun MachinesTab() {
             Muted("No machines yet. On your computer, run `sealctl pair` and scan the code.")
             PrimaryButton("Scan code", { Ui.push(Route.Pair()) })
         } else {
-            MachineList(machines, waiting, local, clock)
+            MachineList(machines, waiting, local, locks, clock)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 com.sealctl.designsystem.SecondaryButton("Pair a machine", { Ui.push(Route.Pair()) }, Modifier.weight(1f))
                 com.sealctl.designsystem.SecondaryButton("Lock all", {
@@ -240,10 +242,16 @@ private fun DelayedBanners(delayed: List<DelayedAction>, clock: State<Long>, onC
  * The machines in their order (11.17), from the machines and names read once per change. Only
  * this part follows the clock: the waiting time, the idle time or time left and "seen … ago" each second
  * (an active machine's row stays the same).
- * [waiting] and [local] are what [MachineView.of] reads besides: a change to them redraws it.
+ * [waiting], [local] and [locks] are what [MachineView.of] reads besides: a change to them redraws it.
  */
 @Composable
-private fun MachineList(machines: List<Named>, @Suppress("UNUSED_PARAMETER") waiting: List<Waiting>, @Suppress("UNUSED_PARAMETER") local: LocalState, clock: State<Long>) {
+private fun MachineList(
+    machines: List<Named>,
+    @Suppress("UNUSED_PARAMETER") waiting: List<Waiting>,
+    @Suppress("UNUSED_PARAMETER") local: LocalState,
+    @Suppress("UNUSED_PARAMETER") locks: Map<String, com.sealctl.app.LockMark>,
+    clock: State<Long>,
+) {
     val engine = Graph.engine
     val now = clock.value
     val views = MachineView.sorted(machines.map { MachineView.of(it.machine, engine, now, it.name, it.model, it.session) })

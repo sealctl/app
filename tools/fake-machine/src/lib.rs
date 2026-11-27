@@ -24,6 +24,17 @@ pub const DEFAULT_RELAY: &str = "https://relay.sealctl.com";
 pub type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 /// Unix milliseconds now.
+/// How far the phone's clock may be behind the machine's for a `lock` message: sealctl's
+/// daemon (`LOCK_SKEW_MS`) ignores a lock made more than this long before its session opened.
+pub const LOCK_SKEW_MS: u64 = 60_000;
+
+/// Whether sealctl's daemon applies a `lock` stamped `t` (the phone's Unix ms) to a session that
+/// opened at `opened_at` (the machine's Unix ms): one made before the session, less the minute
+/// the phone's clock may be behind, is old and ignored.
+pub fn lock_applies(t: u64, opened_at: u64) -> bool {
+    t.saturating_add(LOCK_SKEW_MS) >= opened_at
+}
+
 pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -402,6 +413,16 @@ pub fn random16() -> Result<[u8; 16]> {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn a_lock_applies_unless_made_over_a_minute_before_the_session_opened() {
+        let opened = 1_795_266_000_000;
+        assert!(lock_applies(opened + 5_000, opened));
+        assert!(lock_applies(opened - 60_000, opened));
+        assert!(!lock_applies(opened - 60_001, opened));
+        // a phone 3 minutes behind stamps a lock made now 3 minutes early
+        assert!(!lock_applies(opened + 10_000 - 180_000, opened));
+    }
 
     #[test]
     fn private_files_are_0600_and_skip_a_link_at_the_temporary_name() {

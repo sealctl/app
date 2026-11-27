@@ -144,6 +144,10 @@ public struct SharedFiles: Sendable {
     public var rateLimitURL: URL { root.appendingPathComponent("rate-limit.json") }
     /// Written before an erase removes the keys, removed once it has finished (SPEC.md 11.19).
     public var erasingURL: URL { root.appendingPathComponent("erasing") }
+    /// Locks and notices waiting for the relay (SPEC.md 9.6).
+    public var outboxURL: URL { root.appendingPathComponent("outbox.json") }
+    /// Locks sent that no status has answered yet (SPEC.md 11.8).
+    public var lockMarksURL: URL { root.appendingPathComponent("lock-marks.json") }
 
     /// The longest rate-limit window kept: a day, the relay's longest limit.
     public static let keptWindowMs: Int64 = 86_400_000
@@ -209,5 +213,7 @@ public struct SharedFiles: Sendable {
         try? FileManager.default.removeItem(at: snapshotURL)
         try? FileManager.default.removeItem(at: inboxURL)
         try? FileManager.default.removeItem(at: rateLimitURL)
+        try? FileManager.default.removeItem(at: outboxURL)
+        try? FileManager.default.removeItem(at: lockMarksURL)
     }
 }

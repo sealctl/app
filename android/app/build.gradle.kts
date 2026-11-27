@@ -74,7 +74,21 @@ android {
             isReturnDefaultValues = true
             // The Activity rows come from the shared crate: the host build of libsealctl_app
             // (cargo build -p sealctl-app), loaded through JNA as in :relay.
-            all { it.systemProperty("jna.library.path", rootProject.file("../target/debug").absolutePath) }
+            all {
+                it.systemProperty("jna.library.path", rootProject.file("../target/debug").absolutePath)
+                // The Engine tests (Robolectric) run against tools/fake-relay and tools/fake-machine,
+                // host builds next to the library (hostTools below).
+                it.systemProperty("sealctl.fakeRelay", rootProject.file("../target/debug/fake-relay").absolutePath)
+                it.systemProperty("sealctl.fakeMachine", rootProject.file("../target/debug/fake-machine").absolutePath)
+                // Robolectric's Android jar comes through Gradle (checked against
+                // verification-metadata.xml), never downloaded by Robolectric itself.
+                it.systemProperty("robolectric.offline", "true")
+                it.systemProperty("robolectric.dependency.dir", layout.buildDirectory.dir("robolectric").get().asFile.absolutePath)
+                it.dependsOn(robolectricJars, hostTools)
+                // UniFFI frees core objects with Android's SystemCleaner on API 33 and later, which
+                // on the JVM (Robolectric) reaches into the JDK's own cleaner.
+                it.jvmArgs("--add-exports", "java.base/jdk.internal.ref=ALL-UNNAMED")
+            }
         }
     }
 
@@ -83,6 +97,20 @@ android {
         warningsAsErrors = false
         disable += listOf("GradleDependency", "NewerVersionAvailable", "AndroidGradlePluginVersion")
     }
+}
+
+// The JVM tests' native parts: the host build of the shared core and the fake relay and machine
+// the Engine tests talk to (cargo, from the repository root; already built, it only checks).
+val hostTools = tasks.register<Exec>("hostTools") {
+    workingDir = rootProject.file("..")
+    commandLine("cargo", "build", "--locked", "-p", "sealctl-app", "-p", "fake-relay", "-p", "fake-machine")
+}
+
+// Robolectric's Android jar, resolved and verified by Gradle, where Robolectric (offline) finds it.
+val robolectricAndroid: Configuration by configurations.creating { isTransitive = false }
+val robolectricJars = tasks.register<Copy>("robolectricJars") {
+    from(robolectricAndroid)
+    into(layout.buildDirectory.dir("robolectric"))
 }
 
 // Third-party notices (SPEC.md 11.18), shown in Settings → About → Licences: every Android
@@ -239,6 +267,10 @@ dependencies {
     testImplementation("net.java.dev.jna:jna:${libs.versions.jna.get()}")
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)
+    // Engine.kt's JVM tests (SPEC.md 16): Android on the JVM, with the real shared core.
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
+    robolectricAndroid(libs.robolectric.android.all)
 
     androidTestImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.runner)

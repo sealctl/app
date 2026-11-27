@@ -18,13 +18,15 @@ import java.util.concurrent.atomic.AtomicLong
  * longer watching the edges at all.
  *
  * [grantsLeft] gives the allowances to lock for a list of places (the shared core's rule);
- * [lock] sends one lock and says whether the relay took it; [onLocked] records that it did.
+ * [lock] sends one lock for an allowance and says whether the relay took it now; [onLocked]
+ * records that it did. A lock the relay could not take now waits in the engine's outbox, which
+ * records its allowance as locked once the relay takes it.
  */
 class PlaceExits(
     private val grantsLeft: (List<String>) -> List<GrantRecord>,
     private val places: () -> List<TrustedPlace>,
     private val machine: (String) -> Machine?,
-    private val lock: suspend (Machine) -> Boolean,
+    private val lock: suspend (Machine, GrantRecord) -> Boolean,
     private val onLocked: (GrantRecord) -> Unit,
 ) {
     /**
@@ -90,10 +92,13 @@ class PlaceExits(
 
     private fun liveIds(): List<String> = places().filter { !it.deleted }.map { it.id }
 
-    /** A lock that did not go stays unlocked, so the next exit, fix or start sends it again. */
+    /**
+     * A lock that did not go stays unlocked until its outbox entry goes; the next exit, fix or
+     * start sends it again too (one lock per machine waits).
+     */
     private suspend fun lockAll(grants: List<GrantRecord>): List<Pair<GrantRecord, Machine>> = grants.mapNotNull { g ->
         val m = machine(g.machine) ?: return@mapNotNull null
-        if (!lock(m)) return@mapNotNull null
+        if (!lock(m, g)) return@mapNotNull null
         onLocked(g)
         g to m
     }

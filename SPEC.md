@@ -1029,11 +1029,11 @@ Each machine row shows one state, from the machine's last status (`GET .../statu
 | --- | --- | --- |
 | Locked | "Locked" | "No keys in memory. Volumes unmounted." |
 | Open, active | "Open · active" | "Opened at 09:02 at Desk. Locks after 4 h idle. Hard stop at 02:00." |
-| Open, idle | "Open · idle 12 min · locks at 15:42" | "Opened at 09:02 at Desk. Hard stop at 02:00." |
+| Open, idle | "Open · locks in 3 h 47 min" | "Opened at 09:02 at Desk. Hard stop at 02:00." |
 | Waiting | "Waiting · 0:12" | "A request is on this phone." [Show] |
 | Unknown | "Seen 2 h ago" | "This machine hasn't reported its state yet." |
 
-While the machine works (its last status said it was active: `idle` under 120 seconds, protocol.md, Machine status and messages) the row says "active" and does not count down: the allowance fills up again at every sample with input, so a countdown would always read about the full allowance. It stays "active" for up to 3 minutes after the machine's last work moment (the 2 minutes, and a minute for the machine's 15-second sampling and the way here); the machine sends a status when it goes idle, and again while it stays active, before then. Once idle the row shows the idle time now (`idle` at the report plus the time since) and the time it locks: the report time plus `left`, capped by the hard stop. A machine that sends a status when it is active again turns the row back to "active". `machine_session` in the shared crate reads these times from the last status once per change; the screens compare them with the clock. A machine whose CLI does not send `idle` shows "Open · 2 h 10 min left", counting down locally from the reported idle allowance (capped by the hard stop) and corrected at each report. A machine past the time it locks shows "Locked · last report 3 h ago".
+While the machine works (its last status said it was active: `idle` under 120 seconds, protocol.md, Machine status and messages) the row says "active" and does not count down: the allowance fills up again at every sample with input, so a countdown would always read about the full allowance. It stays "active" for up to 3 minutes after the machine's last work moment (the 2 minutes, and a minute for the machine's 15-second sampling and the way here); the machine sends a status when it goes idle, and again while it stays active, before then. Once idle the row counts down to the time it locks (the report time plus `left`, capped by the hard stop) in whole minutes, rounded down, so it changes once a minute: "Open · locks in 3 h 47 min", "Open · locks in 47 min", and in its last minute "Open · locks in under a minute". A machine that sends a status when it is active again turns the row back to "active". `machine_session` in the shared crate reads these times from the last status once per change; the screens compare them with the clock. A machine whose CLI does not send `idle` counts down the same way ("Open · locks in 2 h 10 min"), from the reported idle allowance, corrected at each report. A machine past the time it locks shows "Locked · last report 3 h ago".
 
 ### 11.9 Places
 
@@ -1305,7 +1305,7 @@ Each machine is a card of three lines:
 
 When two machines share a name, both show their tag after the name: `Devs-MacBook-Pro #k7m2`. A machine unseen for 90 days shows "Not seen for 94 days" in amber under the card's lines.
 
-The card is one element for screen readers: "Work laptop, Locked · last report 1 h ago, Mac mini, seen 1 h ago" (on iPhone the Open state is read in words: "Open, active", "Open, idle 12 minutes, locks at 15:42").
+The card is one element for screen readers: "Work laptop, Locked · last report 1 h ago, Mac mini, seen 1 h ago" (the Open state is read in words: "Open, active", "Open, locks in 3 hours 47 minutes").
 
 The full `user@host` and the model as reported are in the detail.
 
@@ -1640,7 +1640,7 @@ The screens for levels 2 and 3 (9.6). They are full-screen, never a sheet, and n
 
 ## 12. Accessibility
 
-- Every screen works with VoiceOver and TalkBack. The approval card reads in this order: state, title, facts, buttons. The machine state reads as words: "Open, active", "Open, idle 12 minutes, locks at 15:42."
+- Every screen works with VoiceOver and TalkBack. The approval card reads in this order: state, title, facts, buttons. The machine state reads as words: "Open, active", "Open, locks in 3 hours 47 minutes", "Open, locks in under a minute."
 - Notification actions are reachable by VoiceOver and TalkBack.
 - Dynamic Type up to the largest accessibility size; Android font scale up to 200%. The approval card scrolls while its buttons stay pinned at the bottom.
 - Touch targets at least 44 points (iOS) and 48 dp (Android), text links and inline buttons (Remove, Cancel, Show) included: they keep their look and grow their hit area. The word keypad keys are at least that size.

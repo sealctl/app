@@ -20,6 +20,8 @@ data class MachineView(
     val leftSecs: Long?,
     /** The model as the list names it ("Mac mini" for `Mac16,10`), or null when none was reported. */
     val model: String? = modelOf(machine),
+    /** [row] in words for TalkBack when Open: "Open, active", "Open, locks in 3 hours 47 minutes". */
+    val spoken: String? = null,
 ) {
 
     /** "seen 1 h ago" */
@@ -32,9 +34,12 @@ data class MachineView(
     fun unseen(now: Long = System.currentTimeMillis()): String? =
         if (machine.flagged) "Not seen for ${(now - (machine.lastSeen?.toLong() ?: 0)) / 86_400_000} days" else null
 
-    /** The card's one label: "Devs-Mac-mini, Locked · last report 1 h ago, Mac mini, seen 1 h ago". */
+    /**
+     * The card's one label: "Devs-Mac-mini, Locked · last report 1 h ago, Mac mini, seen 1 h ago";
+     * an Open state in words: "Work laptop, Open, locks in 3 hours 47 minutes, Mac mini, seen 2 min ago".
+     */
     fun label(now: Long = System.currentTimeMillis()): String =
-        listOfNotNull(name, row, model, seen(now), unseen(now)).joinToString(", ")
+        listOfNotNull(name, spoken ?: row, model, seen(now), unseen(now)).joinToString(", ")
 
     companion object {
         /** [modelOf] reads it from the shared core: the list reads it once per change, not every second. */
@@ -47,19 +52,22 @@ data class MachineView(
         fun isActive(s: MachineSession, now: Long): Boolean = s.activeUntil?.let { now < it.toLong() } == true
 
         /**
-         * The Open row at [now] (SPEC.md 11.8): "Open · active" while the machine works, "Open ·
-         * idle 12 min · locks at 15:42" once it is idle, "Open · 2 h 10 min left" from a CLI that
-         * sends no idle time; null once the time it locks has passed.
+         * The Open row at [now] (SPEC.md 11.8): "Open · active" while the machine works, else a
+         * countdown to the time it locks in whole minutes, "Open · locks in 3 h 47 min" (also
+         * from a CLI that sends no idle time); null once that time has passed. It changes once a
+         * minute.
          */
         fun openRow(s: MachineSession, now: Long): String? {
             val locksAt = s.locksAt.toLong()
             if (!s.open || now >= locksAt) return null
-            val lastWork = s.lastWork?.toLong()
-            return when {
-                isActive(s, now) -> "Open · active"
-                lastWork != null -> "Open · idle ${Texts.duration((now - lastWork).coerceAtLeast(0) / 1000)} · locks at ${Texts.time(locksAt)}"
-                else -> "Open · ${Texts.duration((locksAt - now + 999) / 1000)} left"
-            }
+            return if (isActive(s, now)) "Open · active" else "Open · locks in ${Texts.countdown(locksAt - now)}"
+        }
+
+        /** [openRow] in words for TalkBack: "Open, active", "Open, locks in 3 hours 47 minutes". */
+        fun spokenOpenRow(s: MachineSession, now: Long): String? {
+            val locksAt = s.locksAt.toLong()
+            if (!s.open || now >= locksAt) return null
+            return if (isActive(s, now)) "Open, active" else "Open, locks in ${Texts.spokenCountdown(locksAt - now)}"
         }
 
         /**
@@ -101,7 +109,7 @@ data class MachineView(
                         st.stop?.let { append("Hard stop at ${Texts.time(it.toLong())}.") }
                     }.trim()
                     val left = (s.locksAt.toLong() - now + 999) / 1000
-                    return MachineView(m, name, MachineState.Open, row, detail, left, model)
+                    return MachineView(m, name, MachineState.Open, row, detail, left, model, spokenOpenRow(s, now))
                 }
                 return MachineView(m, name, MachineState.Locked, "Locked · last report ${Texts.ago(reported, now)}",
                     "No keys in memory. Volumes unmounted.", null, model)

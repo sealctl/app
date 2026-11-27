@@ -447,7 +447,7 @@ fun MachineDetailScreen(activity: MainActivity, key: String) {
     val tag = remember(key) { runCatching { com.sealctl.core.machineTag(key) }.getOrDefault("") }
     Page(null) {
         Row(verticalAlignment = Alignment.CenterVertically) { Mono(Texts.shown(m.name, 0), size = 18, weight = FontWeight.SemiBold); Text("  "); Mono("#$tag", color = Sealctl.colors.muted) }
-        StateLabel(v.state, v.row)
+        StateLabel(v.state, v.row, v.spoken)
         if (v.detail.isNotEmpty()) Body(v.detail)
         val hold = local.holds.firstOrNull { it.machine == key && it.until.toLong() > now }
         if (hold != null) {

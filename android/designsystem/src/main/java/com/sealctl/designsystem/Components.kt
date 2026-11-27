@@ -40,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -169,15 +170,17 @@ fun StateDot(state: MachineState, modifier: Modifier = Modifier) {
     Box(modifier.size(10.dp).alpha(alpha).background(color, CircleShape))
 }
 
+/** The state as a word with its dot; [spoken], when given, is what TalkBack reads instead of [text]. */
 @Composable
-fun StateLabel(state: MachineState, text: String) {
+fun StateLabel(state: MachineState, text: String, spoken: String? = null) {
     val c = Sealctl.colors
     val color = when (state) {
         MachineState.Open -> c.open
         MachineState.Waiting -> c.waiting
         else -> c.muted
     }
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    val words = if (spoken != null) Modifier.clearAndSetSemantics { contentDescription = spoken } else Modifier
+    Row(words, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         StateDot(state)
         Text(text, color = color, fontSize = 14.sp, fontWeight = FontWeight.Medium)
     }

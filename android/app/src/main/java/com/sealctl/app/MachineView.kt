@@ -90,6 +90,15 @@ data class MachineView(
                     "A request is on this phone.", null, model)
             }
             val st = m.lastStatus
+            // A lock this phone sent that no status has answered yet (SPEC.md 11.8): an Open
+            // status the machine made before it got the lock does not show the session as open.
+            engine.lockMarks.value[m.key]?.let { mark ->
+                if (!LockMarks.settled(mark, now)) {
+                    return MachineView(m, name, MachineState.Waiting, "Locking…", "The lock is on its way to this machine.", null, model)
+                }
+                val row = st?.let { "Locked · last report ${Texts.ago(it.reportedAt.toLong(), now)}" } ?: "Locked"
+                return MachineView(m, name, MachineState.Locked, row, "No keys in memory. Volumes unmounted.", null, model)
+            }
             if (st == null) {
                 return MachineView(m, name, MachineState.Unknown, "Seen ${Texts.ago(m.lastSeen?.toLong(), now)}",
                     "This machine hasn't reported its state yet.", null, model)

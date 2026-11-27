@@ -204,6 +204,8 @@ extension AppEngine {
         await onBackground()
         forgetPhoneKeys()
         await Self.eraseLocal(vault: vault, db: db, files: files)
+        outbox.clear()
+        lockMarks = [:]
         waiting = []
         await notifier.remove(ids: [])
         await computePhase()

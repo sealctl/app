@@ -134,6 +134,77 @@ class RelayClientTest {
         assertEquals(2, server.requestCount)
     }
 
+    /**
+     * SPEC.md 8.1: `503 maintenance` with `Retry-After` (relay SPEC 3.18): what the app sends by
+     * itself waits until then without calling; a tapped call still goes; after it, calls go again.
+     */
+    @Test
+    fun maintenanceRetryAfterHoldsBackWhatTheAppSendsByItself() = runTest {
+        server.enqueue(json(503, """{"error":"maintenance","retryAfter":120}""").addHeader("Retry-After", "120"))
+        try {
+            client.postMessage("m", "sealed"); fail()
+        } catch (e: UnavailableException) {
+            assertEquals(503, e.status)
+            assertEquals("maintenance", e.code)
+            assertEquals(clock + 120_000, e.until)
+        }
+        assertEquals(120_000L, client.waitMs())
+        assertEquals(0L, client.rateLimitedForMs())
+        try {
+            client.machines(); fail()
+        } catch (e: UnavailableException) {
+            assertEquals(clock + 120_000, e.until)
+        }
+        assertEquals(1, server.requestCount)
+        server.enqueue(json(200, """{"delivered":true}"""))
+        assertTrue(client.postMessage("m", "sealed", userTapped = true))
+        assertEquals(2, server.requestCount)
+        clock += 120_000
+        assertEquals(0L, client.waitMs())
+        server.enqueue(json(200, """{"delivered":true}"""))
+        assertTrue(client.postMessage("m", "sealed"))
+        assertEquals(3, server.requestCount)
+    }
+
+    /** The body's `retryAfter` counts when the header is missing; at most an hour; a 5xx without either is an ordinary error. */
+    @Test
+    fun retryAfterFromTheBodyCappedAndOnlyWhenGiven() = runTest {
+        server.enqueue(json(503, """{"error":"maintenance","retryAfter":86400}"""))
+        try {
+            client.requests(); fail()
+        } catch (e: UnavailableException) {
+            assertEquals(clock + 3_600_000, e.until)
+        }
+        clock += 3_600_000
+        server.enqueue(json(500, """{"error":"internal"}"""))
+        try {
+            client.requests(); fail()
+        } catch (e: UnavailableException) {
+            fail("no Retry-After: not a wait")
+        } catch (e: RelayException) {
+            assertEquals(500, e.status)
+        }
+        assertEquals(0L, client.waitMs())
+        assertNull(RelayClient.retryAfterSecs("Wed, 21 Oct 2026 07:28:00 GMT"))
+        assertEquals(7L, RelayClient.retryAfterSecs(" 7 "))
+    }
+
+    /** A socket upgrade refused with `503` and `Retry-After` holds back the next upgrade too. */
+    @Test
+    fun aRefusedSocketUpgradeWaitsOutRetryAfter() {
+        server.enqueue(json(503, """{"error":"maintenance","retryAfter":90}""").addHeader("Retry-After", "90"))
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default)
+        val socket = PhoneSocket(client, scope, onMessage = {}, onConnected = {})
+        socket.start()
+        val deadline = System.currentTimeMillis() + 5_000
+        while (client.waitMs() == 0L && System.currentTimeMillis() < deadline) Thread.sleep(50)
+        // past the first reconnect's backoff (1 s ± 20 %)
+        Thread.sleep(1_500)
+        socket.stop()
+        assertEquals(90_000L, client.waitMs())
+        assertEquals("no second upgrade before Retry-After", 1, server.requestCount)
+    }
+
     /** SPEC.md 8.1: the window outlives the process: a client made later starts inside it. */
     @Test
     fun theWindowIsKeptForTheNextClient() = runTest {

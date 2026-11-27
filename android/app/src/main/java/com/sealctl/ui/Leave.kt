@@ -257,7 +257,7 @@ private fun EachComputer(onContinue: () -> Unit, onSkip: (String) -> Unit, onBac
     val backoff = remember { PollBackoff(5_000) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(lifecycle) {
-        lifecycle.pollWhileStarted(backoff, engine.relay::rateLimitedForMs) { engine.refreshHandBack() }
+        lifecycle.pollWhileStarted(backoff, engine.relay::waitMs) { engine.refreshHandBack() }
     }
     // Every machine paired when leaving began; one that unpaired itself shows as handed back.
     val machines = state.machines.filter { !it.deleted }

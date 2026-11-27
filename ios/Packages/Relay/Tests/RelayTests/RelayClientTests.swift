@@ -177,6 +177,39 @@ struct RelayClientTests {
         }
     }
 
+    /// `503 maintenance` with `Retry-After` (relay SPEC 3.18): what the app sends by itself waits
+    /// until then without calling; a tapped call still goes (SPEC.md 8.1).
+    @Test func maintenanceRetryAfterHoldsBackWhatTheAppSendsByItself() async throws {
+        let keys = try fresh()
+        let c = RelayClient(baseURL: testRelay!, keys: { keys })
+        _ = try await control("/test/fail", ["status": 503, "error": "maintenance", "retryAfter": 120])
+        do {
+            try await c.postMessage(machine: "nope", sealed: "x")
+            Issue.record("no error")
+        } catch let e as RelayError {
+            #expect(e.status == 503)
+            #expect(e.code == "maintenance")
+            guard case .unavailable = e else { Issue.record("not a wait: \(e)"); return }
+        }
+        let wait = await c.waitMs()
+        #expect(wait > 110_000 && wait <= 120_000)
+        #expect(await c.rateLimitedForMs() == 0)
+        do {
+            _ = try await c.machines()
+            Issue.record("called during Retry-After")
+        } catch let e as RelayError {
+            #expect(e.code == "unavailable")
+        }
+        do {
+            try await c.postMessage(machine: "nope", sealed: "x", userTapped: true)
+        } catch let e as RelayError {
+            // The relay was reached: the machine is not paired.
+            #expect(e.code != "unavailable" && e.code != "maintenance")
+        }
+        #expect(RelayClient.retryAfterSecs("Wed, 21 Oct 2026 07:28:00 GMT") == nil)
+        #expect(RelayClient.retryAfterSecs(" 7 ") == 7)
+    }
+
     @Test func forcedErrorBodies() async throws {
         let keys = try fresh()
         let c = RelayClient(baseURL: testRelay!, keys: { keys })

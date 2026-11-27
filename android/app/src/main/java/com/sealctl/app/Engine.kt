@@ -32,6 +32,7 @@ import com.sealctl.core.app.DecideContext
 import com.sealctl.core.app.DelayedAction
 import com.sealctl.core.app.DeviceInfo
 import com.sealctl.core.app.Event
+import com.sealctl.core.app.GrantRecord
 import com.sealctl.core.app.Hold
 import com.sealctl.core.app.HandbackReport
 import com.sealctl.core.app.KeyRefRecord
@@ -77,6 +78,7 @@ import com.sealctl.relay.RateLimitedException
 import com.sealctl.relay.RelayClient
 import com.sealctl.relay.RelayException
 import com.sealctl.relay.RelayRequest
+import com.sealctl.relay.UnavailableException
 import com.sealctl.relay.str
 import com.sealctl.relay.strOrNull
 import com.sealctl.relay.long
@@ -99,6 +101,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -181,6 +184,8 @@ class Engine(
     val local = MutableStateFlow(safe { store.local() } ?: emptyLocal())
     val waiting = MutableStateFlow<List<Waiting>>(emptyList())
     val banners = MutableStateFlow(Banners())
+    /** Locks sent that no status has answered yet, by machine: the card shows "Locking…" (SPEC.md 11.8). */
+    val lockMarks = MutableStateFlow(LockMarks.decode(relayPrefs.getString(LOCK_MARKS, null)))
     private val _toasts = MutableSharedFlow<Toast>(extraBufferCapacity = 8)
     val toasts: SharedFlow<Toast> = _toasts
 
@@ -222,9 +227,37 @@ class Engine(
         grantsLeft = { ids -> safe { store.grantsLeft(ids, offset()) }.orEmpty() },
         places = { state.value.places },
         machine = ::machine,
-        lock = { lock(it, "place") },
+        lock = { m, g -> lockOutcome(m, "place", userTapped = false, grant = g) == Outbox.Result.SENT },
         onLocked = { applyLocal(LocalEvent.GrantLocked(it)) },
     )
+    /**
+     * Locks and notices the relay did not take (no answer, a `5xx`, `503 maintenance` with
+     * `Retry-After`, the rate-limit window), kept across a restart and sent again (SPEC.md 9.6).
+     */
+    private val outbox = Outbox(
+        file = File(context.noBackupFilesDir, "outbox.json"),
+        now = ::clockNow,
+        post = { o, tapped ->
+            try {
+                relay.postMessage(o.machine, o.sealed, tapped)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                relayFailed(e); throw e
+            }
+        },
+        live = { key -> machine(key) != null },
+        // A place's lock that went after it was queued: its allowance is locked now.
+        delivered = { o ->
+            o.grant?.let { applyLocal(LocalEvent.GrantLocked(it)) }
+            if (o.lock) updateMarks { LockMarks.accepted(it, o.machine, System.currentTimeMillis()) }
+        },
+        wake = ::wakeOutbox,
+    )
+    private var outboxTimer: Job? = null
+    /** The outbox's job that outlives the process; JVM tests give their own. */
+    @androidx.annotation.VisibleForTesting
+    var scheduleOutboxWork: (Long) -> Unit = { ms -> runCatching { OutboxWorker.schedule(context, ms) } }
     private var uploadJob: Job? = null
     private var onWifi = false
     /** Location permission, read at every decision; instrumented tests give their own. */
@@ -243,6 +276,8 @@ class Engine(
     init {
         watchNetwork()
         restorePlace()
+        // Locks and notices an earlier process could not send.
+        if (outbox.pending().isNotEmpty()) wakeOutbox(0)
     }
 
     // ---------- keys ----------
@@ -368,6 +403,8 @@ class Engine(
         scope.launch {
             // The relay's time, for every security window (SPEC.md 8.1).
             refreshClock()
+            // Locks and notices that waited for the relay.
+            flushOutbox()
             // Cancels first: a plan whose delay was cancelled while away hands out no keys.
             refreshDelayed()
             catchUp()
@@ -407,6 +444,8 @@ class Engine(
     }
 
     private fun eraseKeysAndData(): Boolean {
+        outbox.clear()
+        updateMarks { emptyMap() }
         vault.erase()
         forgetPhoneKeys()
         return safe { store.erase() } != null
@@ -626,6 +665,7 @@ class Engine(
             return
         }
         val result = safe { store.applyReport(req, offset()) }
+        req.status()?.let { statusSeen(r.machine, it) }
         refreshState()
         val sealed = runCatching { sealReportReply(keys, req, result?.ack, emptyList()) }.getOrNull() ?: return
         post(r, sealed, null, userTapped = false)
@@ -924,6 +964,8 @@ class Engine(
         var unsure = false
         val until = deadline(r)
         while (System.currentTimeMillis() < until) {
+            // A `Retry-After` the relay gave: no try before then (SPEC.md 8.1).
+            var comeBack = 0L
             try {
                 relay.reply(r.id, sealed, delaySecs, userTapped)
                 relayOk()
@@ -938,11 +980,12 @@ class Engine(
                 if (e is RateLimitedException || e.status in 400..499) { relayFailed(e); return Sent.FAILED to unsure }
                 relayFailed(e)
                 unsure = true
+                if (e is UnavailableException) comeBack = e.until - System.currentTimeMillis()
             } catch (e: IOException) {
                 relayFailed(e)
                 unsure = true
             }
-            delay(backoff.getOrElse(attempt) { 10_000L })
+            delay(maxOf(backoff.getOrElse(attempt) { 10_000L }, comeBack).coerceAtMost(maxOf(0, until - System.currentTimeMillis())))
             attempt++
         }
         return Sent.GONE to unsure
@@ -1305,21 +1348,55 @@ class Engine(
         "relay"
     }
 
-    /** A sealed `notice` to every paired machine (SPEC.md 9.6). */
+    /**
+     * A sealed `notice` to every paired machine (SPEC.md 9.6). Sent by the app, not tapped: the
+     * rate-limit window and a `Retry-After` hold it back, and one the relay did not take waits in
+     * the outbox.
+     */
     suspend fun sendNotice(what: String, st: String, machine: String?, delayId: String?, at: Long?, done: Int = 0, failed: Int = 0, skipped: Int = 0) {
         val keys = phoneKeys() ?: return
         val report = if (st == "done") com.sealctl.core.NoticeReport(done.toULong(), failed.toULong(), skipped.toULong(), emptyList()) else null
         val name = machine?.let { machine(it)?.name }
         for (m in liveMachines()) {
             if (m.boxKey.isEmpty()) continue
-            val msg = MachineMessage(1u, System.currentTimeMillis().toULong(), nextSeq(m.key),
-                MessageKind.Notice(Notice(what, st, name, delayId, at?.toULong(), report)))
-            // Sent by the app, not tapped: the rate-limit window holds it back (SPEC.md 8.1).
-            runCatching { relay.postMessage(m.key, sealMachineMessage(keys, m.key, m.boxKey, msg), userTapped = false) }
+            val msg = message(m.key, MessageKind.Notice(Notice(what, st, name, delayId, at?.toULong(), report)))
+            val sealed = runCatching { sealMachineMessage(keys, m.key, m.boxKey, msg) }.getOrNull() ?: continue
+            outbox.send(Outgoing(randomId(), m.key, sealed, lock = false, made = msg.time.toLong()), userTapped = false)
         }
     }
 
-    private fun nextSeq(machine: String): ULong = safe { store.nextMessageSeq(machine) } ?: System.currentTimeMillis().toULong()
+    /**
+     * A message to [machine], stamped on the corrected clock (SPEC.md 8.1): the machine ignores
+     * a lock made over a minute before its session opened, so a phone clock that is behind
+     * would make its locks look old.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun message(machine: String, kind: MessageKind): MachineMessage =
+        MachineMessage(1u, clockNow().toULong(), nextSeq(machine), kind)
+
+    private fun nextSeq(machine: String): ULong = safe { store.nextMessageSeq(machine) } ?: clockNow().toULong()
+
+    /** Sends the locks and notices that wait, when their wait is over. */
+    suspend fun flushOutbox() {
+        if (phoneKeys() == null) return
+        outbox.flush()
+    }
+
+    /** Locks and notices waiting for the relay, oldest first. */
+    internal fun outboxPending(): List<Outgoing> = outbox.pending()
+
+    /** The outbox asks to be flushed in [ms]: a timer while this process lives, and a job for after it. */
+    private fun wakeOutbox(ms: Long) {
+        val wait = maxOf(0, ms)
+        synchronized(this) {
+            outboxTimer?.cancel()
+            outboxTimer = scope.launch {
+                delay(wait)
+                flushOutbox()
+            }
+        }
+        scheduleOutboxWork(wait)
+    }
 
     // ---------- machines ----------
 
@@ -1328,14 +1405,38 @@ class Engine(
      * tapped Lock (or Unpair, Delete); a lock the app sends by itself, such as on leaving a
      * place, waits out the rate-limit window and is sent again later (SPEC.md 8.1, 11.9).
      */
-    suspend fun lock(machine: Machine, reason: String = "phone", userTapped: Boolean = false): Boolean {
-        lockSender?.let { return it(machine, reason) }
-        val keys = phoneKeys() ?: return false
-        if (machine.boxKey.isEmpty()) return false
-        val msg = MachineMessage(1u, System.currentTimeMillis().toULong(), nextSeq(machine.key), MessageKind.Lock(reason))
-        return runCatching {
-            relay.postMessage(machine.key, sealMachineMessage(keys, machine.key, machine.boxKey, msg), userTapped); true
-        }.getOrElse { relayFailed(it as? Exception ?: Exception()); false }
+    suspend fun lock(machine: Machine, reason: String = "phone", userTapped: Boolean = false): Boolean =
+        lockOutcome(machine, reason, userTapped, grant = null) == Outbox.Result.SENT
+
+    /**
+     * [lock], telling whether the relay took it now, or it waits in the outbox (no answer, a
+     * `5xx`, a `Retry-After`, the rate-limit window) to be sent again, or it was refused. [grant]:
+     * the allowance a place's lock is for, recorded as locked when a queued lock goes.
+     */
+    private suspend fun lockOutcome(machine: Machine, reason: String, userTapped: Boolean, grant: GrantRecord?): Outbox.Result {
+        lockSender?.let { return if (it(machine, reason)) Outbox.Result.SENT else Outbox.Result.REFUSED }
+        val keys = phoneKeys() ?: return Outbox.Result.REFUSED
+        if (machine.boxKey.isEmpty()) return Outbox.Result.REFUSED
+        val msg = message(machine.key, MessageKind.Lock(reason))
+        val sealed = runCatching { sealMachineMessage(keys, machine.key, machine.boxKey, msg) }.getOrNull() ?: return Outbox.Result.REFUSED
+        val result = outbox.send(Outgoing(randomId(), machine.key, sealed, lock = true, made = msg.time.toLong(), grant = grant), userTapped)
+        // The card shows "Locking…" until a status answers it, sent or queued (SPEC.md 11.8).
+        if (result != Outbox.Result.REFUSED) updateMarks {
+            LockMarks.sent(it, machine.key, msg.time.toLong(), if (result == Outbox.Result.SENT) System.currentTimeMillis() else 0)
+        }
+        return result
+    }
+
+    private fun updateMarks(change: (Map<String, LockMark>) -> Map<String, LockMark>) {
+        val before = lockMarks.value
+        val after = lockMarks.updateAndGet(change)
+        if (after != before) relayPrefs.edit().putString(LOCK_MARKS, LockMarks.encode(after)).apply()
+    }
+
+    /** A status [machine] made: it may answer a lock this phone sent (SPEC.md 11.8). */
+    private fun statusSeen(machine: String, st: com.sealctl.core.MachineStatus) {
+        val session = st.state ?: return
+        updateMarks { LockMarks.status(it, machine, st.time.toLong(), session.session == "open") }
     }
 
     /** Lock all, tapped by the person. */
@@ -1391,7 +1492,10 @@ class Engine(
             if (machine(s.machine) == null) continue
             val st = runCatching { openMachineStatus(keys, s.machine, s.sealed) }.getOrNull() ?: continue
             safe { store.applyStatus(s.machine, st, offset()) }
+            statusSeen(s.machine, st)
         }
+        val now = clockNow()
+        updateMarks { LockMarks.pruned(it, now) { key -> machine(key) != null } }
         refreshState()
     }
 
@@ -1667,6 +1771,8 @@ class Engine(
             override fun onAvailable(network: Network) {
                 banners.value = banners.value.copy(offline = false)
                 if (foreground.value) scope.launch { catchUp() }
+                // Back online: what waited for the network goes, unless the relay said to wait.
+                if (outbox.pending().isNotEmpty()) scope.launch { flushOutbox() }
             }
 
             override fun onLost(network: Network) {
@@ -1683,6 +1789,7 @@ class Engine(
     companion object {
         private const val TAG = "sealctl"
         private const val RATE_LIMITED_UNTIL = "rateLimitedUntil"
+        private const val LOCK_MARKS = "lockMarks"
         /** The least time between two fixes for a missed exit: at foreground, and in the background. */
         const val FOREGROUND_FIX_GAP_MS = 60_000L
         const val BACKGROUND_FIX_GAP_MS = 10 * 60_000L

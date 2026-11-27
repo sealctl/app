@@ -9,16 +9,17 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
 use fake_machine::{
-    b64u, b64u_fixed, next_json, now_ms, random16, send_text, MachineState, Object, Relay, Signer,
-    DEFAULT_RELAY,
+    b64u, b64u_fixed, lock_applies, next_json, now_ms, random16, send_text, MachineState, Object,
+    Relay, Signer, DEFAULT_RELAY,
 };
 use sealctl_core::channel::{open_message, seal_status};
 use sealctl_core::pairing::{verify_move_proof, verify_pairing_proof, PairingLink};
 use sealctl_core::plan::{plan_hash, verify_plan_signature};
 use sealctl_core::request::{new_request_id, seal_request, SealedRequest};
 use sealctl_core::wire::{
-    AgentUse, Handback, HandbackItem, LogEntry, MachineStatus, ObjectFacts, PlanBody, PlanItem,
-    ReplyBody, Repository, RequestBody, RequestContext, RequestItem, SessionState, Subject,
+    AgentUse, Handback, HandbackItem, LogEntry, MachineStatus, MessageKind, ObjectFacts, PlanBody,
+    PlanItem, ReplyBody, Repository, RequestBody, RequestContext, RequestItem, SessionState,
+    Subject,
 };
 use sealctl_core::{key_check, MachineKeys};
 use serde_json::json;
@@ -80,6 +81,10 @@ enum Cmd {
         /// Stop after this many messages.
         #[arg(long)]
         count: Option<usize>,
+        /// When this machine's session opened, Unix ms on the machine's clock: each `lock` is
+        /// checked as sealctl's daemon checks it and printed with `applies=true` or `false`.
+        #[arg(long)]
+        opened_at: Option<u64>,
     },
     /// Delayed approvals: `list` or `cancel <id>`.
     Delayed {
@@ -175,6 +180,9 @@ struct StatusArgs {
     /// Include the stored objects as inventory.
     #[arg(long)]
     inventory: bool,
+    /// `status` only: the status was made this many seconds ago (one sent before a lock arrived).
+    #[arg(long, default_value_t = 0)]
+    made_ago: u64,
 }
 
 const OK: u8 = 0;
@@ -262,7 +270,7 @@ async fn run(cli: Cli) -> Result<u8> {
             st.status_seq += 1;
             let status = MachineStatus {
                 version: 1,
-                time: now_ms(),
+                time: now_ms().saturating_sub(args.made_ago * 1000),
                 seq: st.status_seq,
                 state: session_state(&args),
                 log: log_entries(&args.log, args.log_ago),
@@ -287,7 +295,11 @@ async fn run(cli: Cli) -> Result<u8> {
             println!("STATUS seq={} http={code} {body}", st.status_seq);
             Ok(if code == 200 { OK } else { ERROR })
         }
-        Cmd::Listen { secs, count } => listen(&relay, &cli.home, secs, count).await,
+        Cmd::Listen {
+            secs,
+            count,
+            opened_at,
+        } => listen(&relay, &cli.home, secs, count, opened_at).await,
         Cmd::Delayed { action, id } => {
             let st = MachineState::load(&cli.home)?;
             let keys = st.machine_keys()?;
@@ -952,6 +964,7 @@ async fn listen(
     home: &std::path::Path,
     secs: u64,
     count: Option<usize>,
+    opened_at: Option<u64>,
 ) -> Result<u8> {
     let mut st = MachineState::load(home)?;
     let keys = st.machine_keys()?;
@@ -980,8 +993,14 @@ async fn listen(
                         let fresh = m.seq > st.message_seq;
                         st.message_seq = st.message_seq.max(m.seq);
                         let v = serde_json::to_value(&m).context("message")?;
+                        let applies = match (&m.kind, opened_at) {
+                            (MessageKind::Lock { .. }, Some(at)) => {
+                                format!(" applies={}", lock_applies(m.time, at))
+                            }
+                            _ => String::new(),
+                        };
                         println!(
-                            "MESSAGE seq={} type={} fresh={fresh} {}",
+                            "MESSAGE seq={} type={} fresh={fresh}{applies} {}",
                             m.seq,
                             v["type"].as_str().unwrap_or("?"),
                             v

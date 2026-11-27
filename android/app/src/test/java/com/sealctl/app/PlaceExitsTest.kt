@@ -52,7 +52,7 @@ class PlaceExitsTest {
         grantsLeft = { ids -> grantsToLock(local(), places, ids, now.toULong(), 0) },
         places = { places },
         machine = { machines[it] },
-        lock = { m -> if (relayUp) { sent += m.key; true } else false },
+        lock = { m, _ -> if (relayUp) { sent += m.key; true } else false },
         onLocked = { g -> grants.replaceAll { if (it.machine == g.machine && it.at == g.at) it.copy(locked = true) else it } },
     )
 

@@ -19,6 +19,8 @@ zxingCpp = "3.1.1"
 jna = "5.19.1"
 junit = "4.13.2"
 robolectric = "4.18"
+# The Android 16 (API 36) jar Robolectric 4.18 runs the JVM tests on.
+robolectricAndroidAll = "16-robolectric-13921718-2-i7"
 
 [libraries]
 core-ktx = { group = "androidx.core", name = "core-ktx", version = "1.19.0" }
@@ -55,6 +57,7 @@ zxing-cpp = { group = "io.github.zxing-cpp", name = "android", version.ref = "zx
 jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
+robolectric-android-all = { group = "org.robolectric", name = "android-all-instrumented", version.ref = "robolectricAndroidAll" }
 androidx-test-core = { group = "androidx.test", name = "core", version = "1.7.0" }
 androidx-test-runner = { group = "androidx.test", name = "runner", version = "1.7.0" }
 androidx-test-rules = { group = "androidx.test", name = "rules", version = "1.7.0" }

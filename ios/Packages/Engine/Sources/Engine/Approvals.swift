@@ -196,6 +196,7 @@ extension AppEngine {
             return
         }
         let result = try? await db.run { try $0.applyReport(request: req, utcOffsetSecs: utcOffset()) }
+        if let st = req.status() { statusSeen(r.machine, st) }
         await refreshState()
         guard let sealed = try? sealReportReply(keys: keys, request: req, ack: result?.ack, messages: []) else { return }
         _ = await post(r, sealed, delay: nil, userTapped: false)
@@ -508,6 +509,8 @@ extension AppEngine {
         let until = deadline(r)
         // `try? Task.sleep` returns at once in a cancelled task: stop then, or this spins until `expires`.
         while now() < until && !Task.isCancelled {
+            // A `Retry-After` the relay gave: no try before then (SPEC.md 8.1).
+            var comeBack: Int64 = 0
             do {
                 var error: Error?
                 do {
@@ -530,11 +533,14 @@ extension AppEngine {
                 if case .rateLimited = e { return (.failed, unsure) }
                 if (400..<500).contains(e.status) { return (.failed, unsure) }
                 unsure = true
+                // A `Retry-After` the relay gave: no try before then (SPEC.md 8.1).
+                if case .unavailable(let back, _, _) = e { comeBack = back - nowMs() }
             } catch {
                 relayFailed(error)
                 unsure = true
             }
-            try? await Task.sleep(for: .seconds(attempt < backoff.count ? backoff[attempt] : 10))
+            let pause = max(Int64((attempt < backoff.count ? backoff[attempt] : 10) * 1000), comeBack)
+            try? await Task.sleep(for: .milliseconds(min(pause, max(0, until - now()))))
             attempt += 1
         }
         return (now() >= until ? .gone : .failed, unsure)
@@ -865,26 +871,33 @@ extension AppEngine {
         }
     }
 
-    /// A sealed `notice` to every paired machine (9.6).
+    /// A sealed `notice` to every paired machine (9.6). Sent by the app, not tapped: the
+    /// rate-limit window and a `Retry-After` hold it back (8.1), and one the relay did not take
+    /// waits in the outbox.
     public func sendNotice(what: String, state st: String, machine: String?, delayId: String?, at: Int64?,
                            done: Int = 0, failed: Int = 0, skipped: Int = 0) async {
         guard let keys = await phoneKeys() else { return }
         let report = st == "done" ? NoticeReport(done: UInt64(done), failed: UInt64(failed), skipped: UInt64(skipped), to: []) : nil
         let name = machine.flatMap { self.machine($0)?.name }
         for m in liveMachines where !m.boxKey.isEmpty {
-            let seq = await nextSeq(m.key)
-            let msg = MachineMessage(version: 1, time: UInt64(nowMs()), seq: seq,
-                                     kind: .notice(notice: Notice(what: what, state: st, machine: name, delay: delayId,
-                                                                  at: at.map { UInt64(clamping: $0) }, report: report)))
-            // Sent by the app, not tapped: the rate-limit window holds it back (8.1).
-            if let sealed = try? sealMachineMessage(keys: keys, machineKey: m.key, machineBoxKey: m.boxKey, message: msg) {
-                _ = try? await relay.postMessage(machine: m.key, sealed: sealed, userTapped: false)
-            }
+            let msg = await message(m.key, .notice(notice: Notice(what: what, state: st, machine: name, delay: delayId,
+                                                                   at: at.map { UInt64(clamping: $0) }, report: report)))
+            guard let sealed = try? sealMachineMessage(keys: keys, machineKey: m.key, machineBoxKey: m.boxKey, message: msg)
+            else { continue }
+            _ = await outbox.send(Outgoing(id: randomId(), machine: m.key, sealed: sealed, lock: false, made: Int64(msg.time)),
+                                  userTapped: false)
         }
     }
 
+    /// A message to `machine`, stamped on the corrected clock (8.1): the machine ignores a lock
+    /// made over a minute before its session opened, so a phone clock that is behind would make
+    /// its locks look old.
+    func message(_ machine: String, _ kind: MessageKind) async -> MachineMessage {
+        MachineMessage(version: 1, time: UInt64(max(0, clockNow())), seq: await nextSeq(machine), kind: kind)
+    }
+
     func nextSeq(_ machine: String) async -> UInt64 {
-        (try? await db.run { try $0.nextMessageSeq(machine: machine) }) ?? UInt64(nowMs())
+        (try? await db.run { try $0.nextMessageSeq(machine: machine) }) ?? UInt64(max(0, clockNow()))
     }
 }
 
@@ -909,6 +922,9 @@ struct CancelResends {
             waits[id] = nil
         } else if case .rateLimited(let until, _)? = error as? RelayError {
             waits[id] = (max(until, now), failures)
+        } else if case .unavailable(let until, _, _)? = error as? RelayError {
+            // `503 maintenance` and any 5xx that said when to come back: then (SPEC.md 8.1).
+            waits[id] = (max(until, now), failures + 1)
         } else {
             waits[id] = (now + Self.backoffMs(failures + 1), failures + 1)
         }

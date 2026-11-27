@@ -41,16 +41,18 @@ class DeviceLockedException : Exception("device locked")
 /**
  * Key storage (SPEC.md 7.3): secrets are AES-256-GCM encrypted with Android Keystore keys
  * and kept as files in `noBackupFilesDir`. Raw bytes exist in Kotlin only between the file
- * and the core object they become, and are wiped at once.
+ * and the core object they become, and are wiped at once. Open for the engine's JVM tests only,
+ * which keep the root and the phone keys in memory (there is no Keystore on the JVM).
  */
-class Vault(private val context: Context) {
+open class Vault(private val context: Context) {
     private val dir: File = context.noBackupFilesDir
-    private val keyStore: KeyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+    /** Opened at first use: a JVM test makes a vault where no Android Keystore exists. */
+    private val keyStore: KeyStore by lazy { KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) } }
 
     fun isDeviceSecure(): Boolean =
         (context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager).isDeviceSecure
 
-    fun isDeviceLocked(): Boolean =
+    open fun isDeviceLocked(): Boolean =
         (context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager).isDeviceLocked
 
     fun hasRoot(): Boolean = file(ROOT).exists()
@@ -67,7 +69,7 @@ class Vault(private val context: Context) {
     }
 
     /** The root, readable only while the device is unlocked. Destroy it after use. */
-    fun readRoot(): Root {
+    open fun readRoot(): Root {
         val key = existingKey(ROOT_KEY) ?: throw KeysInvalidatedException()
         val bytes = readSealed(ROOT, key)
         try { return Root.fromBytes(bytes) } finally { bytes.fill(0) }
@@ -89,7 +91,7 @@ class Vault(private val context: Context) {
     }
 
     /** The phone keys; readable after the first unlock since boot. */
-    fun readPhoneKeys(): PhoneKeys? {
+    open fun readPhoneKeys(): PhoneKeys? {
         if (!file(PHONE).exists()) return null
         val key = existingKey(DEVICE_KEY) ?: throw KeysInvalidatedException()
         val bytes = readSealed(PHONE, key)
@@ -241,7 +243,7 @@ class Vault(private val context: Context) {
     // ---------- erase ----------
 
     /** Deletes every key and file (Erase sealctl from this phone). */
-    fun erase() {
+    open fun erase() {
         newGate.clear()
         for (alias in listOf(ROOT_KEY, WORDS_KEY, DEVICE_KEY, GATE_KEY)) deleteKey(alias)
         for (f in listOf(ROOT, WORDS, PHONE, GATE, "root.old.bin", "words.old.bin")) file(f).delete()

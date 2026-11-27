@@ -107,7 +107,12 @@ enum Harness {
 
     static func openURL(_ url: String) { HTTP.call("POST", "\(Env.harness)/openurl", ["url": url]) }
 
-    static func push(_ payload: [String: Any]) { HTTP.call("POST", "\(Env.harness)/push", ["payload": payload]) }
+    /// Pushes with `xcrun simctl push`, which the harness runs as a job: it can take more than a
+    /// minute on a busy simulator, so the call returns at once and the job says when it ended.
+    @discardableResult
+    static func push(_ payload: [String: Any]) -> Job {
+        Job(id: HTTP.call("POST", "\(Env.harness)/push", ["payload": payload])["id"] as? String ?? "")
+    }
 
     static func reset() { HTTP.call("POST", "\(Env.harness)/reset") }
 }
@@ -148,5 +153,50 @@ enum Bio {
     static func noMatch() {
         notify_post("com.apple.BiometricKit_Sim.pearl.nomatch")
         notify_post("com.apple.BiometricKit_Sim.fingerTouch.nomatch")
+    }
+}
+
+/// The Face ID prompt as LocalAuthentication announces it to the whole simulator: coreauthd
+/// posts `ui.presented` when it shows a prompt and `ui.dismissed` once when that prompt ends
+/// (matched, cancelled or failed). Both are counted from the first use (`setUp`), so a prompt
+/// a tap raised before a helper looks is still seen. A prompt is open while more were shown
+/// than ended.
+final class Prompts: @unchecked Sendable {
+    static let shared = Prompts()
+
+    private let lock = NSLock()
+    private var shown = 0
+    private var ended = 0
+
+    private init() {
+        let queue = DispatchQueue(label: "sealctl.uitests.prompts")
+        for (name, isEnd) in [("com.apple.LocalAuthentication.ui.presented", false),
+                              ("com.apple.LocalAuthentication.ui.dismissed", true)] {
+            var token: Int32 = 0
+            notify_register_dispatch(name, &token, queue) { [self] _ in
+                lock.lock()
+                if isEnd { ended += 1 } else { shown += 1 }
+                lock.unlock()
+            }
+        }
+    }
+
+    var counts: (shown: Int, ended: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (shown, ended)
+    }
+
+    var open: Bool { let c = counts; return c.shown > c.ended }
+}
+
+/// The Face ID prompt's own buttons (in SpringBoard), after a face it didn't recognise.
+enum PromptButtons {
+    static let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+    static var tryAgain: XCUIElement {
+        springboard.buttons["com.apple.localauthentication.ax.authentication.button.try-again"].firstMatch
+    }
+    static var cancel: XCUIElement {
+        springboard.buttons["com.apple.localauthentication.ax.authentication.button.cancel"].firstMatch
     }
 }

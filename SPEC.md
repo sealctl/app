@@ -884,6 +884,9 @@ There are 24 numbered fields. Entry uses an in-app keypad with the letters a to 
 
 - When all 24 are filled, the core checks them. Wrong checksum: "These words don't fit together. Check the order and spelling against your card." The field with the first unknown word is marked: "No word starts with 'qzab'."
 - Right: "This is seed `7Hq3`. Does your card say 7Hq3?" [Yes] [No, check again]. A card without a fingerprint (written by hand without the box) can still answer [Yes].
+- [Yes] asks for Face ID, Touch ID or the passcode, as [Restore 7Hq3] does (Android: `BiometricPrompt`, title "Restore your words", subtitle "Use your fingerprint, face or screen lock", the authenticators of 11.3 step 4), writes the device-only items and continues at "Restoring your data".
+
+**When the prompt doesn't pass.** On both restore screens (Backup found and the fingerprint question), while the prompt is open [Yes] or [Restore 7Hq3] waits for its answer (so a second tap cannot ask twice), and so do [No, check again] and [Restore from paper]. A prompt that is cancelled or fails stores nothing and leaves the screen as it was, with its button ready to ask again, and the line "Couldn't confirm it's you, so nothing was restored. Try again." On Android, biometrics locked out after too many tries (only where the words prompt has no screen lock fallback, below Android 11) show the lockout text of 9.6 instead. There is no limit on tries.
 
 **Restoring your data.** The app derives the phone keys and downloads the state.
 
@@ -1861,7 +1864,7 @@ New personal developer accounts must run a closed test with at least 12 testers 
 XCUITest and Compose UI tests, each against a fresh fake relay:
 
 1. Create words, check the card (right and wrong answers), backups, notifications.
-2. Restore from typed words; wrong checksum; fingerprint confirmation.
+2. Restore from typed words; wrong checksum; fingerprint confirmation; a restore prompt that fails (Face ID not recognised, then cancelled) says so and [Yes] asks again, and the second prompt restores.
 3. Pair; duplicate name with the same and a different hint; Pair as new; tags shown.
 4. Each request kind: allow, allow once, deny, remember; expired while open; several waiting.
 5. Notification actions on a locked simulator or emulator, where the platform allows.

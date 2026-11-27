@@ -5,6 +5,7 @@ import com.sealctl.core.app.ActivityCounts
 import com.sealctl.core.app.ActivityRow
 import com.sealctl.core.app.ReplyOption
 import com.sealctl.core.app.displayText
+import com.sealctl.vault.AuthResult
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -336,6 +337,18 @@ object Texts {
     const val ALLOW_ALARMS = "Allow alarms"
 
     fun handedBack(name: String, done: Int, failed: Int) = "$name handed back $done objects. $failed failed."
+
+    // ---------- restore (11.4) ----------
+
+    /** The restore prompt was cancelled or failed: nothing was stored, and the button can ask again. */
+    const val RESTORE_NOT_CONFIRMED = "Couldn't confirm it's you, so nothing was restored. Try again."
+
+    /** The line a restore screen shows after its prompt: null once it passed. */
+    fun restoreLine(r: AuthResult): String? = when (r) {
+        is AuthResult.Success -> null
+        AuthResult.LockedOut -> LOCKED_OUT
+        AuthResult.Cancelled, is AuthResult.Failed -> RESTORE_NOT_CONFIRMED
+    }
 
     // ---------- pairing and errors (11.5, 11.20) ----------
 

@@ -112,8 +112,9 @@ final class SettingsTests: SealctlTestCase {
         if !shows("Your words are in iCloud Keychain", 10) {
             throw XCTSkip("the simulator's keychain kept no synchronizable item")
         }
-        tap(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Restore '")).firstMatch.label)
-        faceID(then: "Found your backup", 30)
+        let restore = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Restore '")).firstMatch.label
+        tap(restore)
+        faceID(then: "Found your backup", 30, again: restore)
         tap("Continue")
         see("Where is your old phone?")
         tap("I still have it, or it was reset")

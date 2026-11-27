@@ -61,6 +61,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Fixed
 
+- Restore (iPhone and Android): when Face ID, the fingerprint or the passcode prompt is cancelled
+  or fails after [Yes] (or [Restore 7Hq3]), the screen now says "Couldn't confirm it's you, so
+  nothing was restored. Try again." and the button asks again. Before, the screen stayed as it
+  was with no word of what happened. While the prompt is open a second tap no longer asks twice.
 - Show words, Delete my relay data and Leave sealctl after their two-hour wait: the delay screen
   now turns into "Ready until 12:37" with [Show my words] or [Finish] by itself at the end of the
   wait, from Settings, the Machines banner ("Showing your words: ready until 12:37.") or the

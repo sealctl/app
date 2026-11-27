@@ -33,15 +33,32 @@ final class PushTests: SealctlTestCase {
         let job = Harness.machine("m1", ["request", "--kind", "open", "--subject", "secret:OPENAI_API_KEY", "--new-key",
                                          "secrets:store-1", "--cmd", "npm test", "--cwd", "~/dev/shop"])
         let id = job.find("sent \\S+ request (\\S+)", timeout: 20)!
-        Harness.push(Self.payload(type: "request", id: id, expires: Int64(Date().timeIntervalSince1970 * 1000) + 300_000))
+        let push = Harness.push(Self.payload(type: "request", id: id, expires: Int64(Date().timeIntervalSince1970 * 1000) + 300_000))
 
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let rewritten = springboard.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'Allow OPENAI_API_KEY?'")).firstMatch
         let generic = springboard.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'Waiting for your phone'")).firstMatch
-        let end = Date().addingTimeInterval(30)
-        while !rewritten.exists && !generic.exists && Date() < end { Thread.sleep(forTimeInterval: 0.5) }
+        let either = springboard.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS 'Allow OPENAI_API_KEY?' OR label CONTAINS 'Waiting for your phone'")).firstMatch
+        // `simctl push` itself can take more than a minute on a busy simulator (run 45973090914:
+        // 75 s, while the test gave up after 30 s and the push landed after its teardown). So the
+        // wait follows the push job: a failed push ends it at once with simctl's output, and once
+        // the push is done its notification gets 30 s more; each wait is for the notification.
+        let end = Date().addingTimeInterval(180)
+        var pushed: Date?
+        while !either.exists && Date() < end && (pushed.map { Date().timeIntervalSince($0) < 30 } ?? true) {
+            if pushed == nil, push.done {
+                let (code, out) = push.wait(1)
+                guard code == 0 else {
+                    XCTFail("simctl push failed (\(code)): \(out)")
+                    return
+                }
+                pushed = Date()
+            }
+            _ = either.waitForExistence(timeout: 2)
+        }
         guard rewritten.exists || generic.exists else {
-            XCTFail("no notification\n\(uiTree(3000, of: springboard))")
+            XCTFail("no notification (push \(pushed == nil ? "still running" : "done")): \(systemState())\n\(uiTree(3000, of: springboard))")
             return
         }
         // The extension opens the request with the phone keys and rewrites the text (10.1);

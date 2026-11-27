@@ -14,7 +14,7 @@ and drives the booted simulator with `xcrun simctl openurl` and `xcrun simctl pu
   GET  /job/<id> {"done": bool, "code": int|null, "out": "..."}
   POST /stop/<id>
   POST /openurl  {"url": "..."}
-  POST /push     {"payload": {...}}
+  POST /push     {"payload": {...}} -> {"id": ...}: `xcrun simctl push` as a job
   POST /reset    stops every job and the CLI's daemons, and deletes the homes
   GET  /health
 
@@ -160,6 +160,14 @@ def start(spec):
             # Commands that need a person at a terminal (unseal) run under a pseudo-terminal.
             argv = ["/usr/bin/script", "-q", "/dev/null"] + argv
         spec.setdefault("cwd", h)
+    elif spec.get("cmd") == "push":
+        # `xcrun simctl push` as a job: on a busy simulator it can take more than a minute
+        # (PR #64's run 45973090914: 75 s for a push to the background app), longer than a
+        # test's HTTP call waits. The payload goes on stdin; the job's lines and exit say how
+        # it went.
+        env = None
+        argv = ["xcrun", "simctl", "push", os.environ.get("SIM_UDID", "booted"), "com.sealctl.app", "-"]
+        spec["stdin"] = json.dumps(spec["payload"])
     else:
         raise ValueError("unknown command")
     with LOCK:
@@ -229,12 +237,8 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/openurl":
                 return self._send(200, simctl("openurl", self._body()["url"]))
             if self.path == "/push":
-                payload = self._body()["payload"]
-                with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
-                    json.dump(payload, f)
-                r = simctl("push", "com.sealctl.app", f.name)
-                os.unlink(f.name)
-                return self._send(200, r)
+                # Started as a job and answered at once: the test follows it with /job/<id>.
+                return self._send(200, {"id": start({"cmd": "push", "payload": self._body()["payload"]})})
             if self.path == "/reset":
                 stop_jobs()
                 for entry in os.listdir(ROOT):

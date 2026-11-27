@@ -421,6 +421,7 @@ private struct BackupFoundView: View {
     let onPaper: () -> Void
     let onCreate: () -> Void
     @SwiftUI.State private var error: String?
+    @SwiftUI.State private var asking = false
     @SwiftUI.State private var firstSeen = Date()
 
     var body: some View {
@@ -440,21 +441,27 @@ private struct BackupFoundView: View {
             .accessibilityElement(children: .combine)
         } bottom: {
             ErrorText(error)
-            PrimaryButton("Restore \(fp)") {
+            PrimaryButton("Restore \(fp)", enabled: !asking) {
+                guard !asking else { return }
+                asking = true
+                error = nil
                 Task {
+                    defer { asking = false }
                     guard let e = model.engine else { return }
                     guard let bytes = await e.vault.readSyncBackup(), let item = try? backupItemDecode(bytes: bytes) else {
                         error = "The backup can't be read."
                         return
                     }
-                    if await e.words.restore(item.words) == .passed {
-                        await e.words.restored(item.fingerprint)
-                        e.words.release()
-                        onRestored()
-                    }
+                    let auth = await e.words.restore(item.words)
+                    // Cancelled or failed: nothing was stored; the button asks again.
+                    error = Texts.restoreLine(auth)
+                    guard auth == .passed else { return }
+                    await e.words.restored(item.fingerprint)
+                    e.words.release()
+                    onRestored()
                 }
             }
-            SecondaryButton("Restore from paper", action: onPaper)
+            SecondaryButton("Restore from paper", enabled: !asking, action: onPaper)
             PlainButton("Create new words", action: onCreate)
         }
     }
@@ -529,6 +536,9 @@ private struct RestoreConfirm: View {
     let typed: TypedWords
     let onNo: () -> Void
     let onYes: () -> Void
+    @SwiftUI.State private var error: String?
+    /// The prompt is open: Yes waits for its answer instead of asking twice.
+    @SwiftUI.State private var asking = false
 
     var body: some View {
         let fp = typed.parsed.map { fingerprint(root: Root.fromWords(words: $0)) } ?? ""
@@ -542,18 +552,25 @@ private struct RestoreConfirm: View {
             .accessibilityElement(children: .combine)
             BodyText("Does your card say \(fp)?")
         } bottom: {
-            PrimaryButton("Yes") {
+            ErrorText(error)
+            PrimaryButton("Yes", enabled: !asking) {
+                guard !asking else { return }
+                asking = true
+                error = nil
                 Task {
+                    defer { asking = false }
                     guard let e = model.engine, let w = typed.parsed else { return }
-                    if await e.words.restore(w) == .passed {
-                        await e.words.restored(fp)
-                        e.words.release()
-                        typed.clear()
-                        onYes()
-                    }
+                    let auth = await e.words.restore(w)
+                    // Cancelled or failed: nothing was stored; Yes asks again.
+                    error = Texts.restoreLine(auth)
+                    guard auth == .passed else { return }
+                    await e.words.restored(fp)
+                    e.words.release()
+                    typed.clear()
+                    onYes()
                 }
             }
-            SecondaryButton("No, check again", action: onNo)
+            SecondaryButton("No, check again", enabled: !asking, action: onNo)
         }
         .task { if typed.parsed == nil { onNo() } }
     }

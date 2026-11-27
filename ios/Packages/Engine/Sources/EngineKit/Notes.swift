@@ -64,6 +64,20 @@ public enum Notes {
         return c
     }
 
+    /// "Couldn't send your answer — try again." in place of request `id`'s notification: an
+    /// answer from a notification button that did not go (10.2).
+    public static func answerNotSent(_ id: String) -> UNMutableNotificationContent {
+        active(Texts.requestTitle, body: Texts.answerNotSent, userInfo: ["id": id])
+    }
+
+    /// The note for a notification response the app could not act on because it did not start
+    /// in time: an answer button (not a tap on the notification itself) says its answer did not
+    /// go. Nil for anything else.
+    public static func notActedOn(action: String, id: String?) -> (id: String, content: UNMutableNotificationContent)? {
+        guard let id, Texts.option(actionId: action) != nil else { return nil }
+        return (id, answerNotSent(id))
+    }
+
     /// A quiet note: Notification Center only, no sound, no badge.
     public static func passive(_ title: String, body: String? = nil, userInfo: [String: String] = [:]) -> UNMutableNotificationContent {
         let c = UNMutableNotificationContent()

@@ -140,6 +140,38 @@ public struct SharedFiles: Sendable {
 
     public var snapshotURL: URL { root.appendingPathComponent("nse-snapshot.bin") }
     public var inboxURL: URL { root.appendingPathComponent("inbox", isDirectory: true) }
+    /// The relay's rate-limit window, kept for the app and the extension alike (SPEC.md 8.1).
+    public var rateLimitURL: URL { root.appendingPathComponent("rate-limit.json") }
+    /// Written before an erase removes the keys, removed once it has finished (SPEC.md 11.19).
+    public var erasingURL: URL { root.appendingPathComponent("erasing") }
+
+    /// The longest rate-limit window kept: a day, the relay's longest limit.
+    public static let keptWindowMs: Int64 = 86_400_000
+
+    /// The end of the rate-limit window a client got, Unix ms on this phone's clock.
+    public func keepRateLimit(until: Int64) {
+        guard let data = try? JSONEncoder().encode(["until": until]) else { return }
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try? data.write(to: rateLimitURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+
+    /// The kept window's end for a client made now: 0 once it has passed, and at most a day on
+    /// (a clock that was set back).
+    public func keptRateLimit(now: Int64) -> Int64 {
+        guard let data = try? Data(contentsOf: rateLimitURL),
+              let until = (try? JSONDecoder().decode([String: Int64].self, from: data))?["until"], until > now else { return 0 }
+        return min(until, now + Self.keptWindowMs)
+    }
+
+    /// An erase began and did not finish.
+    public var erasing: Bool { FileManager.default.fileExists(atPath: erasingURL.path) }
+
+    public func markErasing() {
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try? Data([1]).write(to: erasingURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+
+    public func clearErasing() { try? FileManager.default.removeItem(at: erasingURL) }
 
     public func writeSnapshot(_ s: ExtensionSnapshot) {
         guard let data = try? JSONEncoder().encode(s) else { return }
@@ -172,8 +204,10 @@ public struct SharedFiles: Sendable {
         return out
     }
 
+    /// The snapshot, the inbox and the kept window; not the erase marker.
     public func removeAll() {
         try? FileManager.default.removeItem(at: snapshotURL)
         try? FileManager.default.removeItem(at: inboxURL)
+        try? FileManager.default.removeItem(at: rateLimitURL)
     }
 }

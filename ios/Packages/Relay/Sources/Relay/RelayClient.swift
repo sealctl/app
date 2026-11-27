@@ -108,6 +108,9 @@ public actor RelayClient {
     private let onRelayTime: @Sendable (Int64) -> Void
     /// A signed call the relay accepted, with the `Sealctl-Time` it carried, in ms (SPEC.md 8.1).
     private let onAccepted: @Sendable (Int64) -> Void
+    /// A new rate-limit window's end, to keep for the next client: the extension makes one per
+    /// push (SPEC.md 8.1, 10.1).
+    private let onRateLimited: @Sendable (Int64) -> Void
     private let session: URLSession
     /// The phone socket's session: as private as `session`, without its resource timeout. A
     /// WebSocket task counts as completed once that timeout passes, while its connection stays
@@ -122,6 +125,8 @@ public actor RelayClient {
                 now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) },
                 onRelayTime: @escaping @Sendable (Int64) -> Void = { _ in },
                 onAccepted: @escaping @Sendable (Int64) -> Void = { _ in },
+                rateLimitedUntil: Int64 = 0,
+                onRateLimited: @escaping @Sendable (Int64) -> Void = { _ in },
                 callResourceTimeout: TimeInterval = 30) {
         var base = baseURL
         while base.hasSuffix("/") { base.removeLast() }
@@ -131,6 +136,8 @@ public actor RelayClient {
         self.now = now
         self.onRelayTime = onRelayTime
         self.onAccepted = onAccepted
+        self.onRateLimited = onRateLimited
+        self.rateLimitedUntil = rateLimitedUntil
         func configuration() -> URLSessionConfiguration {
             let config = URLSessionConfiguration.ephemeral
             config.timeoutIntervalForRequest = 10
@@ -182,6 +189,7 @@ public actor RelayClient {
         if status == 429 {
             let retry = json["retryAfter"].int64 ?? 60
             rateLimitedUntil = now() + retry * 1000
+            onRateLimited(rateLimitedUntil)
             throw RelayError.rateLimited(until: rateLimitedUntil, scope: json["scope"].string)
         }
         if status == 409 && json["error"].str == "conflict" {
@@ -325,11 +333,12 @@ public actor RelayClient {
         }
     }
 
-    /// `delivered: false` means the relay holds it for up to 24 hours.
+    /// `delivered: false` means the relay holds it for up to 24 hours. `userTapped`: the person
+    /// tapped for it (Lock now), not sent by the app itself.
     @discardableResult
-    public func postMessage(machine: String, sealed: String) async throws -> Bool {
+    public func postMessage(machine: String, sealed: String, userTapped: Bool = false) async throws -> Bool {
         try await call("POST", "\(try await phone())/machines/\(machine)/messages", body: ["sealed": .string(sealed)],
-                       userTapped: true)["delivered"].bool ?? false
+                       userTapped: userTapped)["delivered"].bool ?? false
     }
 
     public func addDelayed(id: String, delay: Int) async throws -> RelayDelayed {

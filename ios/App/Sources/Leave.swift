@@ -277,12 +277,6 @@ private struct EachComputerView: View {
             }
             PrimaryButton("Continue", enabled: rows.allSatisfy(\.2), action: onContinue)
         }
-        .task {
-            while !Task.isCancelled {
-                await e.refreshMachines()
-                await e.refreshDelayed()
-                try? await Task.sleep(for: .seconds(5))
-            }
-        }
+        .task { await e.pollHandBack() }
     }
 }

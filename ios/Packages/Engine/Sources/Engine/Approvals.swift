@@ -37,7 +37,7 @@ extension AppEngine {
                 assemblers[r.machine] = a
                 plan = try a.add(request: req)
             } catch {
-                _ = await reply(req, r, .refuse(err: .badLabel), outcome: "ignored", allowed: false)
+                _ = await reply(req, r, .refuse(err: .badLabel), outcome: "ignored", allowed: false, userTapped: false)
                 return
             }
         }
@@ -56,7 +56,7 @@ extension AppEngine {
             await silent(req, r)
         case .automatic:
             guard let d = verdict.automatic else { return }
-            switch await send(req, r, d, outcome: "automatic", allowed: true, decidedAt: mark) {
+            switch await send(req, r, d, outcome: "automatic", allowed: true, decidedAt: mark, userTapped: false) {
             case .posted:
                 let place = currentPlace.flatMap { id in state.places.first { $0.id == id && !$0.deleted }?.name }
                 await notifier.post(id: "auto-\(r.id)", content: Notes.passive(Texts.answeredByItself(displayName(machine), place: place)))
@@ -75,7 +75,7 @@ extension AppEngine {
             await planKeys(req, r, plan)
         case .refused:
             let err = verdict.refuse ?? .unsupported
-            _ = await reply(req, r, .refuse(err: err), outcome: "denied", allowed: false)
+            _ = await reply(req, r, .refuse(err: err), outcome: "denied", allowed: false, userTapped: false)
             if err == .notNear || err == .noBiometrics {
                 let text = err == .notNear ? Texts.notNear(displayName(machine)) : Texts.noBiometrics(biometryName)
                 await notifier.post(id: "refused-\(r.id)", content: Notes.active(text))
@@ -357,8 +357,7 @@ extension AppEngine {
         guard let option = Texts.option(actionId: action) else { return }
         if !waiting.contains(where: { $0.relay.id == id }) {
             if !(await catchUp()) {
-                await notifier.post(id: id, content: Notes.active(Texts.requestTitle, body: Texts.answerNotSent,
-                                                                  userInfo: ["id": id]))
+                await notifier.post(id: id, content: Notes.answerNotSent(id))
                 return
             }
         }
@@ -400,17 +399,18 @@ extension AppEngine {
     }
 
     /// Seals and posts one reply, then records it. False when it could not be sealed or the
-    /// machine stopped waiting.
+    /// machine stopped waiting. `userTapped`: the person answered; false for an answer the app
+    /// gives by itself, which waits out the rate-limit window (8.1).
     func reply(_ req: Request, _ r: RelayRequest, _ decision: Decision, outcome: String, allowed: Bool,
-               remember: Bool = false, delay: Int? = nil, decidedAt: PlaceMark? = nil) async -> Bool {
+               remember: Bool = false, delay: Int? = nil, decidedAt: PlaceMark? = nil, userTapped: Bool = true) async -> Bool {
         await send(req, r, decision, outcome: outcome, allowed: allowed, remember: remember, delay: delay,
-                   decidedAt: decidedAt) == .posted
+                   decidedAt: decidedAt, userTapped: userTapped) == .posted
     }
 
     /// `reply`, telling why a reply did not go. A request on the card whose reply did not go is
     /// opened again from the relay's text, as the core seals a request once.
     func send(_ req: Request, _ r: RelayRequest, _ decision: Decision, outcome: String, allowed: Bool,
-              remember: Bool = false, delay: Int? = nil, decidedAt: PlaceMark? = nil) async -> Sent {
+              remember: Bool = false, delay: Int? = nil, decidedAt: PlaceMark? = nil, userTapped: Bool = true) async -> Sent {
         let mark = decidedAt ?? placeMark()
         guard let keys = await phoneKeys() else { return .failed }
         let needsRoot = allowed && !req.items().isEmpty
@@ -427,7 +427,7 @@ extension AppEngine {
             return .failed
         }
         if let h = hooks.beforeReply { await h(r.id) }
-        let (sent, unsure) = await postReply(r, sealed, delay: delay, userTapped: true)
+        let (sent, unsure) = await postReply(r, sealed, delay: delay, userTapped: userTapped)
         switch sent {
         case .posted:
             await record(req, r, outcome: outcome, allowed: allowed, remember: remember, mark: mark, posted: true)
@@ -651,8 +651,13 @@ extension AppEngine {
 
     /// Brings the delayed records up to the relay's list. False when the relay could not be asked.
     @discardableResult
-    public func refreshDelayed() async -> Bool {
-        guard await phoneKeys() != nil, let list = try? await relay.listDelayed() else { return false }
+    public func refreshDelayed() async -> Bool { await refreshDelayedOutcome() == nil }
+
+    /// Nil when the relay's list was fetched; otherwise why not.
+    func refreshDelayedOutcome() async -> Error? {
+        guard await phoneKeys() != nil else { return RelayError.noKeys }
+        let list: [RelayDelayed]
+        do { list = try await relay.listDelayed() } catch { return error }
         for d in list {
             if let mine = local.delayed.first(where: { $0.id == d.id }) {
                 // An end stays (11.23): this list may have been read before it.
@@ -700,7 +705,7 @@ extension AppEngine {
             }
         }
         delayedTick = nowMs()
-        return true
+        return nil
     }
 
     /// A delayed record's state from which it never waits again (11.23).
@@ -871,8 +876,9 @@ extension AppEngine {
             let msg = MachineMessage(version: 1, time: UInt64(nowMs()), seq: seq,
                                      kind: .notice(notice: Notice(what: what, state: st, machine: name, delay: delayId,
                                                                   at: at.map { UInt64(clamping: $0) }, report: report)))
+            // Sent by the app, not tapped: the rate-limit window holds it back (8.1).
             if let sealed = try? sealMachineMessage(keys: keys, machineKey: m.key, machineBoxKey: m.boxKey, message: msg) {
-                _ = try? await relay.postMessage(machine: m.key, sealed: sealed)
+                _ = try? await relay.postMessage(machine: m.key, sealed: sealed, userTapped: false)
             }
         }
     }

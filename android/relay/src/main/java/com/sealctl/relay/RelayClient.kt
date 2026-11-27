@@ -71,9 +71,13 @@ class RelayClient(
     private val onRelayTime: (Long) -> Unit = {},
     /** A signed call the relay accepted, with the `Sealctl-Time` it carried, in ms (SPEC.md 8.1). */
     private val onAccepted: (Long) -> Unit = {},
+    /** The rate-limit window kept from an earlier process, Unix ms on this phone's clock (SPEC.md 8.1). */
+    rateLimitedUntil: Long = 0,
+    /** A new rate-limit window's end, to keep for the next process (SPEC.md 8.1). */
+    private val onRateLimited: (Long) -> Unit = {},
 ) {
     @Volatile var clockOffsetSecs: Long = 0
-    @Volatile var rateLimitedUntil: Long = 0
+    @Volatile var rateLimitedUntil: Long = rateLimitedUntil
         private set
 
     val host: String get() = baseUrl.removePrefix("https://").removePrefix("http://")
@@ -88,6 +92,7 @@ class RelayClient(
     /** A `429 rate_limited` answer (a call or the socket upgrade): no calls for `retryAfter` seconds (60 when absent). */
     fun noteRateLimited(retryAfterSecs: Long?): Long {
         rateLimitedUntil = now() + (retryAfterSecs ?: 60) * 1000
+        onRateLimited(rateLimitedUntil)
         return rateLimitedUntil
     }
 
@@ -240,8 +245,9 @@ class RelayClient(
             RelayStatus(o.str("machine"), o.str("sealed"), o.long("updated"))
         }
 
-    suspend fun postMessage(machine: String, sealed: String): Boolean =
-        call("POST", "${phone()}/machines/$machine/messages", buildJsonObject { put("sealed", sealed) }, userTapped = true).let { it["delivered"] }
+    /** A sealed message to a machine; [userTapped]: the person tapped for it (Lock now), not sent by the app itself. */
+    suspend fun postMessage(machine: String, sealed: String, userTapped: Boolean = false): Boolean =
+        call("POST", "${phone()}/machines/$machine/messages", buildJsonObject { put("sealed", sealed) }, userTapped).let { it["delivered"] }
             ?.jsonPrimitive?.booleanOrNull ?: false
 
     suspend fun addDelayed(id: String, delay: Int): RelayDelayed {

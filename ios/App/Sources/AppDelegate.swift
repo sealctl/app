@@ -100,7 +100,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     static func respond(id: String?, screen: String?, action: String) async {
         // The app may have been launched by this tap: wait for the engine.
         for _ in 0..<50 where engine == nil { try? await Task.sleep(for: .milliseconds(100)) }
-        guard let e = engine, let router = model?.router else { return }
+        guard let e = engine, let router = model?.router else {
+            // Not up in time (for example a database that could not be opened yet): an answer
+            // from a button did not go, and its notification says so (10.2).
+            if let note = Notes.notActedOn(action: action, id: id) {
+                await AppNotifier().post(id: note.id, content: note.content, at: nil)
+            }
+            return
+        }
         if action != UNNotificationDefaultActionIdentifier && action != UNNotificationDismissActionIdentifier, let id {
             await e.answerFromNotification(id, action: action)
             return

@@ -8,14 +8,16 @@ import UserNotifications
 extension AppEngine {
     // MARK: machines (11.17)
 
-    /// Sends a lock to a machine; the relay holds it up to 24 hours.
+    /// Sends a lock to a machine; the relay holds it up to 24 hours. `userTapped`: the person
+    /// tapped Lock (or Unpair, Delete); a lock the app sends by itself, such as on leaving a
+    /// place, waits out the rate-limit window and is sent again later (8.1, 11.9).
     @discardableResult
-    public func lock(_ machine: Machine, reason: String = "phone") async -> Bool {
+    public func lock(_ machine: Machine, reason: String = "phone", userTapped: Bool = false) async -> Bool {
         guard let keys = await phoneKeys(), !machine.boxKey.isEmpty else { return false }
         let msg = MachineMessage(version: 1, time: UInt64(nowMs()), seq: await nextSeq(machine.key), kind: .lock(reason: reason))
         do {
             let sealed = try sealMachineMessage(keys: keys, machineKey: machine.key, machineBoxKey: machine.boxKey, message: msg)
-            try await relay.postMessage(machine: machine.key, sealed: sealed)
+            try await relay.postMessage(machine: machine.key, sealed: sealed, userTapped: userTapped)
             return true
         } catch {
             relayFailed(error)
@@ -23,17 +25,18 @@ extension AppEngine {
         }
     }
 
+    /// Lock all, tapped by the person.
     public func lockAll() async -> Int {
         var n = 0
         for m in liveMachines where MachineView.of(m, self).state == .open {
-            if await lock(m) { n += 1 }
+            if await lock(m, userTapped: true) { n += 1 }
         }
         return n
     }
 
     @discardableResult
     public func unpair(_ machine: Machine) async -> Bool {
-        await lock(machine)
+        await lock(machine, userTapped: true)
         do {
             try await relay.removeMachine(machine.key)
             await apply(.unpairMachine(key: machine.key), upload: true)
@@ -54,8 +57,13 @@ extension AppEngine {
         MachineSeen(key: m.machine, lastSeen: m.lastSeen.map { UInt64(clamping: $0) })
     }
 
-    public func refreshMachines() async {
-        guard await phoneKeys() != nil, let list = try? await relay.machines() else { return }
+    public func refreshMachines() async { _ = await refreshMachinesOutcome() }
+
+    /// Nil when the relay's list was fetched; otherwise why not.
+    func refreshMachinesOutcome() async -> Error? {
+        guard await phoneKeys() != nil else { return RelayError.noKeys }
+        let list: [RelayMachine]
+        do { list = try await relay.machines() } catch { return error }
         await apply(.machinesListed(seen: list.map(Self.seen)))
         let keys = Set(list.map(\.machine))
         relayMachines = keys
@@ -65,6 +73,20 @@ extension AppEngine {
             for m in liveMachines where !keys.contains(m.key) {
                 await apply(.unpairMachine(key: m.key))
             }
+        }
+        return nil
+    }
+
+    /// Leave sealctl's "Hand back each computer" (11.22 step 2) asks the relay every 5 s while
+    /// it is on show: the paired machines, then the delayed records. After an error it waits
+    /// longer each time, never inside the rate-limit window, and a final answer stops it (8.1).
+    public func pollHandBack(sleep: @Sendable (Int64) async -> Void = { try? await Task.sleep(for: .milliseconds($0)) }) async {
+        var backoff = PollBackoff(base: 5000)
+        while !Task.isCancelled {
+            var error = await refreshMachinesOutcome()
+            if error == nil { error = await refreshDelayedOutcome() }
+            guard let pause = backoff.after(error, window: await relay.rateLimitedForMs()) else { return }
+            await sleep(pause)
         }
     }
 
